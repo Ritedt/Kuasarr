@@ -1,0 +1,47 @@
+# -*- coding: utf-8 -*-
+# Kuasarr
+# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Python
+*.pyc
+*.bak
+__pycache__/
+.pytest_cache/
+Dockerfile
+# Build Tools
+*venv*/
+
+# PyCharm
+.idea
+kuasarr/version.json
+# Kuasarr
+*.conf
+*.db
+*.ini
+__main__.py
+*.ps1
+*test.py
+*.env
+tests/
+.windsurf/plans/
+.windsurf/plans/*
+.windsurf/
+.windsurf/*
+.windsurf/workflows/
+.windsurf/workflows/*
+config/
+ARCHITECTURE*.md
+
+# Docker
+docker/*
+*/docker/
+*docker*
+DOCKERHUB.md
+Dockerfile
+.dockerignore
+.build.txt
+
+helper/
+
+tmp-config/
+
+README_PYPI.md

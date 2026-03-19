@@ -1,0 +1,96 @@
+﻿# Virtual environments
+kuasarr_venv/
+*venv*/
+.venv-kuasarr/
+.github/
+.pytest_cache
+
+
+env/
+.env
+*.env
+kuasarr.egg.info/
+__main__.py
+kuasarr/version.json
+# Python cache
+__pycache__/py
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Test files and logs
+test_*.py
+*_test.py
+*_debug.py
+simple_*.py
+proof_*.py
+working_*.py
+fixed_*.py
+analyze_*.py
+debug_*.py
+*.html
+*.log
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+.pytest_cache/
+.windsurf/
+scripts/
+
+# Git
+.git/
+.gitignore
+.github/
+*.spec
+
+# Documentation
+*.md
+!README.md
+docs/
+release/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker files (we use specific one)
+docker/
+Dockerfile
+!Dockerfile.local
+
+
+config/
+docker/
+Quasarr/
+tests/
+tmp-config/
+
+# Backup files
+*.bak
+*.backup
+
+# Development files
+requirements-dev.txt
+
+*.ini
+*.db

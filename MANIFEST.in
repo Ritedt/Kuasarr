@@ -1,0 +1,6 @@
+include version.json
+include requirements.txt
+include README.md
+include README_PYPI.md
+include LICENSE
+recursive-include kuasarr/static *

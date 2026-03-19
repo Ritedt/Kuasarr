@@ -1,0 +1,66 @@
+name: "Bug Report"
+description: "Report a reproducible problem in Kuasarr"
+title: "[Bug]: "
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! Please fill out all required sections so we can triage quickly.
+  - type: input
+    id: version
+    attributes:
+      label: Kuasarr version
+      description: Output of grep version version.json or container tag (e.g. 1.3.0)
+      placeholder: 1.3.0
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Describe your setup (OS, Docker/non-Docker, Python version, browser etc.)
+      placeholder: |
+        - OS: Unraid 6.12
+        - Deployment: Docker (weedo078/kuasarr:1.3.0)
+        - Browser: Firefox 131
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide exact steps. Include config snippets, hostnames, or API payloads if relevant.
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior / logs
+      description: Describe what happened. Attach stack traces, container logs, screenshots, etc.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklists
+    attributes:
+      label: Pre-flight checklist
+      options:
+        - label: I searched existing issues and docs.
+          required: true
+        - label: I am using the latest Kuasarr version.
+          required: true
+        - label: I can reproduce this issue without third-party modifications.
+          required: true

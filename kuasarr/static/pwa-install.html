@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0d6efd">
+    <title>Install Kuasarr PWA</title>
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <link rel="icon" href="/static/logo.png" type="image/png">
+    <style>
+        :root {
+            --bg: #181a1b;
+            --fg: #f1f1f1;
+            --card-bg: #242526;
+            --primary: #0d6efd;
+            --success: #198754;
+            --secondary: #6c757d;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg);
+            color: var(--fg);
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+            padding: 1rem;
+        }
+        .container {
+            background: var(--card-bg);
+            border-radius: 1rem;
+            padding: 2rem;
+            max-width: 500px;
+            text-align: center;
+            box-shadow: 0 0.5rem 1.5rem rgba(0,0,0,0.5);
+        }
+        .logo {
+            width: 96px;
+            height: 96px;
+            margin-bottom: 1rem;
+        }
+        h1 {
+            margin: 0 0 0.5rem;
+            font-size: 1.75rem;
+        }
+        p {
+            color: #aaa;
+            margin: 0.5rem 0;
+            line-height: 1.5;
+        }
+        .highlight {
+            color: var(--fg);
+            font-weight: 500;
+        }
+        .btn {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            margin: 0.5rem;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn-primary {
+            background: var(--primary);
+            color: #fff;
+        }
+        .btn-success {
+            background: var(--success);
+            color: #fff;
+        }
+        .btn-secondary {
+            background: var(--secondary);
+            color: #fff;
+        }
+        .buttons {
+            margin-top: 1.5rem;
+        }
+        .step {
+            background: rgba(255,255,255,0.05);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin: 1rem 0;
+            text-align: left;
+        }
+        .step-number {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            background: var(--primary);
+            color: #fff;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 24px;
+            font-size: 0.875rem;
+            margin-right: 0.5rem;
+        }
+        .step-title {
+            font-weight: 600;
+            color: var(--fg);
+        }
+        .step-desc {
+            margin-top: 0.5rem;
+            font-size: 0.875rem;
+            color: #aaa;
+        }
+        #install-btn { display: none; }
+        #installed-msg { display: none; }
+        #manual-instructions { display: block; }
+        .success-msg { color: var(--success); }
+        .browser-icon {
+            font-size: 1.5rem;
+            margin-right: 0.5rem;
+        }
+        .note {
+            font-size: 0.75rem;
+            color: #888;
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <img src="/static/logo.png" alt="Kuasarr Logo" class="logo">
+        <h1>Install Kuasarr</h1>
+        <p>Install Kuasarr as a <span class="highlight">Progressive Web App</span> for quick access from your desktop or home screen.</p>
+        <!-- Native install button (shown when available) -->
+        <div id="install-btn" class="buttons">
+            <button type="button" class="btn btn-success" onclick="installPWA()">
+                📥 Install Kuasarr
+            </button>
+        </div>
+        <!-- Already installed message -->
+        <div id="installed-msg">
+            <p class="success-msg">✅ Kuasarr is already installed!</p>
+            <div class="buttons">
+                <a href="/" class="btn btn-primary">Open Kuasarr</a>
+            </div>
+        </div>
+        <!-- Manual instructions (shown when native install not available) -->
+        <div id="manual-instructions">
+            <div class="step">
+                <span class="step-number">1</span>
+                <span class="step-title">Open in Chrome/Edge</span>
+                <div class="step-desc">
+                    For best PWA support, use Chrome, Edge, or another Chromium-based browser.
+                </div>
+            </div>
+            <div class="step">
+                <span class="step-number">2</span>
+                <span class="step-title">Click the Install Icon</span>
+                <div class="step-desc">
+                    Look for the <strong>⊕</strong> or <strong>📥</strong> icon in the address bar, or use the browser menu → "Install Kuasarr".
+                </div>
+            </div>
+            <div class="step">
+                <span class="step-number">3</span>
+                <span class="step-title">Confirm Installation</span>
+                <div class="step-desc">
+                    Click "Install" in the popup to add Kuasarr to your desktop/start menu.
+                </div>
+            </div>
+            <div class="buttons">
+                <a href="/" class="btn btn-primary">Continue to Kuasarr</a>
+            </div>
+            <p class="note">
+                ⚠️ PWA installation requires HTTPS in production.<br>
+                On localhost, installation works without HTTPS.
+            </p>
+        </div>
+    </div>
+    <script>
+        // Register service worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js', { scope: '/' })
+                .catch(() => {});
+        }
+        
+        let deferredPrompt = null;
+        
+        // Listen for beforeinstallprompt event
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            // Show native install button
+            document.getElementById('install-btn').style.display = 'block';
+            document.getElementById('manual-instructions').style.display = 'none';
+        });
+        
+        // Check if already installed
+        window.addEventListener('appinstalled', () => {
+            document.getElementById('install-btn').style.display = 'none';
+            document.getElementById('manual-instructions').style.display = 'none';
+            document.getElementById('installed-msg').style.display = 'block';
+            deferredPrompt = null;
+        });
+        
+        // Check if running as standalone PWA
+        if (window.matchMedia('(display-mode: standalone)').matches || 
+            window.navigator.standalone === true) {
+            document.getElementById('install-btn').style.display = 'none';
+            document.getElementById('manual-instructions').style.display = 'none';
+            document.getElementById('installed-msg').style.display = 'block';
+        }
+        
+        function installPWA() {
+            if (!deferredPrompt) return;
+            
+            deferredPrompt.prompt();
+            deferredPrompt.userChoice.then((choiceResult) => {
+                if (choiceResult.outcome === 'accepted') {
+                    document.getElementById('install-btn').style.display = 'none';
+                    document.getElementById('installed-msg').style.display = 'block';
+                }
+                deferredPrompt = null;
+            });
+        }
+    </script>
+</body>
+</html>

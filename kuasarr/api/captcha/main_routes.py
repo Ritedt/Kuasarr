@@ -17,7 +17,7 @@ from kuasarr.providers.log import info
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html, render_fail, render_success
 
 from .helpers import is_junkies_link, is_keeplinks_link, is_tolink_link, is_hide_link
-from kuasarr.providers.hoster import filter_blocked_hosters
+from kuasarr.providers.hosters import filter_blocked_hosters
 from kuasarr.downloads import fail
 
 

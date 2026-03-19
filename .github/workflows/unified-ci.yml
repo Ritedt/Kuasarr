@@ -463,15 +463,21 @@ jobs:
 
       - name: Generate changelog
         id: changelog
+        # continue-on-error: first release on a new repo has no previous release to compare against
+        continue-on-error: true
         uses: metcalfc/changelog-generator@v4.6.2
         with:
           myToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Warn if changelog fallback is used
+        if: steps.changelog.outcome == 'failure' || steps.changelog.outputs.changelog == ''
+        run: echo "::warning::Changelog generation failed or returned empty – using fallback release body"
 
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
           artifacts: "./dist/*.whl,./dist/*.exe"
-          body: ${{ steps.changelog.outputs.changelog }}
+          body: ${{ steps.changelog.outputs.changelog || 'Initial release' }}
           tag: v${{ steps.version.outputs.version }}
           token: ${{ secrets.GITHUB_TOKEN }}
 

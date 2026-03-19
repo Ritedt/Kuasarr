@@ -463,6 +463,7 @@ jobs:
 
       - name: Generate changelog
         id: changelog
+        continue-on-error: true
         uses: metcalfc/changelog-generator@v4.6.2
         with:
           myToken: ${{ secrets.GITHUB_TOKEN }}
@@ -471,7 +472,7 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           artifacts: "./dist/*.whl,./dist/*.exe"
-          body: ${{ steps.changelog.outputs.changelog }}
+          body: ${{ steps.changelog.outputs.changelog || 'Initial release' }}
           tag: v${{ steps.version.outputs.version }}
           token: ${{ secrets.GITHUB_TOKEN }}
 

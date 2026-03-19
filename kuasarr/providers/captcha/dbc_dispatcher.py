@@ -40,7 +40,7 @@ from kuasarr.providers.captcha.dbc_client import (
 from kuasarr.providers.log import info, debug
 from kuasarr.providers.notifications import send_discord_message
 from kuasarr.providers.statistics import StatsHelper
-from kuasarr.providers.hoster import filter_blocked_hosters
+from kuasarr.providers.hosters import filter_blocked_hosters
 from kuasarr.downloads import fail
 from kuasarr.downloads.linkcrypters.filecrypt import CNL, DLC
 from kuasarr.downloads.linkcrypters.hide import unhide_links

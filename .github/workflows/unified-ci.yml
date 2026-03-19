@@ -139,6 +139,7 @@ jobs:
   smoke-test:
     name: Import Smoke Test
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: detect-changes
     if: |
       github.event_name == 'pull_request' &&
@@ -151,6 +152,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip'
 
       - name: Install dependencies
         run: |

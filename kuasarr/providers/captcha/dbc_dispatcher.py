@@ -290,10 +290,17 @@ class DBCDispatcher:
                 if result and result.get("status") == "success":
                     download_links = result.get("links", [])
                     if download_links:
+                        # Check if all links would be filtered by hoster filter
+                        filtered_links = filter_blocked_hosters(download_links)
+                        if not filtered_links:
+                            info(f"All links blocked by hoster filter for {title}")
+                            self._mark_as_failed(package_id, title, "All hosters blocked by filter")
+                            return False
+
                         downloaded = self.shared_state.download_package(
                             download_links, title, password, package_id
                         )
-                        
+
                         if downloaded:
                             StatsHelper(self.shared_state).increment_package_with_links(download_links)
                             StatsHelper(self.shared_state).increment_captcha_decryptions_automatic()
@@ -303,6 +310,12 @@ class DBCDispatcher:
                             info(f"Download successfully started for {title}")
                             return True
                         else:
+                            # Check if download failed because all links were filtered
+                            filtered_check = filter_blocked_hosters(download_links)
+                            if not filtered_check:
+                                info(f"All links blocked by hoster filter for {title}")
+                                self._mark_as_failed(package_id, title, "All hosters blocked by filter")
+                                return False
                             info(f"Download failed for {title}")
                 
                 elif result and result.get("status") == "replaced":
@@ -316,6 +329,13 @@ class DBCDispatcher:
                             title, replace_url, session_id, password
                         )
                         if circle_result:
+                            # Check if all links would be filtered by hoster filter
+                            filtered_links = filter_blocked_hosters(circle_result)
+                            if not filtered_links:
+                                info(f"All links blocked by hoster filter for {title} (Circle-Captcha)")
+                                self._mark_as_failed(package_id, title, "All hosters blocked by filter")
+                                return False
+
                             downloaded = self.shared_state.download_package(
                                 circle_result, title, password, package_id
                             )
@@ -327,6 +347,14 @@ class DBCDispatcher:
                                 send_discord_message(self.shared_state, title=title, case="solved")
                                 info(f"Download successfully started for {title} (Circle-Captcha)")
                                 return True
+                            else:
+                                # Check if download failed because all links were filtered
+                                filtered_check = filter_blocked_hosters(circle_result)
+                                if not filtered_check:
+                                    info(f"All links blocked by hoster filter for {title} (Circle-Captcha)")
+                                    self._mark_as_failed(package_id, title, "All hosters blocked by filter")
+                                    return False
+                                info(f"Download failed for {title} (Circle-Captcha)")
                         
             except (DBCInsufficientCredits, CaptchaInsufficientCredits):
                 raise

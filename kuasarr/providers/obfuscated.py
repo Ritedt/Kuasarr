@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 # Kuasarr
-# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 from base64 import urlsafe_b64decode
 
@@ -15,7 +15,7 @@ def captcha_values():
 def filecrypt_quasarr_helper_user_js():
     return r'''// ==UserScript==
 // @name         Kuasarr Filecrypt Helper
-// @namespace    https://github.com/weedo078/kuasarr
+// @namespace    https://github.com/Ritedt/Kuasarr
 // @version      1.0
 // @description  Automatically transfers download links from Filecrypt to Kuasarr
 // @match        *://filecrypt.cc/*
@@ -90,7 +90,7 @@ def filecrypt_quasarr_helper_user_js():
 def keeplinks_quasarr_helper_user_js():
     return r'''// ==UserScript==
 // @name         Kuasarr KeepLinks Helper
-// @namespace    https://github.com/weedo078/kuasarr
+// @namespace    https://github.com/Ritedt/Kuasarr
 // @version      1.0
 // @description  Automatically transfers download links from KeepLinks to Kuasarr
 // @match        *://keeplinks.org/*
@@ -196,7 +196,7 @@ def keeplinks_quasarr_helper_user_js():
 def tolink_quasarr_helper_user_js():
     return r'''// ==UserScript==
 // @name         Kuasarr ToLink Helper
-// @namespace    https://github.com/weedo078/kuasarr
+// @namespace    https://github.com/Ritedt/Kuasarr
 // @version      1.0
 // @description  Automatically transfers download links from ToLink to Kuasarr
 // @match        *://tolink.*/*

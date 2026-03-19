@@ -1,5 +1,5 @@
 FROM alpine:latest
-LABEL maintainer="weedo078"
+LABEL maintainer="Ritedt"
 
 # Define package name
 ARG PACKAGE_NAME=kuasarr

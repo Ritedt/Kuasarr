@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Kuasarr
-# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 """
 Utility functions for string sanitization, conversion, and link status checking.

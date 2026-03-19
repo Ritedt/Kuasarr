@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 # Kuasarr
-# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 from kuasarr.providers.log import info, debug
 from kuasarr.providers.sessions.dd import create_and_persist_session, retrieve_and_validate_session

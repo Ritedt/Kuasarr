@@ -2,8 +2,8 @@
 
 # Kuasarr (Quasarr Fork)
 
-[![Docker Hub Version](https://img.shields.io/docker/v/weedo078/kuasarr?label=Docker%20Hub%20Version&logo=docker)](https://hub.docker.com/r/weedo078/kuasarr/tags)
-[![Docker Pulls](https://img.shields.io/docker/pulls/weedo078/kuasarr?label=Downloads&logo=docker)](https://hub.docker.com/r/weedo078/kuasarr)
+[![GHCR Version](https://ghcr-badge.egpl.dev/ritedt/kuasarr/latest_tag?label=GHCR%20Version&logo=github)](https://github.com/Ritedt/Kuasarr/pkgs/container/kuasarr)
+[![GitHub Release](https://img.shields.io/github/v/release/Ritedt/Kuasarr?label=Latest%20Release&logo=github)](https://github.com/Ritedt/Kuasarr/releases/latest)
 [![Matrix Chat](https://img.shields.io/badge/Matrix-Join%20Chat-black?logo=matrix)](https://matrix.to/#/@kuasarr-support:envs.net)
 
 Kuasarr connects JDownloader with Radarr, Sonarr and LazyLibrarian. It also decrypts links protected by CAPTCHAs.
@@ -20,7 +20,7 @@ indexers or download clients. It simply does not know what NZB or torrent files 
 
 ## Quick Start
 
-Docker Hub: [weedo078/kuasarr](https://hub.docker.com/r/weedo078/kuasarr)
+GHCR: [ghcr.io/ritedt/kuasarr](https://github.com/Ritedt/Kuasarr/pkgs/container/kuasarr)
 
 ```bash
 docker run -d \
@@ -30,10 +30,10 @@ docker run -d \
   -e INTERNAL_ADDRESS=http://192.168.0.1:8080 \
   -e EXTERNAL_ADDRESS=http://192.168.0.1:8080 \
   -e TZ=Europe/Amsterdam \
-  weedo078/kuasarr:latest
+  ghcr.io/ritedt/kuasarr:latest
 ```
 
-All configuration, Hostnames, Flaresolverr, etc. lives inside `/config/kuasarr.ini`. Hostnames and FlareSolverr can also be managed via the Web UI. Available image tags are listed on [Docker Hub](https://hub.docker.com/r/weedo078/kuasarr/tags).
+All configuration, Hostnames, Flaresolverr, etc. lives inside `/config/kuasarr.ini`. Hostnames and FlareSolverr can also be managed via the Web UI. Available image tags are listed on [GitHub Container Registry](https://github.com/Ritedt/Kuasarr/pkgs/container/kuasarr).
 
 ## Improvements
 
@@ -159,7 +159,7 @@ docker run -d \
   -e DBC_AUTHTOKEN=your_authtoken \
   -e TWOCAPTCHA_API_KEY=your_2captcha_key \
   -e TZ=Europe/Amsterdam \
-  weedo078/kuasarr:latest
+  ghcr.io/ritedt/kuasarr:latest
 ```
 
 Available environment variables:
@@ -189,7 +189,7 @@ docker run -d \
   -e KUASARR_WEBUI_USER=admin \
   -e KUASARR_WEBUI_PASS=your_secure_password \
   -e TZ=Europe/Amsterdam \
-  weedo078/kuasarr:latest
+  ghcr.io/ritedt/kuasarr:latest
 ```
 
 **Option 2: kuasarr.ini**

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Kuasarr
-# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 from kuasarr.providers.myjd_api import TokenExpiredException, RequestTimeoutException, MYJDException
 

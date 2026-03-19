@@ -1,6 +1,6 @@
 ﻿# -*- encoding: utf-8 -*-
 # Kuasarr
-# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 #
 # Original Code by:
 # https://github.com/mmarquezs/My.Jdownloader-API-Python-Library/

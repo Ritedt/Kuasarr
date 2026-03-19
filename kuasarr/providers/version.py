@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 # Kuasarr
-# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 import json
 import os
@@ -13,7 +13,7 @@ try:
 except ImportError:  # pragma: no cover
     requests = None
 
-LATEST_RELEASE_LINK = "https://hub.docker.com/r/weedo078/kuasarr/tags"
+LATEST_RELEASE_LINK = "https://github.com/Ritedt/Kuasarr/releases/latest"
 
 
 def get_version():
@@ -40,47 +40,36 @@ def get_version():
 
 def get_latest_version():
     """
-    Query Docker Hub API for the latest tag of the kuasarr image.
+    Query GitHub Releases API for the latest release of Kuasarr.
     Returns the tag name string (e.g. "1.5.0" or "1.4.2a1").
     Raises RuntimeError on HTTP errors.
     """
     global LATEST_RELEASE_LINK
-    
-    # Docker Hub API für Tags
-    api_url = "https://hub.docker.com/v2/repositories/weedo078/kuasarr/tags?page_size=100"
-    
+
+    # GitHub Releases API
+    api_url = "https://api.github.com/repos/Ritedt/Kuasarr/releases/latest"
+
     if requests is None:
         raise RuntimeError("requests library is not available")
     try:
-        resp = requests.get(api_url, timeout=10)
+        resp = requests.get(api_url, timeout=10, headers={"Accept": "application/vnd.github+json"})
         if resp.status_code != 200:
-            raise RuntimeError(f"Docker Hub API error: {resp.status_code} {resp.text}")
-        
+            raise RuntimeError(f"GitHub API error: {resp.status_code} {resp.text}")
+
         data = resp.json()
-        tags = data.get("results", [])
-        
-        if not tags:
-            raise RuntimeError("No tags found on Docker Hub")
-        
-        # Filtere nur semantische Versions-Tags (z.B. 1.0.0, 1.1.0), ignoriere "latest"
-        version_tags = []
-        for tag_info in tags:
-            tag_name = tag_info.get("name", "")
-            if tag_name and tag_name != "latest" and re.match(r"^\d+\.\d+(\.\d+)?", tag_name):
-                version_tags.append(tag_name)
-        
-        if not version_tags:
-            raise RuntimeError("No version tags found on Docker Hub")
-        
-        # Sortiere nach Version (höchste zuerst)
-        version_tags.sort(key=_version_key, reverse=True)
-        latest_tag = version_tags[0]
-        
-        LATEST_RELEASE_LINK = f"https://hub.docker.com/r/weedo078/kuasarr/tags?name={latest_tag}"
+        tag_name = data.get("tag_name", "")
+
+        if not tag_name:
+            raise RuntimeError("No tag_name found in GitHub release")
+
+        # Strip leading 'v' prefix if present (e.g. "v1.5.0" -> "1.5.0")
+        latest_tag = tag_name.lstrip("v")
+
+        LATEST_RELEASE_LINK = "https://github.com/Ritedt/Kuasarr/releases/latest"
         return latest_tag
-        
+
     except requests.RequestException as e:
-        raise RuntimeError(f"Docker Hub API request failed: {e}")
+        raise RuntimeError(f"GitHub API request failed: {e}")
 
 
 def _split_suffix_tokens(suffix: str):
@@ -159,11 +148,11 @@ def create_version_file():
         "      [",
         "      StringTable(",
         "        u'040704b0',",
-        "        [StringStruct(u'CompanyName', u'RiX & weedo078'),",
+        "        [StringStruct(u'CompanyName', u'RiX & Ritedt'),",
         "        StringStruct(u'FileDescription', u'kuasarr'),",
         f"        StringStruct(u'FileVersion', u'{major}.{minor}.{patch}.{build}'),",
         "        StringStruct(u'InternalName', u'kuasarr'),",
-        "        StringStruct(u'LegalCopyright', u'Copyright © RiX & weedo078'),",
+        "        StringStruct(u'LegalCopyright', u'Copyright © RiX & Ritedt'),",
         "        StringStruct(u'OriginalFilename', u'kuasarr.exe'),",
         "        StringStruct(u'ProductName', u'kuasarr'),",
         f"        StringStruct(u'ProductVersion', u'{major}.{minor}.{patch}.{build}')])",

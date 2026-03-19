@@ -134,6 +134,71 @@ jobs:
           echo "Version bump OK: $OLD_VERSION → $NEW_VERSION"
 
   # ═══════════════════════════════════════════════════════════════
+  # IMPORT SMOKE TEST (PRs only)
+  # ═══════════════════════════════════════════════════════════════
+  smoke-test:
+    name: Import Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: detect-changes
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.detect-changes.outputs.python == 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Run import smoke test
+        run: |
+          set -euo pipefail
+          python - <<'EOF'
+          import sys
+          modules = [
+              "kuasarr",
+              "kuasarr.api",
+              "kuasarr.api.captcha",
+              "kuasarr.api.arr",
+              "kuasarr.api.config",
+              "kuasarr.api.dbc",
+              "kuasarr.api.hosters",
+              "kuasarr.api.statistics",
+              "kuasarr.downloads",
+              "kuasarr.downloads.packages",
+              "kuasarr.providers",
+              "kuasarr.providers.captcha",
+              "kuasarr.providers.captcha.dbc_dispatcher",
+              "kuasarr.providers.hosters",
+              "kuasarr.providers.version",
+              "kuasarr.search",
+              "kuasarr.storage",
+          ]
+          failed = []
+          for mod in modules:
+              try:
+                  __import__(mod)
+                  print(f"  OK  {mod}")
+              except Exception as e:
+                  print(f"  FAIL {mod}: {e}", file=sys.stderr)
+                  failed.append(mod)
+          if failed:
+              print(f"\n{len(failed)} import(s) failed!", file=sys.stderr)
+              sys.exit(1)
+          print(f"\nAll {len(modules)} imports OK")
+          EOF
+
+  # ═══════════════════════════════════════════════════════════════
   # KIMI CODE REVIEW (PRs only)
   # ═══════════════════════════════════════════════════════════════
   kimi-review:
@@ -509,7 +574,7 @@ jobs:
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
-    needs: [detect-changes, version-output, build-wheel, build-exe, build-docker, auto-tag, release, kimi-review, check-version]
+    needs: [detect-changes, version-output, build-wheel, build-exe, build-docker, auto-tag, release, kimi-review, check-version, smoke-test]
     if: always()
     steps:
       - name: Generate Summary
@@ -535,3 +600,4 @@ jobs:
           echo "| Release & PyPI | ${{ needs.release.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Kimi Code Review | ${{ needs.kimi-review.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Version Bump Check | ${{ needs.check-version.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Import Smoke Test | ${{ needs.smoke-test.result }} |" >> $GITHUB_STEP_SUMMARY

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kuasarr"
-version = "1.12.2"
+dynamic = ["version"]
 description = "kuasarr connects JDownloader with Radarr, Sonarr and LazyLibrarian. It also decrypts links protected by CAPTCHAs, using an additional CaptchaSolverr."
 readme = "README.md"
 license = "MIT"

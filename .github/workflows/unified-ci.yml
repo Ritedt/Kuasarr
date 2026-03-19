@@ -262,12 +262,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Update version.json
+      - name: Inject version into all version files
         run: |
           set -euo pipefail
           VERSION="${{ needs.version-output.outputs.version }}"
           echo "{\"version\": \"${VERSION}\"}" > version.json
-          echo "Updated version.json to ${VERSION}"
+          echo "{\"version\": \"${VERSION}\"}" > kuasarr/version.json
+          echo "Injected version ${VERSION} into version.json and kuasarr/version.json"
 
       - name: Install build dependencies
         run: |
@@ -302,13 +303,14 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Update version.json
+      - name: Inject version into all version files
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ needs.version-output.outputs.version }}"
           echo "{\"version\": \"${VERSION}\"}" > version.json
-          echo "Updated version.json to ${VERSION}"
+          echo "{\"version\": \"${VERSION}\"}" > kuasarr/version.json
+          echo "Injected version ${VERSION} into version.json and kuasarr/version.json"
 
       - name: Install dependencies
         shell: bash
@@ -346,12 +348,13 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Update version.json
+      - name: Inject version into all version files
         run: |
           set -euo pipefail
           VERSION="${{ needs.version-output.outputs.version }}"
           echo "{\"version\": \"${VERSION}\"}" > version.json
-          echo "Updated version.json to ${VERSION}"
+          echo "{\"version\": \"${VERSION}\"}" > kuasarr/version.json
+          echo "Injected version ${VERSION} into version.json and kuasarr/version.json"
 
       - uses: actions/download-artifact@v8
         with:

@@ -49,8 +49,10 @@ jobs:
           latest_tag=$(git tag -l 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
 
           if [ -z "$latest_tag" ]; then
-            # No git tag yet – seed from version.json
-            new_version=$(jq -r .version version.json)
+            # No git tag yet – seed from version.json (initial repo setup)
+            new_version=$(jq -re '.version' version.json 2>/dev/null) || {
+              echo "ERROR: Could not read version from version.json" >&2; exit 1
+            }
           else
             # Remove 'v' prefix and increment patch
             version="${latest_tag#v}"
@@ -267,8 +269,11 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.version-output.outputs.version }}"
-          echo "{\"version\": \"${VERSION}\"}" > version.json
-          echo "{\"version\": \"${VERSION}\"}" > kuasarr/version.json
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid semver format: $VERSION" >&2; exit 1
+          fi
+          jq -n --arg v "$VERSION" '{"version": $v}' > version.json
+          jq -n --arg v "$VERSION" '{"version": $v}' > kuasarr/version.json
           echo "Injected version ${VERSION} into version.json and kuasarr/version.json"
 
       - name: Install build dependencies
@@ -309,8 +314,11 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.version-output.outputs.version }}"
-          echo "{\"version\": \"${VERSION}\"}" > version.json
-          echo "{\"version\": \"${VERSION}\"}" > kuasarr/version.json
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid semver format: $VERSION" >&2; exit 1
+          fi
+          jq -n --arg v "$VERSION" '{"version": $v}' > version.json
+          jq -n --arg v "$VERSION" '{"version": $v}' > kuasarr/version.json
           echo "Injected version ${VERSION} into version.json and kuasarr/version.json"
 
       - name: Install dependencies
@@ -353,8 +361,11 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.version-output.outputs.version }}"
-          echo "{\"version\": \"${VERSION}\"}" > version.json
-          echo "{\"version\": \"${VERSION}\"}" > kuasarr/version.json
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid semver format: $VERSION" >&2; exit 1
+          fi
+          jq -n --arg v "$VERSION" '{"version": $v}' > version.json
+          jq -n --arg v "$VERSION" '{"version": $v}' > kuasarr/version.json
           echo "Injected version ${VERSION} into version.json and kuasarr/version.json"
 
       - uses: actions/download-artifact@v8

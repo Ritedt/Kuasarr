@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Kuasarr
-# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 import json
 from pathlib import Path
@@ -73,8 +73,8 @@ def run():
             sys.stdout = Unbuffered(sys.stdout)
 
         banner_lines = [
-            f"Kuasarr {version.get_version()} by weedo078 (fork of RiX1337/kuasarr)",
-            "https://github.com/weedo078/kuasarr",
+            f"Kuasarr {version.get_version()} by Ritedt (fork of rix1337/Quasarr)",
+            "https://github.com/Ritedt/Kuasarr",
         ]
         banner_width = max(len(line) for line in banner_lines) + 4
         top_border = "+" + "-" * (banner_width - 2) + "+"

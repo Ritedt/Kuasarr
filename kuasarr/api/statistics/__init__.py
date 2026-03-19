@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 # Kuasarr
-# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 import kuasarr.providers.ui.html_images as images
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html

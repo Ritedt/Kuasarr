@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 # Kuasarr
-# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 import json
 from pathlib import Path
@@ -36,7 +36,7 @@ def read_requirements():
 setuptools.setup(
     name="kuasarr",
     version=read_version(),
-    author="weedo078",
+    author="Ritedt",
     author_email="weedo0780@protonmail.com",
     description="kuasarr connects JDownloader with Radarr, Sonarr and LazyLibrarian. It also decrypts links protected by CAPTCHAs, using an additional CaptchaSolverr.",
     long_description=long_description,

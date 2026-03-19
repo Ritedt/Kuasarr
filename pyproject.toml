@@ -9,7 +9,7 @@ description = "kuasarr connects JDownloader with Radarr, Sonarr and LazyLibraria
 readme = "README.md"
 license = "MIT"
 authors = [
-    { name = "weedo078", email = "weedo0780@protonmail.com" }
+    { name = "Ritedt", email = "weedo0780@protonmail.com" }
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/weedo078/Kuasarr"
+Homepage = "https://github.com/Ritedt/Kuasarr"
 
 [project.scripts]
 kuasarr = "kuasarr:run"

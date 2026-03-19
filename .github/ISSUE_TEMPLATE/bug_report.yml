@@ -24,7 +24,7 @@ body:
       description: Describe your setup (OS, Docker/non-Docker, Python version, browser etc.)
       placeholder: |
         - OS: Unraid 6.12
-        - Deployment: Docker (weedo078/kuasarr:1.3.0)
+        - Deployment: Docker (ghcr.io/ritedt/kuasarr:1.3.0)
         - Browser: Firefox 131
     validations:
       required: true

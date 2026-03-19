@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Kuasarr
-# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 import base64
 import json
@@ -158,7 +158,7 @@ def get_api(shared_state_dict, shared_state_lock):
         <div class="section">
             <h2>📖 Setup Instructions</h2>
             <p>
-                <a href="https://github.com/weedo078/kuasarr" target="_blank">
+                <a href="https://github.com/Ritedt/Kuasarr" target="_blank">
                     📚 Refer to the README for detailed instructions.
                 </a>
             </p>

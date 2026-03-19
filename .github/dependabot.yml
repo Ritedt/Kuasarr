@@ -9,7 +9,7 @@ updates:
       time: "09:00"
     open-pull-requests-limit: 10
     reviewers:
-      - "weedo078"
+      - "Ritedt"
     labels:
       - "dependencies"
       - "python"
@@ -26,7 +26,7 @@ updates:
       time: "09:00"
     open-pull-requests-limit: 5
     reviewers:
-      - "weedo078"
+      - "Ritedt"
     labels:
       - "dependencies"
       - "github-actions"
@@ -43,7 +43,7 @@ updates:
       time: "09:00"
     open-pull-requests-limit: 5
     reviewers:
-      - "weedo078"
+      - "Ritedt"
     labels:
       - "dependencies"
       - "docker"

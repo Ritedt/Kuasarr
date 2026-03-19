@@ -49,7 +49,8 @@ jobs:
           latest_tag=$(git tag -l 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
 
           if [ -z "$latest_tag" ]; then
-            new_version="0.0.1"
+            # No git tag yet – seed from version.json
+            new_version=$(jq -r .version version.json)
           else
             # Remove 'v' prefix and increment patch
             version="${latest_tag#v}"

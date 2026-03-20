@@ -106,6 +106,7 @@ def nk_search(shared_state, start_time, request_from, search_string="", mirror=N
 
     for result in results:
         try:
+            release_imdb_id = None
             imdb_a = result.select_one('a.imdb')
             if imdb_a and imdb_a.get('href'):
                 try:

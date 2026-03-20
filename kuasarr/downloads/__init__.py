@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 # Kuasarr
-# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
+# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
 #
 # Special note: The signatures of all handlers must stay the same so we can neatly call them in download()
 # Same is true for every get_xx_download_links() function in sources/xx.py
@@ -82,6 +82,8 @@ def handle_protected(shared_state, title, password, package_id, imdb_id, url,
 
 def handle_al(shared_state, title, password, package_id, imdb_id, url, mirror, size_mb, destination_folder=None):
     data = get_al_download_links(shared_state, url, mirror, title, password)
+    if data.get("duplicate"):
+        return {"success": True, "title": title}
     links = data.get("links", [])
     title = data.get("title", title)
     password = data.get("password", "")

@@ -14,7 +14,7 @@ import requests
 from Cryptodome.Cipher import AES
 from bs4 import BeautifulSoup
 
-from kuasarr.providers.network.cloudflare import is_cloudflare_challenge, ensure_session_cf_bypassed
+from kuasarr.providers.network.cloudflare import is_cloudflare_challenge, ensure_session_cf_bypassed, flaresolverr_get
 from kuasarr.providers.log import info, debug
 
 
@@ -253,12 +253,26 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
             output = session.post(url, data="buttonx.x=" + random_x + "&buttonx.y=" + random_y,
                                   headers={'User-Agent': shared_state.values["user_agent"],
                                            'Content-Type': 'application/x-www-form-urlencoded'})
+            if output.status_code == 403:
+                info("Got 403 on circle_captcha POST. Retrying via FlareSolverr...")
+                try:
+                    output = flaresolverr_get(shared_state, url)
+                except RuntimeError as e:
+                    info(f"FlareSolverr fallback failed on circle_captcha: {e}")
+                    return False
             url = output.url
             soup = BeautifulSoup(output.text, 'html.parser')
             circle_captcha = bool(soup.find_all("div", {"class": "circle_captcha"}))
 
         output = session.post(url, data="cap_token=" + token, headers={'User-Agent': shared_state.values["user_agent"],
                                                                        'Content-Type': 'application/x-www-form-urlencoded'})
+        if output.status_code == 403:
+            info("Got 403 on cap_token POST. Retrying via FlareSolverr...")
+            try:
+                output = flaresolverr_get(shared_state, url)
+            except RuntimeError as e:
+                info(f"FlareSolverr fallback failed on cap_token POST: {e}")
+                return False
     url = output.url
 
     if "/404.html" in url:
@@ -331,6 +345,13 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
         for mirror in mirrors:
             if not len(mirrors) == 1:
                 output = session.get(mirror, headers=headers)
+                if output.status_code == 403:
+                    info(f"Got 403 on mirror GET. Retrying via FlareSolverr: {mirror}")
+                    try:
+                        output = flaresolverr_get(shared_state, mirror)
+                    except RuntimeError as e:
+                        info(f"FlareSolverr fallback failed on mirror GET: {e}")
+                        continue
                 url = output.url
                 soup = BeautifulSoup(output.text, 'html.parser')
 

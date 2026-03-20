@@ -4,8 +4,9 @@
 
 import html
 import json
+import re
 
-from bottle import request, response
+from bottle import request, response, redirect
 
 from kuasarr.providers.ui.html_templates import render_form, render_button
 from kuasarr.storage.config import Config
@@ -180,7 +181,6 @@ def setup_notifications_routes(app, shared_state):
 
     @app.post('/api/notifications/save')
     def notifications_save():
-        from bottle import redirect
         cfg = Config('Notifications')
 
         discord_webhook = (request.forms.get('discord_webhook') or '').strip()
@@ -188,7 +188,8 @@ def setup_notifications_routes(app, shared_state):
         telegram_chat_id = (request.forms.get('telegram_chat_id') or '').strip()
 
         if discord_webhook:
-            cfg.save('discord_webhook', discord_webhook)
+            if re.match(r'^https://discord\.com/api/webhooks/\d+/.+$', discord_webhook):
+                cfg.save('discord_webhook', discord_webhook)
         if telegram_token:
             cfg.save('telegram_token', telegram_token)
         cfg.save('telegram_chat_id', telegram_chat_id)
@@ -204,8 +205,8 @@ def setup_notifications_routes(app, shared_state):
             if ok:
                 return json.dumps({'success': True})
             return json.dumps({'success': False, 'error': 'Webhook not configured or request failed'})
-        except Exception as e:
-            return json.dumps({'success': False, 'error': str(e)})
+        except Exception:
+            return json.dumps({'success': False, 'error': 'Notification dispatch failed'})
 
     @app.post('/api/notifications/test/telegram')
     def notifications_test_telegram():
@@ -216,5 +217,5 @@ def setup_notifications_routes(app, shared_state):
             if ok:
                 return json.dumps({'success': True})
             return json.dumps({'success': False, 'error': 'Token/Chat ID not configured or request failed'})
-        except Exception as e:
-            return json.dumps({'success': False, 'error': str(e)})
+        except Exception:
+            return json.dumps({'success': False, 'error': 'Notification dispatch failed'})

@@ -2,8 +2,11 @@
 # Kuasarr
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
+import html
+import base64
 import json
 import logging
+import os
 
 from bottle import request, response, redirect
 
@@ -11,6 +14,7 @@ import kuasarr.providers.ui.html_images as images
 from kuasarr.downloads.packages import delete_package, get_packages
 from kuasarr.providers import shared_state
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html
+from kuasarr.storage.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +48,49 @@ def _format_size(mb: float | None = None, bytes_val: int | None = None) -> str:
 
 
 def _escape_js(s: str) -> str:
-    return (
-        s.replace("\\", "\\\\")
-        .replace("'", "\\'")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
+    """Escape a string for safe embedding as a JavaScript string literal.
+
+    Uses json.dumps for correct unicode + special-char handling, then
+    strips the surrounding double-quotes so callers can wrap the value
+    in whichever quote style they need.
+    """
+    return json.dumps(str(s))[1:-1]  # e.g.  hello\nworld  ->  hello\\nworld
+
+
+
+def _require_webui_auth() -> bool:
+    """Check if WebUI auth is required and satisfied.
+
+    Returns True if access is allowed (auth not configured, or credentials valid).
+    Returns False if credentials are configured but missing or incorrect.
+    """
+    webui_user = (
+        os.environ.get("KUASARR_WEBUI_USER", "").strip()
+        or Config("WebUI").get("user")
+        or ""
+    )
+    webui_pass = (
+        os.environ.get("KUASARR_WEBUI_PASS", "").strip()
+        or Config("WebUI").get("password")
+        or ""
     )
 
+    if not webui_user or not webui_pass:
+        return True  # Auth not configured — allow access
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Basic "):
+        return False
+
+    try:
+        encoded = auth_header[6:]
+        decoded = base64.b64decode(encoded).decode("utf-8")
+        if ":" not in decoded:
+            return False
+        username, password = decoded.split(":", 1)
+        return username == webui_user and password == webui_pass
+    except Exception:
+        return False
 
 def _render_queue_item(item: dict) -> str:
     filename = item.get("filename", "Unknown")
@@ -90,6 +130,7 @@ def _render_queue_item(item: dict) -> str:
     ]:
         display_name = display_name.replace(prefix, "")
 
+    display_name = html.escape(display_name)
     archive_badge = "📦" if is_archive else ""
     cat_emoji = _get_category_emoji(cat)
     size_str = _format_size(bytes_val=bytes_val) if bytes_val else _format_size(mb=mb)
@@ -103,29 +144,38 @@ def _render_queue_item(item: dict) -> str:
             f'</div>'
         )
 
+    _raw_name = item.get("filename", item.get("name", "Unknown"))
+    for prefix in [
+        "[Downloading] ",
+        "[Extracting] ",
+        "[Paused] ",
+        "[Linkgrabber] ",
+        "[CAPTCHA not solved!] ",
+    ]:
+        _raw_name = _raw_name.replace(prefix, "")
     info_onclick = (
         f"showPackageDetails("
-        f"'{nzo_id}', "
-        f"'{_escape_js(display_name)}', "
-        f"'{cat}', "
-        f"'{'Yes' if is_archive else 'No'}', "
-        f"'', "
-        f"'{timeleft}', "
-        f"'{size_str}', "
-        f"'{percentage}', "
-        f"'{status_text}', "
-        f"'{_escape_js(storage)}', "
+        f"{json.dumps(nzo_id)}, "
+        f"{json.dumps(_raw_name)}, "
+        f"{json.dumps(cat)}, "
+        f"{json.dumps('Yes' if is_archive else 'No')}, "
+        f"{json.dumps('')}, "
+        f"{json.dumps(timeleft)}, "
+        f"{json.dumps(size_str)}, "
+        f"{json.dumps(str(percentage))}, "
+        f"{json.dumps(status_text)}, "
+        f"{json.dumps(storage)}, "
         f"{str(is_captcha).lower()})"
     )
-    info_btn = f'<button class="btn-small info" onclick="{info_onclick}">ℹ️</button>'
+    info_btn = f'<button class="btn-small info" onclick="{html.escape(info_onclick)}">ℹ️</button>'
 
     if is_captcha and nzo_id:
         actions = f"""
             <div class="package-actions">
                 {info_btn}
-                <button class="btn-small primary-thin" onclick="location.href='/captcha?package_id={nzo_id}'">🔓 Solve CAPTCHA</button>
+                <button class="btn-small primary-thin" onclick="location.href='/captcha?package_id={html.escape(nzo_id)}'">🔓 Solve CAPTCHA</button>
                 <span class="spacer"></span>
-                <button class="btn-small danger" onclick="confirmDelete('{nzo_id}', '{_escape_js(display_name)}')">🗑️</button>
+                <button class="btn-small danger" onclick="{html.escape(f'confirmDelete({json.dumps(nzo_id)}, {json.dumps(_raw_name)})')}">🗑️</button>
             </div>
         """
     elif nzo_id:
@@ -133,7 +183,7 @@ def _render_queue_item(item: dict) -> str:
             <div class="package-actions">
                 {info_btn}
                 <span class="spacer"></span>
-                <button class="btn-small danger" onclick="confirmDelete('{nzo_id}', '{_escape_js(display_name)}')">🗑️</button>
+                <button class="btn-small danger" onclick="{html.escape(f'confirmDelete({json.dumps(nzo_id)}, {json.dumps(_raw_name)})')}">🗑️</button>
             </div>
         """
     else:
@@ -144,9 +194,9 @@ def _render_queue_item(item: dict) -> str:
             </div>
         """
 
-    cat_html = f'<span title="Category: {cat}">{cat_emoji}</span>'
+    cat_html = f'<span title="Category: {html.escape(cat)}">{cat_emoji}</span>'
     archive_html = (
-        f'<span title="Archive: {is_archive}">{archive_badge}</span>'
+        f'<span title="Archive: {html.escape(str(is_archive))}">{archive_badge}</span>'
         if is_archive
         else ""
     )
@@ -173,13 +223,13 @@ def _render_queue_item(item: dict) -> str:
 
 
 def _render_history_item(item: dict) -> str:
-    name = item.get("name", "Unknown")
+    name = html.escape(item.get("name", "Unknown"))
     status = item.get("status", "Unknown")
     bytes_val = item.get("bytes", 0)
     category = item.get("category", "not_quasarr")
     is_archive = item.get("is_archive", False)
     extraction_status = item.get("extraction_status", "")
-    fail_message = item.get("fail_message", "")
+    fail_message = html.escape(item.get("fail_message", ""))
     nzo_id = item.get("nzo_id", "")
     storage = item.get("storage", "")
 
@@ -203,28 +253,29 @@ def _render_history_item(item: dict) -> str:
         f'<div class="package-error">⚠️ {fail_message}</div>' if fail_message else ""
     )
 
+    _raw_hist_name = item.get("name", "Unknown")
     info_onclick = (
         f"showPackageDetails("
-        f"'{nzo_id}', "
-        f"'{_escape_js(name)}', "
-        f"'{category}', "
-        f"'{'Yes' if is_archive else 'No'}', "
-        f"'{extraction_status}', "
-        f"'', "
-        f"'{size_str}', "
-        f"'', "
-        f"'{status}', "
-        f"'{_escape_js(storage)}', "
+        f"{json.dumps(nzo_id)}, "
+        f"{json.dumps(_raw_hist_name)}, "
+        f"{json.dumps(category)}, "
+        f"{json.dumps('Yes' if is_archive else 'No')}, "
+        f"{json.dumps(extraction_status)}, "
+        f"{json.dumps('')}, "
+        f"{json.dumps(size_str)}, "
+        f"{json.dumps('')}, "
+        f"{json.dumps(status)}, "
+        f"{json.dumps(storage)}, "
         f"false)"
     )
-    info_btn = f'<button class="btn-small info" onclick="{info_onclick}">ℹ️</button>'
+    info_btn = f'<button class="btn-small info" onclick="{html.escape(info_onclick)}">ℹ️</button>'
 
     if nzo_id:
         actions = f"""
             <div class="package-actions">
                 {info_btn}
                 <span class="spacer"></span>
-                <button class="btn-small danger" onclick="confirmDelete('{nzo_id}', '{_escape_js(name)}')">🗑️</button>
+                <button class="btn-small danger" onclick="{html.escape(f'confirmDelete({json.dumps(nzo_id)}, {json.dumps(_raw_hist_name)})')}">🗑️</button>
             </div>
         """
     else:
@@ -235,9 +286,9 @@ def _render_history_item(item: dict) -> str:
             </div>
         """
 
-    cat_html = f'<span title="Category: {category}">{cat_emoji}</span>'
+    cat_html = f'<span title="Category: {html.escape(category)}">{cat_emoji}</span>'
     archive_html = (
-        f'<span title="Archive Status: {extraction_status}">{archive_emoji}</span>'
+        f'<span title="Archive Status: {html.escape(extraction_status)}">{archive_emoji}</span>'
         if is_archive
         else ""
     )
@@ -623,9 +674,22 @@ def setup_packages_routes(app) -> None:
                 }}
 
                 function performDelete() {{
-                    if (deletePackageId) {{
-                        location.href = '/packages/delete/' + encodeURIComponent(deletePackageId);
-                    }}
+                    if (!deletePackageId) return;
+                    fetch('/api/packages/delete', {{
+                        method: 'POST',
+                        headers: {{'Content-Type': 'application/json'}},
+                        body: JSON.stringify({{package_id: deletePackageId}})
+                    }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
+                        if (data.success) {{
+                            closeModal();
+                            showStatusMessage('Package deleted', 'success');
+                            refreshContent();
+                        }} else {{
+                            showStatusMessage('Delete failed: ' + (data.error || 'Unknown'), 'error');
+                        }}
+                    }}).catch(function(e) {{
+                        showStatusMessage('Delete failed: ' + e, 'error');
+                    }});
                 }}
 
                 // --- Info modal ---
@@ -706,6 +770,11 @@ def setup_packages_routes(app) -> None:
     @app.get("/api/packages/content")
     def packages_content_api():
         """AJAX endpoint — returns only the packages content HTML for background refresh."""
+        if not _require_webui_auth():
+            response.status = 401
+            response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
+            response.content_type = "application/json"
+            return '{"error": "Unauthorized"}'
         device = shared_state.values.get("device")
         if not device:
             return """
@@ -721,6 +790,10 @@ def setup_packages_routes(app) -> None:
     def packages_json_api():
         """JSON status endpoint."""
         response.content_type = "application/json"
+        if not _require_webui_auth():
+            response.status = 401
+            response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
+            return '{"error": "Unauthorized"}'
         device = shared_state.values.get("device")
         if not device:
             return json.dumps({"connected": False, "queue": [], "history": []})
@@ -732,18 +805,43 @@ def setup_packages_routes(app) -> None:
             "history": downloads.get("history", []),
         })
 
-    @app.get("/packages/delete/<package_id>")
-    def delete_package_route(package_id: str):
-        success = delete_package(shared_state, package_id)
-        if success:
-            redirect("/packages?deleted=1")
-        else:
-            redirect("/packages?deleted=0")
+    @app.post("/api/packages/delete")
+    def packages_delete():
+        """Delete a package by ID. POST replaces the old GET route to prevent CSRF."""
+        response.content_type = "application/json"
+        if not _require_webui_auth():
+            response.status = 401
+            response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
+            return '{"error": "Unauthorized"}'
+        device = shared_state.values.get("device")
+        if not device:
+            return json.dumps({"success": False, "error": "Not connected"})
+
+        try:
+            data = json.loads(request.body.read().decode("utf-8"))
+            package_id = data.get("package_id")
+        except (ValueError, UnicodeDecodeError) as exc:
+            logger.debug("delete: invalid JSON body — %s", exc)
+            return json.dumps({"success": False, "error": "Invalid JSON"})
+
+        if not package_id:
+            return json.dumps({"success": False, "error": "Missing package_id"})
+
+        try:
+            success = delete_package(shared_state, package_id)
+            return json.dumps({"success": success})
+        except Exception as exc:
+            logger.debug("delete failed: %s", exc)
+            return json.dumps({"success": False, "error": str(exc)})
 
     @app.post("/api/packages/pause")
     def packages_pause():
         """Pause a specific package or the global download controller."""
         response.content_type = "application/json"
+        if not _require_webui_auth():
+            response.status = 401
+            response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
+            return '{"error": "Unauthorized"}'
         device = shared_state.values.get("device")
         if not device:
             return json.dumps({"success": False, "error": "Not connected"})
@@ -770,6 +868,10 @@ def setup_packages_routes(app) -> None:
     def packages_resume():
         """Resume a specific package or the global download controller."""
         response.content_type = "application/json"
+        if not _require_webui_auth():
+            response.status = 401
+            response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
+            return '{"error": "Unauthorized"}'
         device = shared_state.values.get("device")
         if not device:
             return json.dumps({"success": False, "error": "Not connected"})

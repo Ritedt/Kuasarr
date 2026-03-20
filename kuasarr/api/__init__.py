@@ -15,6 +15,8 @@ from kuasarr.api.captcha import setup_captcha_routes
 from kuasarr.api.config import setup_config
 from kuasarr.api.hosters import setup_hosters_routes
 from kuasarr.api.dbc import setup_dbc_routes
+from kuasarr.api.search import setup_search_routes
+from kuasarr.api.packages import setup_packages_routes
 from kuasarr.api.statistics import setup_statistics
 from kuasarr.providers import shared_state
 from kuasarr.providers.log import debug
@@ -87,6 +89,8 @@ def get_api(shared_state_dict, shared_state_lock):
     setup_hosters_routes(app)
     setup_statistics(app, shared_state)
     setup_dbc_routes(app)
+    setup_search_routes(app)
+    setup_packages_routes(app)
 
     # Serve static files (logo, PWA assets)
     @app.get('/static/<filename:path>')
@@ -255,6 +259,10 @@ def get_api(shared_state_dict, shared_state_lock):
                 <button class="action-btn" onclick="location.href='/captcha'">
                     <span class="action-icon">🔓</span>
                     <span class="action-text">CAPTCHA Queue</span>
+                </button>
+                <button class="action-btn" onclick="location.href='/packages'">
+                    <span class="action-icon">📦</span>
+                    <span class="action-text">Packages</span>
                 </button>
             </div>
         </div>

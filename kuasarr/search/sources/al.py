@@ -1,6 +1,6 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # Kuasarr
-# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
+# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
 
 import re
 import time
@@ -17,6 +17,7 @@ from kuasarr.downloads.sources.al import (guess_title,
 from kuasarr.providers.imdb_metadata import get_localized_title
 from kuasarr.providers.log import info, debug
 from kuasarr.providers.sessions.al import invalidate_session, fetch_via_requests_session
+from kuasarr.providers.xem_metadata import get_season_name
 
 hostname = "al"
 supported_mirrors = ["rapidgator", "ddownload"]
@@ -273,67 +274,79 @@ def al_search(shared_state, start_time, request_from, search_string,
 
     search_string = unescape(search_string)
 
-    encoded_search_string = quote_plus(search_string)
+    season_title = None
+    xem_name = None
+    if season:
+        season_title = f"{search_string} Staffel {season}"
+        xem_name = get_season_name(search_string, season)
 
-    try:
-        url = f'https://www.{host}/search?q={encoded_search_string}'
-        r = fetch_via_requests_session(shared_state, method="GET", target_url=url, timeout=10)
-        r.raise_for_status()
-    except Exception as e:
-        info(f"{hostname}: search load error: {e}")
-        invalidate_session(shared_state)
-        return releases
+    results = []
+    for variant in [season_title, xem_name, search_string]:
+        if results:
+            break
+        if variant is None:
+            continue
 
-    if r.history:
-        # If just one valid search result exists, AL skips the search result page
-        last_redirect = r.history[-1]
-        redirect_location = last_redirect.headers['Location']
-        absolute_redirect_url = urljoin(last_redirect.url, redirect_location)  # in case of relative URL
-        debug(f"{search_string} redirected to {absolute_redirect_url} instead of search results page")
+        encoded_search_string = quote_plus(variant)
 
         try:
-            soup = BeautifulSoup(r.text, "html.parser")
-            page_title = soup.title.string
-        except:
-            page_title = ""
+            url = f'https://www.{host}/search?q={encoded_search_string}'
+            r = fetch_via_requests_session(shared_state, method="GET", target_url=url, timeout=10)
+            r.raise_for_status()
+        except Exception as e:
+            info(f"{hostname}: search load error: {e}")
+            invalidate_session(shared_state)
+            continue
 
-        results = [{"url": absolute_redirect_url, "title": page_title}]
-    else:
-        soup = BeautifulSoup(r.text, 'html.parser')
-        results = []
+        if r.history:
+            # If just one valid search result exists, AL skips the search result page
+            last_redirect = r.history[-1]
+            redirect_location = last_redirect.headers['Location']
+            absolute_redirect_url = urljoin(last_redirect.url, redirect_location)  # in case of relative URL
+            debug(f"{variant} redirected to {absolute_redirect_url} instead of search results page")
 
-        for panel in soup.select('div.panel.panel-default'):
-            body = panel.find('div', class_='panel-body')
-            if not body:
-                continue
+            try:
+                soup = BeautifulSoup(r.text, "html.parser")
+                page_title = soup.title.string
+            except:
+                page_title = ""
 
-            title_tag = body.select_one('h4.title-list a[href]')
-            if not title_tag:
-                continue
-            url = title_tag['href'].strip()
-            name = title_tag.get_text(strip=True)
+            results = [{"url": absolute_redirect_url, "title": page_title}]
+        else:
+            soup = BeautifulSoup(r.text, 'html.parser')
 
-            sanitized_search_string = shared_state.sanitize_string(search_string)
-            sanitized_title = shared_state.sanitize_string(name)
-            if not sanitized_search_string in sanitized_title:
-                debug(f"Search string '{search_string}' doesn't match '{name}'")
-                continue
-            debug(f"Matched search string '{search_string}' with result '{name}'")
+            for panel in soup.select('div.panel.panel-default'):
+                body = panel.find('div', class_='panel-body')
+                if not body:
+                    continue
 
-            type_label = None
-            for lbl in body.select('div.label-group a[href]'):
-                href = lbl['href']
-                if '/anime-series' in href:
-                    type_label = 'series'
-                    break
-                if '/anime-movies' in href:
-                    type_label = 'movie'
-                    break
+                title_tag = body.select_one('h4.title-list a[href]')
+                if not title_tag:
+                    continue
+                url = title_tag['href'].strip()
+                name = title_tag.get_text(strip=True)
 
-            if not type_label or (valid_type is not None and type_label != valid_type):
-                continue
+                sanitized_search_string = shared_state.sanitize_string(variant)
+                sanitized_title = shared_state.sanitize_string(name)
+                if not sanitized_search_string in sanitized_title:
+                    debug(f"Search string '{variant}' doesn't match '{name}'")
+                    continue
+                debug(f"Matched search string '{variant}' with result '{name}'")
 
-            results.append({"url": url, "title": name})
+                type_label = None
+                for lbl in body.select('div.label-group a[href]'):
+                    href = lbl['href']
+                    if '/anime-series' in href:
+                        type_label = 'series'
+                        break
+                    if '/anime-movies' in href:
+                        type_label = 'movie'
+                        break
+
+                if not type_label or (valid_type is not None and type_label != valid_type):
+                    continue
+
+                results.append({"url": url, "title": name})
 
     for result in results:
         try:

@@ -7,6 +7,7 @@ import re
 import requests
 from bs4 import BeautifulSoup
 
+from kuasarr.providers.network.cloudflare import flaresolverr_get, is_cloudflare_challenge
 from kuasarr.providers.log import info, debug
 from urllib.parse import urlparse, urljoin
 
@@ -23,6 +24,9 @@ def get_he_download_links(shared_state, url, mirror, title):
 
     try:
         resp = session.get(url, headers=headers, timeout=30)
+        if resp.status_code == 403 or is_cloudflare_challenge(resp.text):
+            info(f"{hostname}: Cloudflare protection detected for {title}. Using FlareSolverr to bypass.")
+            resp = flaresolverr_get(shared_state, url)
         soup = BeautifulSoup(resp.text, 'html.parser')
     except Exception as e:
         info(f"{hostname}: could not fetch release for {title}: {e}")

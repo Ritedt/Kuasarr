@@ -15,6 +15,77 @@ from kuasarr.providers import shared_state as shared_state_module
 _processed_downloads = set()
 
 
+def is_duplicate_al_download(shared_state, url: str, title: str) -> bool:
+    """
+    Prüft ob ein AL-Download mit gleicher Source-URL oder gleichem Release-Titel
+    bereits in der JDownloader Linkgrabber-Queue oder im aktiven Downloader existiert.
+
+    Felder für den Vergleich:
+      - Source-URL:      Link-URL in Linkgrabber- oder Downloader-Links
+      - Release-Titel:   Paketname (name) in Linkgrabber- oder Downloader-Paketen
+
+    Gibt True zurück wenn ein Duplikat gefunden wurde, sonst False.
+    """
+    try:
+        device = shared_state.get_device()
+        if not device:
+            return False
+
+        title_lower = title.lower() if title else ""
+        url_lower = url.lower() if url else ""
+
+        # --- Linkgrabber prüfen ---
+        try:
+            lg_packages = device.linkgrabber.query_packages() or []
+        except Exception:
+            lg_packages = []
+
+        try:
+            lg_links = device.linkgrabber.query_links() or []
+        except Exception:
+            lg_links = []
+
+        for pkg in lg_packages:
+            pkg_name = pkg.get("name", "")
+            if pkg_name and pkg_name.lower() == title_lower:
+                debug(f"AL Deduplizierung: Paket '{title}' bereits im Linkgrabber")
+                return True
+
+        for link in lg_links:
+            link_url = link.get("url", "")
+            if link_url and url_lower in link_url.lower():
+                debug(f"AL Deduplizierung: URL '{url}' bereits im Linkgrabber")
+                return True
+
+        # --- Aktiven Downloader prüfen ---
+        try:
+            dl_packages = device.downloads.query_packages() or []
+        except Exception:
+            dl_packages = []
+
+        try:
+            dl_links = device.downloads.query_links() or []
+        except Exception:
+            dl_links = []
+
+        for pkg in dl_packages:
+            pkg_name = pkg.get("name", "")
+            if pkg_name and pkg_name.lower() == title_lower:
+                debug(f"AL Deduplizierung: Paket '{title}' bereits im Downloader")
+                return True
+
+        for link in dl_links:
+            link_url = link.get("url", "")
+            if link_url and url_lower in link_url.lower():
+                debug(f"AL Deduplizierung: URL '{url}' bereits im Downloader")
+                return True
+
+    except Exception as e:
+        debug(f"AL Deduplizierung: Fehler bei der Prüfung — wird übersprungen: {e}")
+
+    return False
+
+
 def get_links_comment(package, package_links):
     package_uuid = package.get("uuid")
     if package_uuid and package_links:

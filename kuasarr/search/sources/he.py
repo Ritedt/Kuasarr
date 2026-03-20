@@ -8,6 +8,7 @@ import time
 import requests
 from bs4 import BeautifulSoup
 
+from kuasarr.providers.network.cloudflare import flaresolverr_get, is_cloudflare_challenge
 from kuasarr.providers.log import info, debug
 from kuasarr.providers.ui import html_images
 
@@ -34,6 +35,9 @@ def he_search(shared_state, start_time, request_from, imdb_id, mirror=None, seas
 
     try:
         resp = requests.get(search_url, headers=headers, timeout=30)
+        if resp.status_code == 403 or is_cloudflare_challenge(resp.text):
+            info(f"{hostname}: Cloudflare protection detected during search for {imdb_id}. Using FlareSolverr to bypass.")
+            resp = flaresolverr_get(shared_state, search_url)
         soup = BeautifulSoup(resp.text, 'html.parser')
     except Exception as e:
         info(f"{hostname}: search failed for {imdb_id}: {e}")
@@ -85,6 +89,9 @@ def he_feed(shared_state, start_time, request_from, mirror=None):
 
     try:
         resp = requests.get(feed_url, headers=headers, timeout=30)
+        if resp.status_code == 403 or is_cloudflare_challenge(resp.text):
+            info(f"{hostname}: Cloudflare protection detected during feed fetch. Using FlareSolverr to bypass.")
+            resp = flaresolverr_get(shared_state, feed_url)
         soup = BeautifulSoup(resp.text, 'html.parser')
     except Exception as e:
         info(f"{hostname}: feed failed: {e}")

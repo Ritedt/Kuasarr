@@ -12,6 +12,7 @@ from urllib.parse import quote, quote_plus
 import requests
 from bs4 import BeautifulSoup
 
+from kuasarr.providers.network.cloudflare import flaresolverr_get, is_cloudflare_challenge
 from kuasarr.providers.imdb_metadata import get_localized_title
 from kuasarr.providers.log import info, debug
 
@@ -165,8 +166,11 @@ def wd_feed(shared_state, start_time, request_from, mirror=None):
     url = f"https://{wd}/{feed_type}"
     headers = {'User-Agent': shared_state.values["user_agent"]}
     try:
-        response = requests.get(url, headers=headers, timeout=10).content
-        soup = BeautifulSoup(response, "html.parser")
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 403 or is_cloudflare_challenge(response.text):
+            info(f"{hostname.upper()} feed is protected by Cloudflare. Using FlareSolverr to bypass protection.")
+            response = flaresolverr_get(shared_state, url)
+        soup = BeautifulSoup(response.text, "html.parser")
         releases = _parse_rows(soup, shared_state, wd, password, mirror)
     except Exception as e:
         info(f"Error loading {hostname.upper()} feed: {e}")
@@ -193,8 +197,11 @@ def wd_search(shared_state, start_time, request_from, search_string, mirror=None
     headers = {'User-Agent': shared_state.values["user_agent"]}
 
     try:
-        response = requests.get(url, headers=headers, timeout=10).content
-        soup = BeautifulSoup(response, "html.parser")
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 403 or is_cloudflare_challenge(response.text):
+            info(f"{hostname.upper()} search is protected by Cloudflare. Using FlareSolverr to bypass protection.")
+            response = flaresolverr_get(shared_state, url)
+        soup = BeautifulSoup(response.text, "html.parser")
         releases = _parse_rows(
             soup, shared_state, wd, password, mirror,
             request_from=request_from,

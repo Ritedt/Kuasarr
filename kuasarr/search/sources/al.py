@@ -314,6 +314,7 @@ def al_search(shared_state, start_time, request_from, search_string,
             results = [{"url": absolute_redirect_url, "title": page_title}]
         else:
             soup = BeautifulSoup(r.text, 'html.parser')
+            sanitized_search_string = shared_state.sanitize_string(variant)
 
             for panel in soup.select('div.panel.panel-default'):
                 body = panel.find('div', class_='panel-body')
@@ -326,7 +327,6 @@ def al_search(shared_state, start_time, request_from, search_string,
                 url = title_tag['href'].strip()
                 name = title_tag.get_text(strip=True)
 
-                sanitized_search_string = shared_state.sanitize_string(variant)
                 sanitized_title = shared_state.sanitize_string(name)
                 if not sanitized_search_string in sanitized_title:
                     debug(f"Search string '{variant}' doesn't match '{name}'")

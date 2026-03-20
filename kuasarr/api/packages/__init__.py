@@ -757,7 +757,7 @@ def setup_packages_routes(app) -> None:
 
         try:
             if package_id:
-                device.downloads.set_enabled(False, [package_id])
+                device.downloads.set_enabled(package_ids=[package_id], enabled=False)
             else:
                 device.downloadcontroller.set_pause(True)
         except Exception as exc:
@@ -783,7 +783,7 @@ def setup_packages_routes(app) -> None:
 
         try:
             if package_id:
-                device.downloads.set_enabled(True, [package_id])
+                device.downloads.set_enabled(package_ids=[package_id], enabled=True)
             else:
                 device.downloadcontroller.set_pause(False)
         except Exception as exc:

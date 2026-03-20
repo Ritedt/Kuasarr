@@ -410,15 +410,12 @@ class Downloads:
         Returns:
             API response
         """
-        params = [enabled]
-        if link_ids:
-            params.append(link_ids)
-        else:
-            params.append([])
-        if package_ids:
-            params.append(package_ids)
-        else:
-            params.append([])
+        # JDownloader API expects: linkIds, packageIds, enabled
+        params = [
+            link_ids or [],
+            package_ids or [],
+            enabled
+        ]
         return self.device.action(self.url + "/setEnabled", params)
 
     def set_pause(self, paused=True):

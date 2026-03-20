@@ -109,6 +109,9 @@ def send_discord_message(shared_state, title, case, imdb_id=None, details=None, 
             ]
         else:
             fields = None
+    elif case == "test":
+        description = 'This is a test notification from Kuasarr.'
+        fields = None
     else:
         info(f"Unknown notification case: {case}")
         return False

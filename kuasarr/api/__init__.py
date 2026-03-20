@@ -15,6 +15,7 @@ from kuasarr.api.captcha import setup_captcha_routes
 from kuasarr.api.config import setup_config
 from kuasarr.api.hosters import setup_hosters_routes
 from kuasarr.api.dbc import setup_dbc_routes
+from kuasarr.api.notifications import setup_notifications_routes
 from kuasarr.api.search import setup_search_routes
 from kuasarr.api.packages import setup_packages_routes
 from kuasarr.api.statistics import setup_statistics
@@ -89,6 +90,7 @@ def get_api(shared_state_dict, shared_state_lock):
     setup_hosters_routes(app)
     setup_statistics(app, shared_state)
     setup_dbc_routes(app)
+    setup_notifications_routes(app, shared_state)
     setup_search_routes(app)
     setup_packages_routes(app)
 
@@ -263,6 +265,10 @@ def get_api(shared_state_dict, shared_state_lock):
                 <button class="action-btn" onclick="location.href='/packages'">
                     <span class="action-icon">📦</span>
                     <span class="action-text">Packages</span>
+                </button>
+                <button class="action-btn" onclick="location.href='/notifications'">
+                    <span class="action-icon">🔔</span>
+                    <span class="action-text">Notifications</span>
                 </button>
             </div>
         </div>

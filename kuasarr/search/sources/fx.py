@@ -134,7 +134,7 @@ def fx_search(shared_state, start_time, request_from, search_string, mirror=None
     try:
         request = requests.get(url, headers=headers, timeout=10).content
         search = BeautifulSoup(request, "html.parser")
-        results = search.find('h2', class_='entry-title')
+        results = search.find_all('h2', class_='entry-title')
 
     except Exception as e:
         info(f"Error loading {hostname.upper()} feed: {e}")
@@ -143,7 +143,7 @@ def fx_search(shared_state, start_time, request_from, search_string, mirror=None
     if results:
         for result in results:
             try:
-                result_source = result["href"]
+                result_source = result.a["href"]
                 request = requests.get(result_source, headers=headers, timeout=10).content
                 feed = BeautifulSoup(request, "html.parser")
                 items = feed.find_all("article")
@@ -155,7 +155,7 @@ def fx_search(shared_state, start_time, request_from, search_string, mirror=None
                 try:
                     article = BeautifulSoup(str(item), "html.parser")
                     try:
-                        titles = article.find_all("a", href=re.compile(r"filecrypt\."))
+                        titles = article.find_all("a", href=re.compile("(filecrypt|safe." + fx + ")"))
                     except:
                         continue
                     i = 0

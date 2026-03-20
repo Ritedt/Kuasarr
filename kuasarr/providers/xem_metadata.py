@@ -8,7 +8,10 @@ from json import dumps, loads
 import requests
 
 from kuasarr.providers import shared_state
-from kuasarr.providers.log import debug, error, trace, warn
+from kuasarr.providers.log import debug, error
+
+trace = debug
+warn = error
 from kuasarr.providers.utils import sanitize_string
 from kuasarr.providers.validation import search_string_in_sanitized_title
 

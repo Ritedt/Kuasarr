@@ -46,7 +46,6 @@ from kuasarr.downloads.linkcrypters.filecrypt import CNL, DLC
 from kuasarr.downloads.linkcrypters.hide import unhide_links
 
 DEFAULT_DISPATCH_INTERVAL_SECONDS = 10
-ACTIVE_JOB_STATUSES = {"pending", "processing"}
 MAX_BACKOFF_MULTIPLIER = 8
 
 
@@ -147,18 +146,19 @@ class DBCDispatcher:
         # Refresh job list after cleanup
         current_jobs = push_jobs.list_jobs()
         
-        # Count active jobs
-        active_jobs = sum(1 for job in current_jobs.values() if job.get("status") in ACTIVE_JOB_STATUSES)
+        # Count only actively-processing jobs (not pending-retry) against the concurrency limit
+        active_jobs = sum(1 for job in current_jobs.values() if job.get("status") == "processing")
         max_concurrent = int(self.shared_state.values.get("dbc_max_concurrent", 1))
-        
+
         if active_jobs >= max_concurrent:
             debug(f"DBC Dispatcher: Max concurrent jobs reached ({active_jobs}/{max_concurrent})")
             return
 
-        # Get assigned package IDs
+        # Only exclude packages that are currently being processed (not pending-retry ones)
         assigned_packages = {
             (job.get("payload") or {}).get("package_id") or job_id
             for job_id, job in current_jobs.items()
+            if job.get("status") == "processing"
         }
 
         # Select candidates

@@ -399,6 +399,36 @@ class Downloads:
         resp = self.device.action(self.url + "/queryPackages", params)
         return resp
 
+    def set_enabled(self, link_ids=None, package_ids=None, enabled=True):
+        """Enable or disable links and packages.
+
+        Args:
+            link_ids: List of link UUIDs to enable/disable
+            package_ids: List of package UUIDs to enable/disable
+            enabled: True to enable, False to disable
+
+        Returns:
+            API response
+        """
+        # JDownloader API expects: linkIds, packageIds, enabled
+        params = [
+            link_ids or [],
+            package_ids or [],
+            enabled
+        ]
+        return self.device.action(self.url + "/setEnabled", params)
+
+    def set_pause(self, paused=True):
+        """Pause or unpause all downloads.
+
+        Args:
+            paused: True to pause, False to unpause
+
+        Returns:
+            API response
+        """
+        return self.device.action(self.url + "/setPause", [paused])
+
 
 class Extraction:
     """

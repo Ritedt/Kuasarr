@@ -37,4 +37,4 @@ kuasarr = "kuasarr:run"
 include = ["kuasarr*"]
 
 [tool.setuptools.package-data]
-kuasarr = ["static/*.png", "static/*.js", "static/*.html", "static/*.webmanifest"]
+kuasarr = ["static/*.png", "static/*.js", "static/*.html", "static/*.webmanifest", "version.json"]

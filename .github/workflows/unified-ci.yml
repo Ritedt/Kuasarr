@@ -9,6 +9,14 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      version_bump:
+        description: 'Version bump type (patch: 1.12.4→1.12.5, minor: 1.12.4→1.13.0, major: 1.12.4→2.0.0)'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
       skip_pypi:
         description: 'Skip PyPI upload'
         type: boolean
@@ -48,16 +56,29 @@ jobs:
           # Get latest tag matching strict semver (vMAJOR.MINOR.PATCH only, no suffixes)
           latest_tag=$(git tag -l 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
 
+          # Determine bump type (default: patch for push events)
+          BUMP_TYPE="${{ inputs.version_bump || 'patch' }}"
+
           if [ -z "$latest_tag" ]; then
             # No git tag yet – seed from version.json (initial repo setup)
             new_version=$(jq -re '.version' version.json 2>/dev/null) || {
               echo "ERROR: Could not read version from version.json" >&2; exit 1
             }
           else
-            # Remove 'v' prefix and increment patch
+            # Remove 'v' prefix and increment based on bump type
             version="${latest_tag#v}"
             IFS=. read -r major minor patch <<< "$version"
-            new_version="${major}.${minor}.$((patch + 1))"
+            case "$BUMP_TYPE" in
+              major)
+                new_version="$((major + 1)).0.0"
+                ;;
+              minor)
+                new_version="${major}.$((minor + 1)).0"
+                ;;
+              *)
+                new_version="${major}.${minor}.$((patch + 1))"
+                ;;
+            esac
           fi
 
           echo "version=${new_version}" >> $GITHUB_OUTPUT

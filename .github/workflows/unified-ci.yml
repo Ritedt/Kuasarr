@@ -9,6 +9,14 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      version_bump:
+        description: 'Version bump type (patch: 1.12.4→1.12.5, minor: 1.12.4→1.13.0, major: 1.12.4→2.0.0)'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
       skip_pypi:
         description: 'Skip PyPI upload'
         type: boolean
@@ -42,11 +50,27 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Helper: compare two semver strings, returns 0 if $1 > $2
+          ver_gt() {
+            IFS=. read -r a1 b1 c1 <<< "$1"
+            IFS=. read -r a2 b2 c2 <<< "$2"
+            [ "$a1" -gt "$a2" ] && return 0
+            [ "$a1" -lt "$a2" ] && return 1
+            [ "$b1" -gt "$b2" ] && return 0
+            [ "$b1" -lt "$b2" ] && return 1
+            [ "$c1" -gt "$c2" ] && return 0
+            return 1
+          }
+
           # Fetch all tags
           git fetch --tags
 
           # Get latest tag matching strict semver (vMAJOR.MINOR.PATCH only, no suffixes)
           latest_tag=$(git tag -l 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
+          latest_version="${latest_tag#v}"
+
+          # Determine bump type (default: patch for push events)
+          BUMP_TYPE="${{ inputs.version_bump || 'patch' }}"
 
           if [ -z "$latest_tag" ]; then
             # No git tag yet – seed from version.json (initial repo setup)
@@ -54,10 +78,35 @@ jobs:
               echo "ERROR: Could not read version from version.json" >&2; exit 1
             }
           else
-            # Remove 'v' prefix and increment patch
-            version="${latest_tag#v}"
-            IFS=. read -r major minor patch <<< "$version"
-            new_version="${major}.${minor}.$((patch + 1))"
+            # Remove 'v' prefix and increment based on bump type
+            IFS=. read -r major minor patch <<< "$latest_version"
+            case "$BUMP_TYPE" in
+              major)
+                new_version="$((major + 1)).0.0"
+                ;;
+              minor)
+                new_version="${major}.$((minor + 1)).0"
+                ;;
+              *)
+                new_version="${major}.${minor}.$((patch + 1))"
+                ;;
+            esac
+          fi
+
+          # Check Hier_Version_Ändern.txt for manual version override
+          OVERRIDE_FILE="Hier_Version_Ändern.txt"
+          if [ -f "$OVERRIDE_FILE" ]; then
+            file_version=$(tr -d '[:space:]' < "$OVERRIDE_FILE")
+            if [[ "$file_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              if [ -z "$latest_version" ] || ver_gt "$file_version" "$latest_version"; then
+                echo "Version override from $OVERRIDE_FILE: $file_version (replaces auto-bump $new_version)"
+                new_version="$file_version"
+              else
+                echo "Version in $OVERRIDE_FILE ($file_version) is not newer than last tag ($latest_version) – ignoring"
+              fi
+            else
+              echo "WARNING: $OVERRIDE_FILE contains invalid version '$file_version' – ignoring"
+            fi
           fi
 
           echo "version=${new_version}" >> $GITHUB_OUTPUT

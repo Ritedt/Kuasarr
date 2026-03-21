@@ -19,7 +19,7 @@ from kuasarr.downloads.sources.rm import (
 )
 
 from kuasarr.providers.imdb_metadata import get_localized_title
-from kuasarr.providers.log import debug, info, warn
+from kuasarr.providers.log import debug, info
 from kuasarr.providers.validation import (
     is_imdb_id,
     is_valid_release,
@@ -84,13 +84,10 @@ def rm_feed(shared_state, start_time, request_from, mirror=None):
         )
         releases = releases[:20]
     except Exception as e:
-        warn(f"RM feed error: {e}")
-        info(f"RM feed: {e}")
+        info(f"RM feed error: {e}")
 
     elapsed_time = time.time() - start_time
     debug(f"Time taken: {elapsed_time:.2f}s (rm)")
-
-    if releases:
 
     return releases
 
@@ -147,8 +144,7 @@ def rm_search(shared_state, start_time, request_from, search_string="", mirror=N
             episode=episode,
         )
     except Exception as e:
-        warn(f"RM search error: {e}")
-        info(f"RM search: {e}")
+        info(f"RM search error: {e}")
 
     elapsed_time = time.time() - start_time
     debug(f"Time taken: {elapsed_time:.2f}s (rm)")
@@ -417,7 +413,7 @@ def _build_search_results(
                 }
             )
         except Exception as e:
-            warn(f"RM: Error parsing release: {e}")
+            info(f"RM: Error parsing release: {e}")
             continue
 
     return releases

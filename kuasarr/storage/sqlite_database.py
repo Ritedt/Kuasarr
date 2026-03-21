@@ -5,12 +5,12 @@
 import sqlite3
 import time
 
-from kuasarr.providers import shared_state
 from kuasarr.providers.log import info
 
 
 class DataBase(object):
     def __init__(self, table):
+        from kuasarr.providers import shared_state
         try:
             self._conn = sqlite3.connect(shared_state.values["dbfile"], check_same_thread=False, timeout=5)
             self._table = table

@@ -24,7 +24,7 @@ from kuasarr.downloads.sources.at import (
     guess_release_title,
 )
 from kuasarr.providers.imdb_metadata import get_localized_title
-from kuasarr.providers.log import debug, info, warn
+from kuasarr.providers.log import debug, info
 from kuasarr.providers.validation import (
     is_imdb_id,
     match_in_title,
@@ -82,7 +82,7 @@ def at_feed(shared_state, start_time, request_from, mirror=None):
             timeout=30,
         )
     except Exception as e:
-        warn(f"AT: Error loading feed: {e}")
+        info(f"AT: Error loading feed: {e}")
         return releases
 
     mirrors = [mirror] if mirror else None
@@ -155,7 +155,7 @@ def at_search(shared_state, start_time, request_from, search_string="", mirror=N
                 timeout=15,
             )
         except Exception as e:
-            warn(f"AT: Error loading search for {variant['query']}: {e}")
+            info(f"AT: Error loading search for {variant['query']}: {e}")
             continue
 
         seen_sources = set()

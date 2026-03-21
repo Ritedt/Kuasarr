@@ -11,7 +11,7 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
-from kuasarr.providers.log import debug, info, warn
+from kuasarr.providers.log import debug, info
 from kuasarr.providers.validation import is_imdb_id, is_valid_release
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -384,7 +384,6 @@ def hs_feed(shared_state, start_time, request_from, mirror=None):
                 continue
 
     except Exception as e:
-        warn(f"Error loading feed: {e}")
         info(f"HS feed error: {e}")
         return releases
 
@@ -440,7 +439,6 @@ def hs_search(shared_state, start_time, request_from, search_string="", mirror=N
         )
 
     except Exception as e:
-        warn(f"Error loading search: {e}")
         info(f"HS search error: {e}")
         return releases
 

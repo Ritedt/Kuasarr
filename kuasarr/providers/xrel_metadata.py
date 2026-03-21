@@ -5,8 +5,79 @@
 """
 xREL.to API integration for accurate release size and metadata lookup.
 
-API docs: https://www.xrel.to/wiki/1680/api-release-info.html
-          https://www.xrel.to/wiki/1681/API.html
+API docs:
+  https://www.xrel.to/wiki/1680/api-release-info.html
+  https://www.xrel.to/wiki/1681/API.html
+
+-----------------------------------------------------------------------
+CURRENTLY USED
+-----------------------------------------------------------------------
+  size_bytes   — corrects wrong package sizes shown in Radarr/Sonarr
+  nuked        — optionally filter out broken scene releases
+  (all other fields are fetched and cached but not yet acted upon)
+
+-----------------------------------------------------------------------
+AVAILABLE FOR FUTURE INTEGRATION
+-----------------------------------------------------------------------
+
+Field            Source      Description / Integration idea
+---------------  ----------  ------------------------------------------
+group_name       scene+p2p   Release group (e.g. "FLUX", "YIFY").
+                             Could be shown in the WebUI result list or
+                             used to prefer/block specific groups.
+
+english          scene       True when an English audio track is present.
+                             Could be used as a filter option so users
+                             only see releases with English audio.
+
+video_type       scene       Codec/format string (e.g. "x264", "x265",
+                             "HEVC", "AVC"). Could feed a codec filter
+                             or be appended to the title shown in Arrs.
+
+audio_type       scene       Audio codec (e.g. "DTS", "AC3", "AAC").
+                             Same usage as video_type above.
+
+ext_info_title   scene+p2p   Canonical title of the work as known by
+                             xREL (e.g. "Game of Thrones"). Could be
+                             used to double-check the matched title or
+                             enrich the WebUI display.
+
+ext_info_type    scene+p2p   Media type string ("movie", "tv", "game",
+                             "software", "xxx", …). Could guard against
+                             wrong-category matches.
+
+tv_season        scene       Season number from xREL. Could be used to
+tv_episode       scene       validate that the scraped season/episode
+                             tags match what xREL reports, and skip
+                             obviously mis-tagged releases.
+
+nfo              scene       NFO file content (requires xREL OAuth2).
+                             Could be shown in the WebUI detail view or
+                             parsed for additional metadata.
+
+-----------------------------------------------------------------------
+POTENTIAL FEATURES USING XREL DATA
+-----------------------------------------------------------------------
+
+1. Group allow/block list
+   Config: [XRel] allowed_groups = FLUX,YIFY  /  blocked_groups = ...
+   Implementation: filter in _enrich_with_xrel() by group_name.
+
+2. Codec filter
+   Config: [XRel] require_video_codec = x265
+   Filter releases where video_type doesn't match.
+
+3. Season/episode sanity check
+   If tv_season != parsed season from title → warn or skip.
+   Catches mislabelled multi-episode packs that fool the regex.
+
+4. Nuke reason in WebUI
+   xREL returns a nuke reason string alongside nuke_rls=True.
+   Show it as a tooltip/badge in the result list.
+
+5. Release age
+   xREL returns the release timestamp. Could be used to sort or
+   expire very old releases from feed results.
 """
 
 from datetime import datetime, timedelta

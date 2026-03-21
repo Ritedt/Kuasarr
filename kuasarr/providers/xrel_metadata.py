@@ -80,15 +80,23 @@ POTENTIAL FEATURES USING XREL DATA
    expire very old releases from feed results.
 """
 
+import re
 from datetime import datetime, timedelta
 
 import requests
 
-from kuasarr.providers.log import debug
+from kuasarr.providers.log import debug, info
 
 XREL_BASE_URL = "https://api.xrel.to/v2"
 XREL_SCENE_INFO = f"{XREL_BASE_URL}/release/info.json"
 XREL_P2P_INFO = f"{XREL_BASE_URL}/p2p/rls_info.json"
+XREL_SEARCH = f"{XREL_BASE_URL}/search/releases.json"
+
+# Minimum token-overlap ratio to accept a search result as a match
+_MIN_SIMILARITY = 0.6
+
+# Pre-compiled splitter for dirname similarity scoring
+_DIRNAME_SPLIT_RE = re.compile(r'[.\-]')
 
 # Reuse TCP connections across calls within the same process lifetime
 _session = requests.Session()
@@ -126,7 +134,7 @@ def _size_to_bytes(size_obj):
 
 
 def _get_scene_info(dirname, user_agent, timeout=10):
-    """Query xREL scene release info by dirname. Returns parsed dict or None."""
+    """Query xREL scene release info by exact dirname. Returns parsed dict or None."""
     try:
         resp = _session.get(
             XREL_SCENE_INFO,
@@ -139,34 +147,14 @@ def _get_scene_info(dirname, user_agent, timeout=10):
         if resp.status_code != 200:
             debug(f"xREL scene lookup returned HTTP {resp.status_code}")
             return None
-        data = resp.json()
-        if not data or "dirname" not in data:
-            return None
-        size_bytes = _size_to_bytes(data.get("size"))
-        flags = data.get("flags", {})
-        ext_info = data.get("ext_info", {})
-        return {
-            "source": "scene",
-            "dirname": data.get("dirname"),
-            "size_bytes": size_bytes,
-            "size_mb": (size_bytes / (1024 * 1024)) if size_bytes else None,
-            "group_name": data.get("group_name"),
-            "nuked": flags.get("nuke_rls", False),
-            "english": flags.get("english", False),
-            "ext_info_title": ext_info.get("title") if ext_info else None,
-            "ext_info_type": ext_info.get("type") if ext_info else None,
-            "tv_season": data.get("tv_season"),
-            "tv_episode": data.get("tv_episode"),
-            "video_type": data.get("video_type"),
-            "audio_type": data.get("audio_type"),
-        }
+        return _parse_scene_result(resp.json())
     except (requests.RequestException, ValueError) as e:
         debug(f"xREL scene lookup error: {e}")
         return None
 
 
 def _get_p2p_info(dirname, user_agent, timeout=10):
-    """Query xREL P2P release info by dirname. Returns parsed dict or None."""
+    """Query xREL P2P release info by exact dirname. Returns parsed dict or None."""
     try:
         resp = _session.get(
             XREL_P2P_INFO,
@@ -179,30 +167,135 @@ def _get_p2p_info(dirname, user_agent, timeout=10):
         if resp.status_code != 200:
             debug(f"xREL P2P lookup returned HTTP {resp.status_code}")
             return None
-        data = resp.json()
-        if not data or "dirname" not in data:
-            return None
-        size_mb = data.get("size_mb")
-        size_bytes = int(size_mb * 1024 * 1024) if size_mb is not None else None
-        group = data.get("group", {})
-        ext_info = data.get("ext_info", {})
-        return {
-            "source": "p2p",
-            "dirname": data.get("dirname"),
-            "size_bytes": size_bytes,
-            "size_mb": size_mb,
-            "group_name": group.get("name") if group else None,
-            "nuked": False,
-            "english": False,
-            "ext_info_title": ext_info.get("title") if ext_info else None,
-            "ext_info_type": ext_info.get("type") if ext_info else None,
-            "tv_season": None,
-            "tv_episode": None,
-            "video_type": None,
-            "audio_type": None,
-        }
+        return _parse_p2p_result(resp.json())
     except (requests.RequestException, ValueError) as e:
         debug(f"xREL P2P lookup error: {e}")
+        return None
+
+
+def _dirname_similarity(query, candidate):
+    """
+    Token-overlap similarity between two scene dirnames (0.0–1.0).
+
+    Splits on dots/hyphens, lowercases, and computes Jaccard-like overlap
+    relative to the larger set.
+    """
+    q_tokens = set(_DIRNAME_SPLIT_RE.split(query.lower())) - {""}
+    c_tokens = set(_DIRNAME_SPLIT_RE.split(candidate.lower())) - {""}
+    if not q_tokens or not c_tokens:
+        return 0.0
+    overlap = q_tokens & c_tokens
+    return len(overlap) / max(len(q_tokens), len(c_tokens))
+
+
+def _parse_scene_result(data):
+    """Parse a single scene release object from the search API response."""
+    if not data or "dirname" not in data:
+        return None
+    size_bytes = _size_to_bytes(data.get("size"))
+    flags = data.get("flags", {})
+    ext_info = data.get("ext_info", {})
+    return {
+        "source": "scene",
+        "dirname": data.get("dirname"),
+        "size_bytes": size_bytes,
+        "size_mb": (size_bytes / (1024 * 1024)) if size_bytes else None,
+        "group_name": data.get("group_name"),
+        "nuked": flags.get("nuke_rls", False),
+        "english": flags.get("english", False),
+        "ext_info_title": ext_info.get("title") if ext_info else None,
+        "ext_info_type": ext_info.get("type") if ext_info else None,
+        "tv_season": data.get("tv_season"),
+        "tv_episode": data.get("tv_episode"),
+        "video_type": data.get("video_type"),
+        "audio_type": data.get("audio_type"),
+    }
+
+
+def _parse_p2p_result(data):
+    """Parse a single P2P release object from the search API response."""
+    if not data or "dirname" not in data:
+        return None
+    size_mb = data.get("size_mb")
+    size_bytes = int(size_mb * 1024 * 1024) if size_mb is not None else None
+    group = data.get("group", {})
+    ext_info = data.get("ext_info", {})
+    return {
+        "source": "p2p",
+        "dirname": data.get("dirname"),
+        "size_bytes": size_bytes,
+        "size_mb": size_mb,
+        "group_name": group.get("name") if group else None,
+        "nuked": False,
+        "english": False,
+        "ext_info_title": ext_info.get("title") if ext_info else None,
+        "ext_info_type": ext_info.get("type") if ext_info else None,
+        "tv_season": None,
+        "tv_episode": None,
+        "video_type": None,
+        "audio_type": None,
+    }
+
+
+def _search_releases(query_dirname, user_agent, timeout=10):
+    """
+    Search xREL for releases matching *query_dirname* via fuzzy search.
+
+    Returns the best-matching parsed result dict, or None.
+    """
+    try:
+        resp = _session.get(
+            XREL_SEARCH,
+            params={"q": query_dirname, "scene": "true", "p2p": "true", "limit": 10},
+            headers={"User-Agent": user_agent},
+            timeout=timeout,
+        )
+        if resp.status_code != 200:
+            debug(f"xREL search returned HTTP {resp.status_code}")
+            return None
+
+        data = resp.json()
+
+        # Collect candidates from scene and P2P results
+        candidates = []
+        for item in data.get("results", []):
+            parsed = _parse_scene_result(item)
+            if parsed:
+                candidates.append(parsed)
+        for item in data.get("p2p_results", []):
+            parsed = _parse_p2p_result(item)
+            if parsed:
+                candidates.append(parsed)
+
+        if not candidates:
+            debug(f"xREL search: 0 candidates returned for '{query_dirname}'")
+            return None
+
+        debug(f"xREL search: {len(candidates)} candidates for '{query_dirname}'")
+
+        # Score each candidate and pick the best match
+        best, best_score = None, 0.0
+        for cand in candidates:
+            score = _dirname_similarity(query_dirname, cand["dirname"])
+            debug(f"  candidate '{cand['dirname']}' score={score:.2f}")
+            if score > best_score:
+                best, best_score = cand, score
+
+        if best and best_score >= _MIN_SIMILARITY:
+            info(
+                f"xREL search fallback: '{query_dirname}' matched "
+                f"'{best['dirname']}' (score={best_score:.2f}, {best['source']})"
+            )
+            return best
+
+        debug(
+            f"xREL search: no match above threshold ({_MIN_SIMILARITY}) "
+            f"for '{query_dirname}' (best={best_score:.2f})"
+        )
+        return None
+
+    except (requests.RequestException, ValueError) as e:
+        debug(f"xREL search error: {e}")
         return None
 
 
@@ -211,7 +304,9 @@ def get_xrel_release_info(shared_state, dirname):
     Look up release metadata on xREL.to by dirname.
 
     Tries scene releases first, falls back to P2P releases.
-    Results are cached in shared_state for 24 hours.
+    Successful results are cached in shared_state for 24 hours.
+    Not-found results are cached for only 1 hour to allow retries
+    after temporary xREL outages or rate-limiting.
 
     Returns a dict with keys:
         source, dirname, size_bytes, size_mb, group_name,
@@ -222,25 +317,48 @@ def get_xrel_release_info(shared_state, dirname):
     if not dirname:
         return None
 
+    dirname = dirname.strip()
+    if not dirname:
+        return None
+
     context = "xrel_cache"
-    threshold = 60 * 60 * 24  # 24 hours
+    threshold = 60 * 60 * 24  # 24 hours (for successful hits)
     recently_searched = shared_state.get_recently_searched(shared_state, context, threshold)
 
-    # get_recently_searched already purges expired entries, so any hit here is still valid
+    # get_recently_searched already purges entries older than 24h.
+    # For None results we use a shorter 1h window so transient failures
+    # don't block lookups for a full day.
     if dirname in recently_searched:
-        return recently_searched[dirname]["result"]
+        entry = recently_searched[dirname]
+        if entry["result"] is not None:
+            return entry["result"]
+        # None result: only honour the cache for 1 hour
+        cache_age = (datetime.now() - entry["timestamp"]).total_seconds()
+        if cache_age < 60 * 60:
+            return None
 
     user_agent = shared_state.values.get("user_agent", "Kuasarr")
 
+    debug(f"xREL: looking up dirname='{dirname}'")
+
+    # 1. Try exact dirname lookup (scene → P2P)
     result = _get_scene_info(dirname, user_agent)
     if result is None:
         result = _get_p2p_info(dirname, user_agent)
 
+    # 2. Fallback: fuzzy search when exact match fails
+    if result is None:
+        debug(f"xREL: exact lookup failed, trying search fallback for '{dirname}'")
+        result = _search_releases(dirname, user_agent)
+
     if result:
         size_str = f"{result['size_mb']:.1f} MB" if result["size_mb"] is not None else "unknown size"
-        debug(f"xREL [{result['source']}]: size={size_str}, group={result['group_name']}, nuked={result['nuked']}")
+        info(
+            f"xREL [{result['source']}]: '{dirname}' → "
+            f"size={size_str}, group={result['group_name']}, nuked={result['nuked']}"
+        )
     else:
-        debug("xREL: no info found")
+        info(f"xREL: no match for '{dirname}' (exact + search)")
 
     recently_searched[dirname] = {"result": result, "timestamp": datetime.now()}
     shared_state.update(context, recently_searched)

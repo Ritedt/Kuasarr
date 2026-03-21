@@ -35,8 +35,30 @@ def get_poster_link(shared_state, imdb_id):
     return poster_link
 
 
+_TITLE_SANITIZE_RE = re.compile(r"[^a-zA-Z0-9äöüÄÖÜß&-']")
+_MULTI_SPACE_RE = re.compile(r'\s{2,}')
+# Trailing suffixes that IMDb appends to page <title> values
+_IMDB_TITLE_SUFFIXES = (' - IMDb', ' | IMDb')
+# Trailing parenthetical like " (TV Series 2003–2010)" or " (2024)"
+_IMDB_TITLE_PAREN_RE = re.compile(r'\s*\([^)]*\)\s*$')
+
+
 def get_localized_title(shared_state, imdb_id, language='de'):
-    localized_title = None
+    # Cache localized title lookups to avoid parallel/repeated IMDb requests.
+    # Successful hits: 24 h.  Not-found: 1 h so transient blocks don't persist.
+    cache_key = f"{imdb_id}_{language}"
+    context = "recents_imdb_titles"
+    threshold = 60 * 60 * 24  # 24 hours (purge window)
+    recently_searched = shared_state.get_recently_searched(shared_state, context, threshold)
+
+    if cache_key in recently_searched:
+        entry = recently_searched[cache_key]
+        if entry["title"] is not None:
+            return entry["title"]
+        # None entry: re-try after 1 hour
+        cache_age = (datetime.now() - entry["timestamp"]).total_seconds()
+        if cache_age < 60 * 60:
+            return None
 
     headers = {
         'Accept-Language': language,
@@ -47,26 +69,36 @@ def get_localized_title(shared_state, imdb_id, language='de'):
         response = requests.get(f"https://www.imdb.com/title/{imdb_id}/", headers=headers, timeout=10)
     except Exception as e:
         info(f"Error loading IMDb metadata for {imdb_id}: {e}")
-        return localized_title
+        return None
 
-    try:
-        match = re.findall(r'<title>(.*?) \(.*?</title>', response.text)
-        localized_title = match[0]
-    except:
-        try:
-            match = re.findall(r'<title>(.*?) - IMDb</title>', response.text)
-            localized_title = match[0]
-        except:
-            pass
+    # Use BeautifulSoup to extract the <title> tag — robust against attribute
+    # variations and avoids any regex-backtracking on the raw HTML string.
+    soup = BeautifulSoup(response.text, "html.parser")
+    title_tag = soup.find("title")
+    localized_title = title_tag.get_text() if title_tag else None
+
+    if localized_title:
+        # Strip " - IMDb" / " | IMDb" suffix
+        for suffix in _IMDB_TITLE_SUFFIXES:
+            if localized_title.endswith(suffix):
+                localized_title = localized_title[: -len(suffix)]
+                break
+        # Strip trailing year / type parenthetical: " (TV Series 2003–2010)"
+        localized_title = _IMDB_TITLE_PAREN_RE.sub('', localized_title).strip()
 
     if not localized_title:
         debug(f"Could not get localized title for {imdb_id} in {language} from IMDb")
+        recently_searched[cache_key] = {"title": None, "timestamp": datetime.now()}
+        shared_state.update(context, recently_searched)
         return None
 
     localized_title = html.unescape(localized_title)
-    localized_title = re.sub(r"[^a-zA-Z0-9äöüÄÖÜß&-']", ' ', localized_title).strip()
+    localized_title = _TITLE_SANITIZE_RE.sub(' ', localized_title).strip()
     localized_title = localized_title.replace(" - ", "-")
-    localized_title = re.sub(r'\s{2,}', ' ', localized_title)
+    localized_title = _MULTI_SPACE_RE.sub(' ', localized_title)
+
+    recently_searched[cache_key] = {"title": localized_title, "timestamp": datetime.now()}
+    shared_state.update(context, recently_searched)
 
     return localized_title
 

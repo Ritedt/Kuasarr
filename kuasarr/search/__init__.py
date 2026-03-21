@@ -4,6 +4,8 @@
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 
 from kuasarr.providers.log import info, debug
 from kuasarr.providers.xrel_metadata import get_xrel_release_info
@@ -28,7 +30,8 @@ from kuasarr.search.sources.rm import rm_feed, rm_search
 from kuasarr.search.sources.wx import wx_feed, wx_search
 
 
-def get_search_results(shared_state, request_from, imdb_id="", search_phrase="", mirror=None, season="", episode=""):
+def get_search_results(shared_state, request_from, imdb_id="", search_phrase="", mirror=None, season="", episode="",
+                       offset=0, limit=0, is_feed=False):
     results = []
 
     if imdb_id and not imdb_id.startswith('tt'):
@@ -178,6 +181,25 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
     info(f"Providing {len(results)} releases to {request_from} for {stype}. Time taken: {elapsed_time:.2f} seconds")
 
     results = _enrich_with_xrel(shared_state, results)
+
+    # Ergebnisse nach Datum sortieren (neueste zuerst)
+    def _parse_date(r):
+        date_str = r.get("details", {}).get("date", "")
+        try:
+            return parsedate_to_datetime(date_str).replace(tzinfo=None)
+        except Exception:
+            return datetime.min
+
+    results.sort(key=_parse_date, reverse=True)
+
+    # Max 1000 Ergebnisse insgesamt
+    results = results[:1000]
+
+    # Paginierung per offset/limit anwenden
+    if offset > 0 or limit > 0:
+        start = offset
+        end = (offset + limit) if limit > 0 else len(results)
+        results = results[start:end]
 
     return results
 

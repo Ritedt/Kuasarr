@@ -49,6 +49,7 @@ from kuasarr.storage.setup import (
 )
 from kuasarr.storage.sqlite_database import DataBase
 from kuasarr.providers.pwa_installer import should_prompt_pwa_install, mark_pwa_prompted, open_pwa_install_page
+from kuasarr.providers.network.cloudflare import check_flaresolverr_availability_async
 
 
 def run():
@@ -291,6 +292,7 @@ def run():
                 flaresolverr_url = Config('FlareSolverr').get('url')
             else:
                 print(f'Using Flaresolverr URL: "{flaresolverr_url}"')
+                check_flaresolverr_availability_async(flaresolverr_url)
             # AD requires no login, only FlareSolverr for Cloudflare bypass
 
         al = Config('Hostnames').get('al')
@@ -300,6 +302,7 @@ def run():
                 flaresolverr_url = Config('FlareSolverr').get('url')
             else:
                 print(f'Using Flaresolverr URL: "{flaresolverr_url}"')
+                check_flaresolverr_availability_async(flaresolverr_url)
             user = Config('AL').get('user')
             password = Config('AL').get('password')
             if not user or not password:

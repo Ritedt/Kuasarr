@@ -12,6 +12,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from kuasarr.providers.log import info, debug
+from kuasarr.providers.network.cloudflare import flaresolverr_get
 
 
 def get_poster_link(shared_state, imdb_id):
@@ -65,11 +66,20 @@ def get_localized_title(shared_state, imdb_id, language='de'):
         'User-Agent': shared_state.values["user_agent"]
     }
 
+    imdb_url = f"https://www.imdb.com/title/{imdb_id}/"
+    response = None
     try:
-        response = requests.get(f"https://www.imdb.com/title/{imdb_id}/", headers=headers, timeout=10)
-    except Exception as e:
+        response = requests.get(imdb_url, headers=headers, timeout=10)
+    except requests.exceptions.RequestException as e:
         info(f"Error loading IMDb metadata for {imdb_id}: {e}")
-        return None
+
+    if response is None or response.status_code == 403:
+        try:
+            info(f"IMDb request failed for {imdb_id}, retrying via FlareSolverr")
+            response = flaresolverr_get(shared_state, imdb_url)
+        except Exception as e:
+            info(f"FlareSolverr fallback for IMDb {imdb_id} failed: {e}")
+            return None
 
     # Use BeautifulSoup to extract the <title> tag — robust against attribute
     # variations and avoids any regex-backtracking on the raw HTML string.

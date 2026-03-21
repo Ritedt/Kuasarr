@@ -5,7 +5,7 @@
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from kuasarr.providers.log import info, debug
+from kuasarr.providers.log import info, debug, error
 from kuasarr.providers.xrel_metadata import get_xrel_release_info
 from kuasarr.search.sources.al import al_feed, al_search
 from kuasarr.search.sources.ad import ad_feed, ad_search
@@ -193,30 +193,47 @@ def _enrich_with_xrel(shared_state, results):
     if not enabled:
         return results
 
+    total = len(results)
+    matched = 0
+    corrected = 0
+    nuked = 0
+
+    info(f"xREL: enriching {total} releases...")
+
     enriched = []
     for release in results:
         details = release.get("details", {})
         title = details.get("title", "")
+        hostname = details.get("hostname", "?")
 
         xrel_info = get_xrel_release_info(shared_state, title)
 
         if xrel_info:
+            matched += 1
+
             if filter_nuked and xrel_info.get("nuked"):
-                debug(f"xREL: filtering nuked release '{title}'")
+                nuked += 1
+                info(f"xREL: filtering nuked release '{title}' (source={hostname})")
                 continue
 
             if xrel_info.get("size_bytes") and xrel_info["size_bytes"] > 0:
                 old_size = details.get("size", 0)
                 new_size = xrel_info["size_bytes"]
                 if old_size != new_size:
-                    debug(
-                        f"xREL: correcting size for '{title}': "
-                        f"{old_size / (1024 * 1024):.1f} MB -> {new_size / (1024 * 1024):.1f} MB"
+                    corrected += 1
+                    info(
+                        f"xREL: size corrected for '{title}' (source={hostname}): "
+                        f"{old_size / (1024 * 1024):.1f} MB → {new_size / (1024 * 1024):.1f} MB"
                     )
                     details["size"] = new_size
                     release["details"] = details
 
         enriched.append(release)
+
+    info(
+        f"xREL: done — {matched}/{total} matched, "
+        f"{corrected} sizes corrected, {nuked} nuked filtered"
+    )
 
     return enriched
 

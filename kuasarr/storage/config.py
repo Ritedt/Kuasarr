@@ -12,7 +12,6 @@ from Cryptodome.Cipher import AES
 from Cryptodome.Random import get_random_bytes
 from Cryptodome.Util.Padding import pad
 
-from kuasarr.providers import shared_state
 from kuasarr.storage.sqlite_database import DataBase
 
 
@@ -122,6 +121,7 @@ class Config(object):
     __config__ = []
 
     def __init__(self, section):
+        from kuasarr.providers import shared_state
         self._configfile = shared_state.values["configfile"]
         self._section = section
         self._config = configparser.RawConfigParser()

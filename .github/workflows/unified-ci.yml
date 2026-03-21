@@ -364,6 +364,356 @@ jobs:
             }
 
   # ═══════════════════════════════════════════════════════════════
+  # BETA VERSION (PRs only)
+  # ═══════════════════════════════════════════════════════════════
+  beta-version:
+    name: Beta Version
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: github.event_name == 'pull_request'
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      epoch: ${{ steps.version.outputs.epoch }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - id: version
+        run: |
+          set -euo pipefail
+          if [ ! -f version.json ]; then
+            echo "ERROR: version.json not found" >&2; exit 1
+          fi
+          VERSION=$(jq -re .version version.json)
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid semver in version.json: '$VERSION'" >&2; exit 1
+          fi
+          EPOCH=$(date +%s)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "epoch=$EPOCH" >> $GITHUB_OUTPUT
+          echo "Beta version: $VERSION ($EPOCH)"
+
+  # ═══════════════════════════════════════════════════════════════
+  # BETA BUILD WHEEL (PRs only)
+  # ═══════════════════════════════════════════════════════════════
+  beta-build-wheel:
+    name: Beta Build Wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: beta-version
+    if: github.event_name == 'pull_request'
+    outputs:
+      attestation-id: ${{ steps.attest.outputs.attestation-id }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          pip install wheel setuptools
+          pip install -r requirements.txt
+
+      - name: Build Wheel
+        run: |
+          set -euo pipefail
+          python setup.py sdist bdist_wheel
+
+      - id: attest
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*.whl"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beta-wheel
+          path: dist/*.whl
+
+  # ═══════════════════════════════════════════════════════════════
+  # BETA BUILD WINDOWS EXE (PRs only)
+  # ═══════════════════════════════════════════════════════════════
+  beta-build-exe:
+    name: Beta Build Windows EXE
+    runs-on: windows-latest
+    timeout-minutes: 10
+    needs: beta-version
+    if: github.event_name == 'pull_request'
+    env:
+      TMP: "D:\\a\\temp"
+      TEMP: "D:\\a\\temp"
+      PYINSTALLER_CONFIG_DIR: ".pyinstaller-cache"
+    steps:
+      - shell: powershell
+        run: mkdir D:\a\temp -Force
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache PyInstaller Analysis
+        uses: actions/cache@v4
+        with:
+          path: |
+            build
+            .pyinstaller-cache
+          key: pyinstaller-analysis-${{ runner.os }}-beta-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            pyinstaller-analysis-${{ runner.os }}-beta-
+
+      - name: Disable Real-time Monitoring
+        shell: powershell
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install -r requirements.txt
+          pip install pyinstaller build
+
+      - name: Build EXE
+        shell: bash
+        env:
+          VERSION: ${{ needs.beta-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "Building beta EXE with version: $VERSION"
+          python kuasarr/providers/version.py
+          pyinstaller --noconfirm --onefile --console --add-data "kuasarr/static;kuasarr/static" --add-data "version.json;." --version-file "file_version_info.txt" --name "kuasarr" Kuasarr.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beta-exe
+          path: dist/kuasarr.exe
+
+  # ═══════════════════════════════════════════════════════════════
+  # BETA BUILD DOCKER amd64 (PRs only)
+  # ═══════════════════════════════════════════════════════════════
+  beta-build-docker-amd64:
+    name: Beta Build Docker (amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [beta-version, beta-build-wheel]
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: beta-wheel
+          path: ./dist
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          build-args: VERSION=${{ needs.beta-version.outputs.version }}
+          tags: |
+            ${{ env.GHCR_ENDPOINT }}:beta-amd64
+            ${{ env.GHCR_ENDPOINT }}:${{ needs.beta-version.outputs.version }}-beta-amd64
+          cache-from: type=gha,scope=beta-amd64
+          cache-to: type=gha,mode=max,scope=beta-amd64
+
+  # ═══════════════════════════════════════════════════════════════
+  # BETA BUILD DOCKER arm64 (PRs only – native runner)
+  # ═══════════════════════════════════════════════════════════════
+  beta-build-docker-arm64:
+    name: Beta Build Docker (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    needs: [beta-version, beta-build-wheel]
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: beta-wheel
+          path: ./dist
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          build-args: VERSION=${{ needs.beta-version.outputs.version }}
+          tags: |
+            ${{ env.GHCR_ENDPOINT }}:beta-arm64
+            ${{ env.GHCR_ENDPOINT }}:${{ needs.beta-version.outputs.version }}-beta-arm64
+          cache-from: type=gha,scope=beta-arm64
+          cache-to: type=gha,mode=max,scope=beta-arm64
+
+  # ═══════════════════════════════════════════════════════════════
+  # BETA MERGE DOCKER MANIFEST (PRs only)
+  # ═══════════════════════════════════════════════════════════════
+  beta-merge-manifest:
+    name: Beta Merge Docker Manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    needs: [beta-version, beta-build-docker-amd64, beta-build-docker-arm64]
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge manifests
+        run: |
+          set -euo pipefail
+          TAG_AMD64="${{ needs.beta-version.outputs.version }}-beta-amd64"
+          TAG_ARM64="${{ needs.beta-version.outputs.version }}-beta-arm64"
+
+          docker buildx imagetools create -t ${{ env.GHCR_ENDPOINT }}:beta \
+            ${{ env.GHCR_ENDPOINT }}:beta-amd64 \
+            ${{ env.GHCR_ENDPOINT }}:beta-arm64
+
+          docker buildx imagetools create -t ${{ env.GHCR_ENDPOINT }}:${{ needs.beta-version.outputs.version }}-beta \
+            ${{ env.GHCR_ENDPOINT }}:${TAG_AMD64} \
+            ${{ env.GHCR_ENDPOINT }}:${TAG_ARM64}
+
+  # ═══════════════════════════════════════════════════════════════
+  # BETA RELEASE (PRs only)
+  # ═══════════════════════════════════════════════════════════════
+  beta-release:
+    name: Beta Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [beta-version, beta-build-wheel, beta-build-exe, beta-merge-manifest]
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Move beta tag to current commit
+        env:
+          TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          echo "Moving beta tag to $TARGET_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f beta "$TARGET_SHA"
+          git push origin refs/tags/beta --force
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: beta-wheel
+          path: ./wheel
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: beta-exe
+          path: ./exe
+
+      - id: changelog
+        continue-on-error: true
+        uses: metcalfc/changelog-generator@v4.6.2
+        with:
+          myToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release Body
+        run: |
+          set -euo pipefail
+          echo "### Docker:" >> release_body.md
+          echo "\`docker pull ${{ env.GHCR_ENDPOINT }}:beta\`" >> release_body.md
+          echo "" >> release_body.md
+          echo "### Changelog:" >> release_body.md
+          echo "${{ steps.changelog.outputs.changelog || 'No changelog available' }}" >> release_body.md
+          echo "" >> release_body.md
+          echo "[Attestation](https://github.com/${{ github.repository }}/attestations/${{ needs.beta-build-wheel.outputs.attestation-id }})" >> release_body.md
+
+      - uses: ncipollo/release-action@v1
+        with:
+          artifacts: "./wheel/*.whl,./exe/*.exe"
+          allowUpdates: true
+          removeArtifacts: true
+          replacesArtifacts: true
+          tag: beta
+          name: "${{ needs.beta-version.outputs.version }} (${{ needs.beta-version.outputs.epoch }})"
+          bodyFile: "release_body.md"
+          prerelease: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ═══════════════════════════════════════════════════════════════
+  # BETA NOTIFY PR (PRs only)
+  # ═══════════════════════════════════════════════════════════════
+  beta-notify:
+    name: Beta Notify PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    needs: [beta-version, beta-release]
+    if: github.event_name == 'pull_request' && needs.beta-release.result == 'success'
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Comment on PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.beta-version.outputs.version }}
+          EPOCH: ${{ needs.beta-version.outputs.epoch }}
+        run: |
+          set -euo pipefail
+          RELEASE_BODY=$(gh release view beta --json body --jq .body 2>/dev/null || echo "Beta release created")
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          if [ -n "$PR_NUMBER" ]; then
+            printf "## 🚀 Beta Release %s (%s) is Live!\n\n%s\n" "$VERSION" "$EPOCH" "$RELEASE_BODY" > pr_comment.md
+            gh pr comment "$PR_NUMBER" --body-file pr_comment.md
+          fi
+
+  # ═══════════════════════════════════════════════════════════════
   # BUILD WHEEL (amd64/pure Python)
   # ═══════════════════════════════════════════════════════════════
   build-wheel:
@@ -515,12 +865,41 @@ jobs:
             org.opencontainers.image.version=${{ needs.version-output.outputs.version }}
 
   # ═══════════════════════════════════════════════════════════════
+  # MERGE DOCKER MANIFEST (amd64 + arm64 → multi-arch)
+  # ═══════════════════════════════════════════════════════════════
+  merge-manifest:
+    name: Merge Docker Manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    needs: [version-output, build-docker]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge manifests
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.version-output.outputs.version }}"
+
+          docker buildx imagetools create \
+            -t ${{ env.GHCR_ENDPOINT }}:${VERSION} \
+            -t ${{ env.GHCR_ENDPOINT }}:latest \
+            ${{ env.GHCR_ENDPOINT }}:${VERSION}-amd64 \
+            ${{ env.GHCR_ENDPOINT }}:${VERSION}-arm64
+
+  # ═══════════════════════════════════════════════════════════════
   # AUTO TAG (create Git tag after successful builds)
   # ═══════════════════════════════════════════════════════════════
   auto-tag:
     name: Create Git Tag
     runs-on: ubuntu-latest
-    needs: [version-output, build-wheel, build-exe, build-docker]
+    needs: [version-output, build-wheel, build-exe, build-docker, merge-manifest]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
@@ -563,7 +942,7 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [version-output, auto-tag, build-wheel, build-exe, build-docker]
+    needs: [version-output, auto-tag, build-wheel, build-exe, build-docker, merge-manifest]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
@@ -623,7 +1002,7 @@ jobs:
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
-    needs: [detect-changes, version-output, build-wheel, build-exe, build-docker, auto-tag, release, kimi-review, check-version, smoke-test]
+    needs: [detect-changes, version-output, build-wheel, build-exe, build-docker, merge-manifest, auto-tag, release, kimi-review, check-version, smoke-test, beta-version, beta-build-wheel, beta-build-exe, beta-build-docker-amd64, beta-build-docker-arm64, beta-merge-manifest, beta-release, beta-notify]
     if: always()
     steps:
       - name: Generate Summary
@@ -632,21 +1011,34 @@ jobs:
           echo "## 🚀 Kuasarr CI/CD Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Version" >> $GITHUB_STEP_SUMMARY
-          echo "- Version: ${{ needs.version-output.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Release version: ${{ needs.version-output.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Beta version: ${{ needs.beta-version.outputs.version }} (${{ needs.beta-version.outputs.epoch }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Change Detection" >> $GITHUB_STEP_SUMMARY
           echo "- Python/Package: ${{ needs.detect-changes.outputs.python }}" >> $GITHUB_STEP_SUMMARY
           echo "- Docker: ${{ needs.detect-changes.outputs.docker }}" >> $GITHUB_STEP_SUMMARY
           echo "- Version file: ${{ needs.detect-changes.outputs.version-file }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "### PR / Beta Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Import Smoke Test | ${{ needs.smoke-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version Bump Check | ${{ needs.check-version.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Kimi Code Review | ${{ needs.kimi-review.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Beta Build Wheel | ${{ needs.beta-build-wheel.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Beta Build EXE | ${{ needs.beta-build-exe.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Beta Docker amd64 | ${{ needs.beta-build-docker-amd64.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Beta Docker arm64 | ${{ needs.beta-build-docker-arm64.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Beta Merge Manifest | ${{ needs.beta-merge-manifest.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Beta Release | ${{ needs.beta-release.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Beta Notify PR | ${{ needs.beta-notify.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Release Job Status" >> $GITHUB_STEP_SUMMARY
           echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Build Wheel | ${{ needs.build-wheel.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Build Windows EXE | ${{ needs.build-exe.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Build Docker (amd64+arm64) | ${{ needs.build-docker.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Merge Docker Manifest | ${{ needs.merge-manifest.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Auto Tag | ${{ needs.auto-tag.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Release & PyPI | ${{ needs.release.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Kimi Code Review | ${{ needs.kimi-review.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Version Bump Check | ${{ needs.check-version.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Import Smoke Test | ${{ needs.smoke-test.result }} |" >> $GITHUB_STEP_SUMMARY

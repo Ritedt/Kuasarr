@@ -84,11 +84,14 @@ from datetime import datetime, timedelta
 
 import requests
 
-from kuasarr.providers.log import debug, info
+from kuasarr.providers.log import debug
 
 XREL_BASE_URL = "https://api.xrel.to/v2"
 XREL_SCENE_INFO = f"{XREL_BASE_URL}/release/info.json"
 XREL_P2P_INFO = f"{XREL_BASE_URL}/p2p/rls_info.json"
+
+# Reuse TCP connections across calls within the same process lifetime
+_session = requests.Session()
 
 _SIZE_UNIT_TO_MB = {
     "MB": 1,
@@ -125,7 +128,7 @@ def _size_to_bytes(size_obj):
 def _get_scene_info(dirname, user_agent, timeout=10):
     """Query xREL scene release info by dirname. Returns parsed dict or None."""
     try:
-        resp = requests.get(
+        resp = _session.get(
             XREL_SCENE_INFO,
             params={"dirname": dirname},
             headers={"User-Agent": user_agent},
@@ -134,23 +137,21 @@ def _get_scene_info(dirname, user_agent, timeout=10):
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
-            debug(f"xREL scene lookup for '{dirname}' returned HTTP {resp.status_code}")
+            debug(f"xREL scene lookup returned HTTP {resp.status_code}")
             return None
         data = resp.json()
         if not data or "dirname" not in data:
             return None
         size_bytes = _size_to_bytes(data.get("size"))
-        group_name = data.get("group_name")
         flags = data.get("flags", {})
-        nuked = flags.get("nuke_rls", False)
         ext_info = data.get("ext_info", {})
         return {
             "source": "scene",
             "dirname": data.get("dirname"),
             "size_bytes": size_bytes,
             "size_mb": (size_bytes / (1024 * 1024)) if size_bytes else None,
-            "group_name": group_name,
-            "nuked": nuked,
+            "group_name": data.get("group_name"),
+            "nuked": flags.get("nuke_rls", False),
             "english": flags.get("english", False),
             "ext_info_title": ext_info.get("title") if ext_info else None,
             "ext_info_type": ext_info.get("type") if ext_info else None,
@@ -159,15 +160,15 @@ def _get_scene_info(dirname, user_agent, timeout=10):
             "video_type": data.get("video_type"),
             "audio_type": data.get("audio_type"),
         }
-    except Exception as e:
-        debug(f"xREL scene lookup error for '{dirname}': {e}")
+    except (requests.RequestException, ValueError) as e:
+        debug(f"xREL scene lookup error: {e}")
         return None
 
 
 def _get_p2p_info(dirname, user_agent, timeout=10):
     """Query xREL P2P release info by dirname. Returns parsed dict or None."""
     try:
-        resp = requests.get(
+        resp = _session.get(
             XREL_P2P_INFO,
             params={"dirname": dirname},
             headers={"User-Agent": user_agent},
@@ -176,7 +177,7 @@ def _get_p2p_info(dirname, user_agent, timeout=10):
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
-            debug(f"xREL P2P lookup for '{dirname}' returned HTTP {resp.status_code}")
+            debug(f"xREL P2P lookup returned HTTP {resp.status_code}")
             return None
         data = resp.json()
         if not data or "dirname" not in data:
@@ -200,8 +201,8 @@ def _get_p2p_info(dirname, user_agent, timeout=10):
             "video_type": None,
             "audio_type": None,
         }
-    except Exception as e:
-        debug(f"xREL P2P lookup error for '{dirname}': {e}")
+    except (requests.RequestException, ValueError) as e:
+        debug(f"xREL P2P lookup error: {e}")
         return None
 
 
@@ -225,10 +226,9 @@ def get_xrel_release_info(shared_state, dirname):
     threshold = 60 * 60 * 24  # 24 hours
     recently_searched = shared_state.get_recently_searched(shared_state, context, threshold)
 
+    # get_recently_searched already purges expired entries, so any hit here is still valid
     if dirname in recently_searched:
-        entry = recently_searched[dirname]
-        if entry["timestamp"] > datetime.now() - timedelta(seconds=threshold):
-            return entry["result"]
+        return recently_searched[dirname]["result"]
 
     user_agent = shared_state.values.get("user_agent", "Kuasarr")
 
@@ -237,13 +237,10 @@ def get_xrel_release_info(shared_state, dirname):
         result = _get_p2p_info(dirname, user_agent)
 
     if result:
-        debug(
-            f"xREL [{result['source']}] '{dirname}': "
-            f"size={result['size_mb']:.1f} MB, group={result['group_name']}, "
-            f"nuked={result['nuked']}"
-        )
+        size_str = f"{result['size_mb']:.1f} MB" if result["size_mb"] is not None else "unknown size"
+        debug(f"xREL [{result['source']}]: size={size_str}, group={result['group_name']}, nuked={result['nuked']}")
     else:
-        debug(f"xREL: no info found for '{dirname}'")
+        debug("xREL: no info found")
 
     recently_searched[dirname] = {"result": result, "timestamp": datetime.now()}
     shared_state.update(context, recently_searched)

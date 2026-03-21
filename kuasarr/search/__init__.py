@@ -205,7 +205,7 @@ def _enrich_with_xrel(shared_state, results):
                 debug(f"xREL: filtering nuked release '{title}'")
                 continue
 
-            if xrel_info.get("size_bytes"):
+            if xrel_info.get("size_bytes") and xrel_info["size_bytes"] > 0:
                 old_size = details.get("size", 0)
                 new_size = xrel_info["size_bytes"]
                 if old_size != new_size:

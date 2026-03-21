@@ -694,12 +694,7 @@ jobs:
           RELEASE_BODY=$(gh release view beta --json body --jq .body 2>/dev/null || echo "Beta release created")
           PR_NUMBER="${{ github.event.pull_request.number }}"
           if [ -n "$PR_NUMBER" ]; then
-            cat > pr_comment.md <<'COMMENT'
-          ## 🚀 Beta Release $VERSION ($EPOCH) is Live!
-
-          $RELEASE_BODY
-          COMMENT
-            sed -i "s/\$VERSION/$VERSION/g; s/\$EPOCH/$EPOCH/g" pr_comment.md
+            printf "## 🚀 Beta Release %s (%s) is Live!\n\n%s\n" "$VERSION" "$EPOCH" "$RELEASE_BODY" > pr_comment.md
             gh pr comment "$PR_NUMBER" --body-file pr_comment.md
           fi
 

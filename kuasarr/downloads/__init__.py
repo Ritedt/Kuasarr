@@ -10,6 +10,9 @@ import json
 from kuasarr.downloads.linkcrypters.hide import decrypt_links_if_hide
 from kuasarr.downloads.sources.ad import get_ad_download_links
 from kuasarr.downloads.sources.al import get_al_download_links
+from kuasarr.downloads.sources.at import get_at_download_links
+from kuasarr.downloads.sources.hs import get_hs_download_links
+from kuasarr.downloads.sources.rm import get_rm_download_links
 from kuasarr.downloads.sources.by import get_by_download_links
 from kuasarr.downloads.sources.dd import get_dd_download_links
 from kuasarr.downloads.sources.dt import get_dt_download_links
@@ -91,6 +94,51 @@ def handle_al(shared_state, title, password, package_id, imdb_id, url, mirror, s
         shared_state, title, password, package_id, imdb_id, url,
         links=links,
         label='AL',
+        destination_folder=destination_folder,
+    )
+
+
+def handle_at(shared_state, title, password, package_id, imdb_id, url, mirror, size_mb, destination_folder=None):
+    data = get_at_download_links(shared_state, url, mirror, title, password)
+    links = data.get("links", [])
+    if not imdb_id:
+        imdb_id = data.get("imdb_id")
+    title = data.get("title", title) or title
+    return handle_unprotected(
+        shared_state, title, password, package_id, imdb_id, url,
+        links=links,
+        label='AT',
+        destination_folder=destination_folder,
+    )
+
+
+def handle_hs(shared_state, title, password, package_id, imdb_id, url, mirror, size_mb, destination_folder=None):
+    data = get_hs_download_links(shared_state, url, mirror, title, password)
+    links = data.get("links", [])
+    if not links:
+        fail(title, package_id, shared_state,
+             reason=f'No filecrypt links found for "{title}" on HS - "{url}"')
+        return {"success": False, "title": title}
+    return handle_protected(
+        shared_state, title, password, package_id, imdb_id, url,
+        mirror=mirror,
+        size_mb=size_mb,
+        func=lambda ss, u, m, t: links,
+        label='HS',
+        destination_folder=destination_folder,
+    )
+
+
+def handle_rm(shared_state, title, password, package_id, imdb_id, url, mirror, size_mb, destination_folder=None):
+    data = get_rm_download_links(shared_state, url, mirror, title, password)
+    links = data.get("links", [])
+    if not imdb_id:
+        imdb_id = data.get("imdb_id")
+    title = data.get("title", title) or title
+    return handle_unprotected(
+        shared_state, title, password, package_id, imdb_id, url,
+        links=links,
+        label='RM',
         destination_folder=destination_folder,
     )
 
@@ -371,16 +419,19 @@ def download(shared_state, request_from, title, url, mirror, size_mb, password, 
     flags = {
         'AD': config.get("ad"),
         'AL': config.get("al"),
+        'AT': config.get("at"),
         'BY': config.get("by"),
         'DD': config.get("dd"),
         'DL': config.get("dl"),
         'DT': config.get("dt"),
         'DW': config.get("dw"),
         'HE': config.get("he"),
+        'HS': config.get("hs"),
         'MB': config.get("mb"),
         'NK': config.get("nk"),
         'NX': config.get("nx"),
         'SF': config.get("sf"),
+        'RM': config.get("rm"),
         'SL': config.get("sl"),
         'WD': config.get("wd"),
         'WX': config.get("wx")
@@ -404,6 +455,13 @@ def download(shared_state, request_from, title, url, mirror, size_mb, password, 
         return {
             "package_id": package_id,
             **handle_al(shared_state, title, password, package_id, imdb_id, url, mirror, size_mb,
+                        destination_folder=destination_folder)
+        }
+
+    if flags['AT'] and flags['AT'].lower() in url.lower():
+        return {
+            "package_id": package_id,
+            **handle_at(shared_state, title, password, package_id, imdb_id, url, mirror, size_mb,
                         destination_folder=destination_folder)
         }
 
@@ -450,6 +508,13 @@ def download(shared_state, request_from, title, url, mirror, size_mb, password, 
             )
         }
 
+    if flags['HS'] and flags['HS'].lower() in url.lower():
+        return {
+            "package_id": package_id,
+            **handle_hs(shared_state, title, password, package_id, imdb_id, url, mirror, size_mb,
+                        destination_folder=destination_folder)
+        }
+
     if flags['MB'] and flags['MB'].lower() in url.lower():
         return {
             "package_id": package_id,
@@ -475,6 +540,13 @@ def download(shared_state, request_from, title, url, mirror, size_mb, password, 
                 shared_state, title, password, package_id, imdb_id, url, mirror=mirror, size_mb=size_mb,
                 func=get_nx_download_links, label='NX', destination_folder=destination_folder,
             )
+        }
+
+    if flags['RM'] and flags['RM'].lower() in url.lower():
+        return {
+            "package_id": package_id,
+            **handle_rm(shared_state, title, password, package_id, imdb_id, url, mirror, size_mb,
+                        destination_folder=destination_folder)
         }
 
     if flags['SF'] and flags['SF'].lower() in url.lower():

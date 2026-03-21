@@ -12,7 +12,6 @@ from Cryptodome.Cipher import AES
 from Cryptodome.Random import get_random_bytes
 from Cryptodome.Util.Padding import pad
 
-from kuasarr.providers import shared_state
 from kuasarr.storage.sqlite_database import DataBase
 
 
@@ -33,6 +32,7 @@ class Config(object):
         'Hostnames': [
             ("ad", "secret", ""),
             ("al", "secret", ""),
+            ("at", "secret", ""),
             ("by", "secret", ""),
             ("dd", "secret", ""),
             ("dl", "secret", ""),
@@ -40,9 +40,11 @@ class Config(object):
             ("dw", "secret", ""),
             ("fx", "secret", ""),
             ("he", "secret", ""),
+            ("hs", "secret", ""),
             ("mb", "secret", ""),
             ("nk", "secret", ""),
             ("nx", "secret", ""),
+            ("rm", "secret", ""),
             ("sf", "secret", ""),
             ("sl", "secret", ""),
             ("wd", "secret", ""),
@@ -119,6 +121,7 @@ class Config(object):
     __config__ = []
 
     def __init__(self, section):
+        from kuasarr.providers import shared_state
         self._configfile = shared_state.values["configfile"]
         self._section = section
         self._config = configparser.RawConfigParser()

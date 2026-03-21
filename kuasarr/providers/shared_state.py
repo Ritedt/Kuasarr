@@ -61,6 +61,10 @@ from kuasarr.providers.magazine import (
     normalize_magazine_title,
 )
 
+from kuasarr.providers.xrel_metadata import (
+    get_xrel_release_info,
+)
+
 __all__ = [
     # Core state
     "values",
@@ -107,6 +111,8 @@ __all__ = [
     "convert_to_mb",
     # Magazine (re-exported)
     "normalize_magazine_title",
+    # xREL (re-exported)
+    "get_xrel_release_info",
 ]
 
 # Global state

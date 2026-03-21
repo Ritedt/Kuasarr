@@ -6,6 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from kuasarr.providers.log import info, debug
+from kuasarr.providers.xrel_metadata import get_xrel_release_info
 from kuasarr.search.sources.al import al_feed, al_search
 from kuasarr.search.sources.ad import ad_feed, ad_search
 from kuasarr.search.sources.by import by_feed, by_search
@@ -164,7 +165,60 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
     elapsed_time = time.time() - start_time
     info(f"Providing {len(results)} releases to {request_from} for {stype}. Time taken: {elapsed_time:.2f} seconds")
 
+    results = _enrich_with_xrel(shared_state, results)
+
     return results
+
+
+def _enrich_with_xrel(shared_state, results):
+    """
+    Enrich release results with accurate size data from xREL.to.
+
+    When xREL is enabled in config:
+    - Overwrites the scraped size with the xREL size when found
+    - Optionally filters out nuked releases (filter_nuked = true)
+
+    This corrects the wrong package sizes that cause Radarr/Sonarr to skip
+    otherwise matching releases.
+    """
+    from kuasarr.storage.config import Config
+
+    try:
+        xrel_config = Config('XRel')
+        enabled = xrel_config.get("enabled")
+        filter_nuked = xrel_config.get("filter_nuked")
+    except Exception:
+        return results
+
+    if not enabled:
+        return results
+
+    enriched = []
+    for release in results:
+        details = release.get("details", {})
+        title = details.get("title", "")
+
+        xrel_info = get_xrel_release_info(shared_state, title)
+
+        if xrel_info:
+            if filter_nuked and xrel_info.get("nuked"):
+                debug(f"xREL: filtering nuked release '{title}'")
+                continue
+
+            if xrel_info.get("size_bytes"):
+                old_size = details.get("size", 0)
+                new_size = xrel_info["size_bytes"]
+                if old_size != new_size:
+                    debug(
+                        f"xREL: correcting size for '{title}': "
+                        f"{old_size / (1024 * 1024):.1f} MB -> {new_size / (1024 * 1024):.1f} MB"
+                    )
+                    details["size"] = new_size
+                    release["details"] = details
+
+        enriched.append(release)
+
+    return enriched
 
 
 

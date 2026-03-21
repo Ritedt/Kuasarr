@@ -11,8 +11,7 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
-from kuasarr.providers.hostname_issues import clear_hostname_issue, mark_hostname_issue
-from kuasarr.providers.log import debug, warn
+from kuasarr.providers.log import debug, info, warn
 from kuasarr.providers.validation import is_imdb_id, is_valid_release
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -386,14 +385,12 @@ def hs_feed(shared_state, start_time, request_from, mirror=None):
 
     except Exception as e:
         warn(f"Error loading feed: {e}")
-        mark_hostname_issue(hostname, "feed", str(e))
+        info(f"HS feed error: {e}")
         return releases
 
     elapsed = time.time() - start_time
     debug(f"Time taken: {elapsed:.2f}s ({hostname})")
 
-    if releases:
-        clear_hostname_issue(hostname)
     return releases
 
 
@@ -444,12 +441,10 @@ def hs_search(shared_state, start_time, request_from, search_string="", mirror=N
 
     except Exception as e:
         warn(f"Error loading search: {e}")
-        mark_hostname_issue(hostname, "search", str(e))
+        info(f"HS search error: {e}")
         return releases
 
     elapsed = time.time() - start_time
     debug(f"Time taken: {elapsed:.2f}s ({hostname})")
 
-    if releases:
-        clear_hostname_issue(hostname)
     return releases

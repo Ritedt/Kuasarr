@@ -22,6 +22,9 @@ from kuasarr.search.sources.nx import nx_feed, nx_search
 from kuasarr.search.sources.sf import sf_feed, sf_search
 from kuasarr.search.sources.sl import sl_feed, sl_search
 from kuasarr.search.sources.wd import wd_feed, wd_search
+from kuasarr.search.sources.at import at_feed, at_search
+from kuasarr.search.sources.hs import hs_feed, hs_search
+from kuasarr.search.sources.rm import rm_feed, rm_search
 from kuasarr.search.sources.wx import wx_feed, wx_search
 
 
@@ -38,6 +41,7 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
 
     al = shared_state.values["config"]("Hostnames").get("al")
     ad = shared_state.values["config"]("Hostnames").get("ad")
+    at = shared_state.values["config"]("Hostnames").get("at")
     by = shared_state.values["config"]("Hostnames").get("by")
     dd = shared_state.values["config"]("Hostnames").get("dd")
     dl = shared_state.values["config"]("Hostnames").get("dl")
@@ -45,11 +49,13 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
     dw = shared_state.values["config"]("Hostnames").get("dw")
     fx = shared_state.values["config"]("Hostnames").get("fx")
     he = shared_state.values["config"]("Hostnames").get("he")
+    hs = shared_state.values["config"]("Hostnames").get("hs")
     mb = shared_state.values["config"]("Hostnames").get("mb")
     nk = shared_state.values["config"]("Hostnames").get("nk")
     nx = shared_state.values["config"]("Hostnames").get("nx")
     sf = shared_state.values["config"]("Hostnames").get("sf")
     sl = shared_state.values["config"]("Hostnames").get("sl")
+    rm = shared_state.values["config"]("Hostnames").get("rm")
     wd = shared_state.values["config"]("Hostnames").get("wd")
     wx = shared_state.values["config"]("Hostnames").get("wx")
 
@@ -60,6 +66,7 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
     # Radarr/Sonarr use imdb_id for searches
     imdb_map = [
         (al, al_search),
+        (at, at_search),
         (by, by_search),
         (dd, dd_search),
         (dl, dl_search),
@@ -67,9 +74,11 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
         (dw, dw_search),
         (fx, fx_search),
         (he, he_search),
+        (hs, hs_search),
         (mb, mb_search),
         (nk, nk_search),
         (nx, nx_search),
+        (rm, rm_search),
         (sf, sf_search),
         (sl, sl_search),
         (wd, wd_search),
@@ -96,6 +105,7 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
     feed_map = [
         (ad, ad_feed),
         (al, al_feed),
+        (at, at_feed),
         (by, by_feed),
         (dd, dd_feed),
         (dl, dl_feed),
@@ -103,9 +113,11 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
         (dw, dw_feed),
         (fx, fx_feed),
         (he, he_feed),
+        (hs, hs_feed),
         (mb, mb_feed),
         (nk, nk_feed),
         (nx, nx_feed),
+        (rm, rm_feed),
         (sf, sf_feed),
         (sl, sl_feed),
         (wd, wd_feed),

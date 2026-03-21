@@ -9,7 +9,6 @@ from urllib.parse import unquote, urljoin, urlparse
 import requests
 
 from kuasarr.providers.hosters import SHARE_HOSTERS
-from kuasarr.providers.hostname_issues import clear_hostname_issue, mark_hostname_issue
 from kuasarr.providers.log import info
 
 DOWNLOAD_TIMEOUT = 30
@@ -22,7 +21,7 @@ _INITIALS = "rm"
 def get_rm_download_links(shared_state, url, mirror, title, password=None):
     slug = _extract_release_slug(url)
     if not slug:
-        mark_hostname_issue(_INITIALS, "download", "Invalid release URL")
+        info(f"RM: Invalid release URL: {url}")
         return {"links": [], "imdb_id": None}
 
     try:
@@ -32,14 +31,8 @@ def get_rm_download_links(shared_state, url, mirror, title, password=None):
         links = _extract_download_links(release.get("links") or [], mirrors)
         imdb_id = _extract_imdb_id(payload.get("production"))
 
-        if links:
-            clear_hostname_issue(_INITIALS)
-        else:
-            mark_hostname_issue(
-                _INITIALS,
-                "download",
-                "No supported download links found",
-            )
+        if not links:
+            info(f"RM: No supported download links found for {title or slug}")
 
         return {
             "links": links,
@@ -47,11 +40,6 @@ def get_rm_download_links(shared_state, url, mirror, title, password=None):
         }
     except Exception as e:
         info(f"Could not load release data for {title or slug}: {e}")
-        mark_hostname_issue(
-            _INITIALS,
-            "download",
-            str(e),
-        )
         return {"links": [], "imdb_id": None}
 
 

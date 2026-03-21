@@ -17,7 +17,7 @@ from kuasarr.downloads.sources.rm import (
     _is_movie_release,
     _search_productions,
 )
-from kuasarr.providers.hostname_issues import clear_hostname_issue, mark_hostname_issue
+
 from kuasarr.providers.imdb_metadata import get_localized_title
 from kuasarr.providers.log import debug, info, warn
 from kuasarr.providers.validation import (
@@ -85,13 +85,13 @@ def rm_feed(shared_state, start_time, request_from, mirror=None):
         releases = releases[:20]
     except Exception as e:
         warn(f"RM feed error: {e}")
-        mark_hostname_issue(_INITIALS, "feed", str(e))
+        info(f"RM feed: {e}")
 
     elapsed_time = time.time() - start_time
     debug(f"Time taken: {elapsed_time:.2f}s (rm)")
 
     if releases:
-        clear_hostname_issue(_INITIALS)
+
     return releases
 
 
@@ -148,13 +148,11 @@ def rm_search(shared_state, start_time, request_from, search_string="", mirror=N
         )
     except Exception as e:
         warn(f"RM search error: {e}")
-        mark_hostname_issue(_INITIALS, "search", str(e))
+        info(f"RM search: {e}")
 
     elapsed_time = time.time() - start_time
     debug(f"Time taken: {elapsed_time:.2f}s (rm)")
 
-    if releases:
-        clear_hostname_issue(_INITIALS)
     return releases
 
 

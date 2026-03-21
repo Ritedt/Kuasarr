@@ -7,7 +7,6 @@ import re
 import requests
 from bs4 import BeautifulSoup
 
-from kuasarr.providers.hostname_issues import mark_hostname_issue
 from kuasarr.providers.log import debug, info
 
 DOWNLOAD_TIMEOUT = 30
@@ -131,6 +130,6 @@ def get_hs_download_links(shared_state, url, mirror, title, password=None):
 
     except Exception as e:
         info(f"Error loading download links: {e}")
-        mark_hostname_issue(hostname, "download", str(e))
+        info(f"HS: download error for {title}: {e}")
 
     return {"links": links}

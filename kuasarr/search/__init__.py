@@ -5,7 +5,7 @@
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from kuasarr.providers.log import info, debug, error
+from kuasarr.providers.log import info, debug
 from kuasarr.providers.xrel_metadata import get_xrel_release_info
 from kuasarr.search.sources.al import al_feed, al_search
 from kuasarr.search.sources.ad import ad_feed, ad_search

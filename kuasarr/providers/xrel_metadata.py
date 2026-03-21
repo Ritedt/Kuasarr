@@ -95,6 +95,9 @@ XREL_SEARCH = f"{XREL_BASE_URL}/search/releases.json"
 # Minimum token-overlap ratio to accept a search result as a match
 _MIN_SIMILARITY = 0.6
 
+# Pre-compiled splitter for dirname similarity scoring
+_DIRNAME_SPLIT_RE = re.compile(r'[.\-]')
+
 # Reuse TCP connections across calls within the same process lifetime
 _session = requests.Session()
 
@@ -177,8 +180,8 @@ def _dirname_similarity(query, candidate):
     Splits on dots/hyphens, lowercases, and computes Jaccard-like overlap
     relative to the larger set.
     """
-    q_tokens = set(re.split(r'[.\-]', query.lower())) - {""}
-    c_tokens = set(re.split(r'[.\-]', candidate.lower())) - {""}
+    q_tokens = set(_DIRNAME_SPLIT_RE.split(query.lower())) - {""}
+    c_tokens = set(_DIRNAME_SPLIT_RE.split(candidate.lower())) - {""}
     if not q_tokens or not c_tokens:
         return 0.0
     overlap = q_tokens & c_tokens

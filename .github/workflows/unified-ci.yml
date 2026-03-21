@@ -369,6 +369,7 @@ jobs:
   beta-version:
     name: Beta Version
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     if: github.event_name == 'pull_request'
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -381,7 +382,13 @@ jobs:
       - id: version
         run: |
           set -euo pipefail
-          VERSION=$(jq -r .version version.json)
+          if [ ! -f version.json ]; then
+            echo "ERROR: version.json not found" >&2; exit 1
+          fi
+          VERSION=$(jq -re .version version.json)
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid semver in version.json: '$VERSION'" >&2; exit 1
+          fi
           EPOCH=$(date +%s)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "epoch=$EPOCH" >> $GITHUB_OUTPUT
@@ -393,6 +400,7 @@ jobs:
   beta-build-wheel:
     name: Beta Build Wheel
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: beta-version
     if: github.event_name == 'pull_request'
     outputs:
@@ -438,6 +446,7 @@ jobs:
   beta-build-exe:
     name: Beta Build Windows EXE
     runs-on: windows-latest
+    timeout-minutes: 10
     needs: beta-version
     if: github.event_name == 'pull_request'
     env:
@@ -445,7 +454,8 @@ jobs:
       TEMP: "D:\\a\\temp"
       PYINSTALLER_CONFIG_DIR: ".pyinstaller-cache"
     steps:
-      - run: mkdir D:\a\temp -Force
+      - shell: powershell
+        run: mkdir D:\a\temp -Force
 
       - uses: actions/checkout@v6
         with:
@@ -497,6 +507,7 @@ jobs:
   beta-build-docker-amd64:
     name: Beta Build Docker (amd64)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [beta-version, beta-build-wheel]
     if: github.event_name == 'pull_request'
     steps:
@@ -538,6 +549,7 @@ jobs:
   beta-build-docker-arm64:
     name: Beta Build Docker (arm64)
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
     needs: [beta-version, beta-build-wheel]
     if: github.event_name == 'pull_request'
     steps:
@@ -579,6 +591,7 @@ jobs:
   beta-merge-manifest:
     name: Beta Merge Docker Manifest
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     needs: [beta-version, beta-build-docker-amd64, beta-build-docker-arm64]
     if: github.event_name == 'pull_request'
     steps:
@@ -610,6 +623,7 @@ jobs:
   beta-release:
     name: Beta Release
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [beta-version, beta-build-wheel, beta-build-exe, beta-merge-manifest]
     if: github.event_name == 'pull_request'
     permissions:
@@ -676,6 +690,7 @@ jobs:
   beta-notify:
     name: Beta Notify PR
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     needs: [beta-version, beta-release]
     if: github.event_name == 'pull_request' && needs.beta-release.result == 'success'
     permissions:

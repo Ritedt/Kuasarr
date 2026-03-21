@@ -110,6 +110,10 @@ class Config(object):
         ],
         'PWA': [
             ("install_prompted", "bool", "false")  # Track if PWA install was prompted on Windows EXE
+        ],
+        'XRel': [
+            ("enabled", "bool", "false"),        # Enable xREL.to size lookup
+            ("filter_nuked", "bool", "false"),    # Hide nuked releases from results
         ]
     }
     __config__ = []

@@ -865,12 +865,41 @@ jobs:
             org.opencontainers.image.version=${{ needs.version-output.outputs.version }}
 
   # ═══════════════════════════════════════════════════════════════
+  # MERGE DOCKER MANIFEST (amd64 + arm64 → multi-arch)
+  # ═══════════════════════════════════════════════════════════════
+  merge-manifest:
+    name: Merge Docker Manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    needs: [version-output, build-docker]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge manifests
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.version-output.outputs.version }}"
+
+          docker buildx imagetools create \
+            -t ${{ env.GHCR_ENDPOINT }}:${VERSION} \
+            -t ${{ env.GHCR_ENDPOINT }}:latest \
+            ${{ env.GHCR_ENDPOINT }}:${VERSION}-amd64 \
+            ${{ env.GHCR_ENDPOINT }}:${VERSION}-arm64
+
+  # ═══════════════════════════════════════════════════════════════
   # AUTO TAG (create Git tag after successful builds)
   # ═══════════════════════════════════════════════════════════════
   auto-tag:
     name: Create Git Tag
     runs-on: ubuntu-latest
-    needs: [version-output, build-wheel, build-exe, build-docker]
+    needs: [version-output, build-wheel, build-exe, build-docker, merge-manifest]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
@@ -913,7 +942,7 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [version-output, auto-tag, build-wheel, build-exe, build-docker]
+    needs: [version-output, auto-tag, build-wheel, build-exe, build-docker, merge-manifest]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
@@ -973,7 +1002,7 @@ jobs:
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
-    needs: [detect-changes, version-output, build-wheel, build-exe, build-docker, auto-tag, release, kimi-review, check-version, smoke-test, beta-version, beta-build-wheel, beta-build-exe, beta-build-docker-amd64, beta-build-docker-arm64, beta-merge-manifest, beta-release, beta-notify]
+    needs: [detect-changes, version-output, build-wheel, build-exe, build-docker, merge-manifest, auto-tag, release, kimi-review, check-version, smoke-test, beta-version, beta-build-wheel, beta-build-exe, beta-build-docker-amd64, beta-build-docker-arm64, beta-merge-manifest, beta-release, beta-notify]
     if: always()
     steps:
       - name: Generate Summary
@@ -1010,5 +1039,6 @@ jobs:
           echo "| Build Wheel | ${{ needs.build-wheel.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Build Windows EXE | ${{ needs.build-exe.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Build Docker (amd64+arm64) | ${{ needs.build-docker.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Merge Docker Manifest | ${{ needs.merge-manifest.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Auto Tag | ${{ needs.auto-tag.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Release & PyPI | ${{ needs.release.result }} |" >> $GITHUB_STEP_SUMMARY

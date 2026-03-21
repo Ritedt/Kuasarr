@@ -25,10 +25,10 @@ GHCR: [ghcr.io/ritedt/kuasarr](https://github.com/Ritedt/Kuasarr/pkgs/container/
 ```bash
 docker run -d \
   --name kuasarr \
-  -p 8080:8080 \
+  -p 9999:9999 \
   -v /path/to/config/:/config \
-  -e INTERNAL_ADDRESS=http://192.168.0.1:8080 \
-  -e EXTERNAL_ADDRESS=http://192.168.0.1:8080 \
+  -e INTERNAL_ADDRESS=http://192.168.0.1:9999 \
+  -e EXTERNAL_ADDRESS=http://192.168.0.1:9999 \
   -e TZ=Europe/Amsterdam \
   ghcr.io/ritedt/kuasarr:latest
 ```
@@ -153,9 +153,9 @@ Or use environment variables:
 ```bash
 docker run -d \
   --name kuasarr \
-  -p 8080:8080 \
+  -p 9999:9999 \
   -v /path/to/config/:/config \
-  -e INTERNAL_ADDRESS=http://192.168.0.1:8080 \
+  -e INTERNAL_ADDRESS=http://192.168.0.1:9999 \
   -e DBC_AUTHTOKEN=your_authtoken \
   -e TWOCAPTCHA_API_KEY=your_2captcha_key \
   -e TZ=Europe/Amsterdam \
@@ -183,9 +183,9 @@ Protect the Kuasarr WebUI with HTTP Basic Auth via **ENV** or **kuasarr.ini**.
 ```bash
 docker run -d \
   --name kuasarr \
-  -p 8080:8080 \
+  -p 9999:9999 \
   -v /path/to/config/:/config \
-  -e INTERNAL_ADDRESS=http://192.168.0.1:8080 \
+  -e INTERNAL_ADDRESS=http://192.168.0.1:9999 \
   -e KUASARR_WEBUI_USER=admin \
   -e KUASARR_WEBUI_PASS=your_secure_password \
   -e TZ=Europe/Amsterdam \
@@ -225,8 +225,8 @@ Kuasarr can be installed as a standalone app on your device:
 
 # Kuasarr Docs
 
-- [Ultra.cc Installation](./ultracc_install.md)
-- [Update Guide (systemd --user)](./update_guide.md)
+- [Ultra.cc Installation](./docs/ultracc_install.md)
+- [Update Guide (systemd --user)](./docs/update_guide.md)
 
 ---
 

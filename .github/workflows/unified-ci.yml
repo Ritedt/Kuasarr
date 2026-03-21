@@ -863,6 +863,7 @@ jobs:
             ${{ env.GHCR_ENDPOINT }}:latest-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
           labels: |
             org.opencontainers.image.version=${{ needs.version-output.outputs.version }}
+            org.opencontainers.image.description=Bridges JDownloader 2 with Radarr, Sonarr and LazyLibrarian by emulating a Newznab indexer and SABnzbd client. Scrapes DDL sites, decrypts CAPTCHA-protected links, and dispatches downloads to JDownloader via My-JDownloader API.
 
   # ═══════════════════════════════════════════════════════════════
   # MERGE DOCKER MANIFEST (amd64 + arm64 → multi-arch)

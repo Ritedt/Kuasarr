@@ -38,6 +38,15 @@ def get_poster_link(shared_state, imdb_id):
 def get_localized_title(shared_state, imdb_id, language='de'):
     localized_title = None
 
+    # Cache localized title lookups for 24 hours to avoid repeated IMDb requests
+    # (multiple search sources call this for the same imdb_id in parallel)
+    cache_key = f"{imdb_id}_{language}"
+    context = "recents_imdb_titles"
+    threshold = 60 * 60 * 24  # 24 hours
+    recently_searched = shared_state.get_recently_searched(shared_state, context, threshold)
+    if cache_key in recently_searched:
+        return recently_searched[cache_key]["title"]
+
     headers = {
         'Accept-Language': language,
         'User-Agent': shared_state.values["user_agent"]
@@ -49,24 +58,35 @@ def get_localized_title(shared_state, imdb_id, language='de'):
         info(f"Error loading IMDb metadata for {imdb_id}: {e}")
         return localized_title
 
-    try:
-        match = re.findall(r'<title>(.*?) \(.*?</title>', response.text)
-        localized_title = match[0]
-    except:
-        try:
-            match = re.findall(r'<title>(.*?) - IMDb</title>', response.text)
+    # IMDb has changed their <title> format over time. Try multiple patterns:
+    #   1. "Title (year/type info..." — standard format
+    #   2. "Title - IMDb"            — no-year format (older)
+    #   3. "Title | IMDb"            — newer pipe-separator format
+    # All patterns tolerate optional attributes on the <title> tag.
+    title_patterns = [
+        r'<title[^>]*>(.*?) \(.*?</title>',
+        r'<title[^>]*>(.*?) - IMDb</title>',
+        r'<title[^>]*>(.*?) \| IMDb</title>',
+    ]
+    for pattern in title_patterns:
+        match = re.findall(pattern, response.text)
+        if match:
             localized_title = match[0]
-        except:
-            pass
+            break
 
     if not localized_title:
         debug(f"Could not get localized title for {imdb_id} in {language} from IMDb")
+        recently_searched[cache_key] = {"title": None, "timestamp": datetime.now()}
+        shared_state.update(context, recently_searched)
         return None
 
     localized_title = html.unescape(localized_title)
     localized_title = re.sub(r"[^a-zA-Z0-9äöüÄÖÜß&-']", ' ', localized_title).strip()
     localized_title = localized_title.replace(" - ", "-")
     localized_title = re.sub(r'\s{2,}', ' ', localized_title)
+
+    recently_searched[cache_key] = {"title": localized_title, "timestamp": datetime.now()}
+    shared_state.update(context, recently_searched)
 
     return localized_title
 

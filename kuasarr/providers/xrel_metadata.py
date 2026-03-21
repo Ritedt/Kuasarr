@@ -211,7 +211,9 @@ def get_xrel_release_info(shared_state, dirname):
     Look up release metadata on xREL.to by dirname.
 
     Tries scene releases first, falls back to P2P releases.
-    Results are cached in shared_state for 24 hours.
+    Successful results are cached in shared_state for 24 hours.
+    Not-found results are cached for only 1 hour to allow retries
+    after temporary xREL outages or rate-limiting.
 
     Returns a dict with keys:
         source, dirname, size_bytes, size_mb, group_name,
@@ -222,16 +224,29 @@ def get_xrel_release_info(shared_state, dirname):
     if not dirname:
         return None
 
+    dirname = dirname.strip()
+    if not dirname:
+        return None
+
     context = "xrel_cache"
-    threshold = 60 * 60 * 24  # 24 hours
+    threshold = 60 * 60 * 24  # 24 hours (for successful hits)
     recently_searched = shared_state.get_recently_searched(shared_state, context, threshold)
 
-    # get_recently_searched already purges expired entries, so any hit here is still valid
+    # get_recently_searched already purges entries older than 24h.
+    # For None results we use a shorter 1h window so transient failures
+    # don't block lookups for a full day.
     if dirname in recently_searched:
-        return recently_searched[dirname]["result"]
+        entry = recently_searched[dirname]
+        if entry["result"] is not None:
+            return entry["result"]
+        # None result: only honour the cache for 1 hour
+        cache_age = (datetime.now() - entry["timestamp"]).total_seconds()
+        if cache_age < 60 * 60:
+            return None
 
     user_agent = shared_state.values.get("user_agent", "Kuasarr")
 
+    debug(f"xREL: looking up dirname='{dirname}'")
     result = _get_scene_info(dirname, user_agent)
     if result is None:
         result = _get_p2p_info(dirname, user_agent)
@@ -240,7 +255,7 @@ def get_xrel_release_info(shared_state, dirname):
         size_str = f"{result['size_mb']:.1f} MB" if result["size_mb"] is not None else "unknown size"
         debug(f"xREL [{result['source']}]: size={size_str}, group={result['group_name']}, nuked={result['nuked']}")
     else:
-        debug("xREL: no info found")
+        debug(f"xREL: no info found for '{dirname}'")
 
     recently_searched[dirname] = {"result": result, "timestamp": datetime.now()}
     shared_state.update(context, recently_searched)

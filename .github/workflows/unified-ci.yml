@@ -435,7 +435,7 @@ jobs:
         with:
           subject-path: "dist/*.whl"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: beta-wheel
           path: dist/*.whl
@@ -496,7 +496,7 @@ jobs:
           python kuasarr/providers/version.py
           pyinstaller --noconfirm --onefile --console --add-data "kuasarr/static;kuasarr/static" --add-data "version.json;." --version-file "file_version_info.txt" --name "kuasarr" Kuasarr.py
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: beta-exe
           path: dist/kuasarr.exe
@@ -752,7 +752,7 @@ jobs:
           set -euo pipefail
           echo "Building wheel with version: $VERSION"
           python setup.py sdist bdist_wheel
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheel
           path: dist/*.whl
@@ -800,7 +800,7 @@ jobs:
           echo "Building EXE with version: $VERSION"
           python kuasarr/providers/version.py
           pyinstaller --noconfirm --onefile --console --add-data "kuasarr/static;kuasarr/static" --add-data "version.json;." --version-file "file_version_info.txt" --name "kuasarr" Kuasarr.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: exe
           path: dist/kuasarr.exe

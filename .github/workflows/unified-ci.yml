@@ -509,7 +509,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [beta-version, beta-build-wheel]
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v6
         with:
@@ -551,7 +551,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     needs: [beta-version, beta-build-wheel]
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v6
         with:
@@ -593,7 +593,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     needs: [beta-version, beta-build-docker-amd64, beta-build-docker-arm64]
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
     steps:
       - uses: docker/setup-buildx-action@v3
 
@@ -625,7 +625,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [beta-version, beta-build-wheel, beta-build-exe, beta-merge-manifest]
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
     permissions:
       contents: write
     steps:

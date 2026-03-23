@@ -65,8 +65,8 @@ def render_centered_html(inner_content, footer_content=""):
                     --card-bg: #1e1e1e;
                     --card-shadow: rgba(0, 0, 0, 0.5);
                     --card-border: #4a5568;
-                    --primary: #375a7f;
-                    --primary-hover: #2b4764;
+                    --primary: #4d8fd4;
+                    --primary-hover: #3a7bc8;
                     --secondary: #444444;
                     --secondary-hover: #333333;
                     --code-bg: #2d2d2d;
@@ -311,8 +311,9 @@ def render_centered_html(inner_content, footer_content=""):
                 font-size: 0.875rem;
                 margin-top: 0;
             }
-            button:active {
-                transform: translateY(0);
+            button:not(:disabled):active {
+                transform: translateY(1px);
+                box-shadow: none;
             }
             button:disabled {
                 opacity: 0.65;
@@ -324,6 +325,48 @@ def render_centered_html(inner_content, footer_content=""):
             }
             a:hover {
                 text-decoration: underline;
+            }
+            button:focus-visible {
+                outline: 2px solid var(--primary);
+                outline-offset: 2px;
+            }
+            a:focus-visible {
+                outline: 2px solid var(--primary);
+                outline-offset: 2px;
+            }
+            @media (prefers-reduced-motion: reduce) {
+                *, *::before, *::after {
+                    transition-duration: 0.01ms !important;
+                    animation-duration: 0.01ms !important;
+                }
+            }
+            /* Top navigation */
+            .top-nav {
+                display: flex;
+                gap: 0.25rem;
+                flex-wrap: wrap;
+                justify-content: center;
+                margin-bottom: 1.5rem;
+                padding-bottom: 1rem;
+                border-bottom: 1px solid var(--divider-color);
+            }
+            .nav-link {
+                padding: 0.35rem 0.75rem;
+                border-radius: var(--border-radius);
+                font-size: 0.875rem;
+                color: var(--text-muted);
+                transition: background 0.15s, color 0.15s;
+                text-decoration: none;
+            }
+            .nav-link:hover {
+                background: var(--btn-subtle-bg);
+                color: var(--fg-color);
+                text-decoration: none;
+            }
+            .nav-active {
+                background: var(--btn-subtle-bg);
+                color: var(--fg-color);
+                font-weight: 600;
             }
             /* footer styling */
             footer {
@@ -494,9 +537,26 @@ def render_button(text, button_type="primary", attributes=None):
     return f'<button class="{cls}" {attr_str}>{text}</button>'
 
 
-def render_form(header, form="", script="", footer_content=""):
+def render_nav(active_page=""):
+    pages = [
+        ("/", "Home"),
+        ("/settings", "Settings"),
+        ("/captcha-config", "CAPTCHA"),
+        ("/hosters", "Hosters"),
+        ("/notifications", "Notifications"),
+    ]
+    items = "".join(
+        f'<a href="{url}" class="nav-link{"  nav-active" if url == active_page else ""}">{label}</a>'
+        for url, label in pages
+    )
+    return f'<nav class="top-nav">{items}</nav>'
+
+
+def render_form(header, form="", script="", footer_content="", active_page=""):
+    nav = render_nav(active_page)
     content = f'''
     <h1><img src="{images.logo}" type="image/png" alt="kuasarr logo" class="logo"/>kuasarr</h1>
+    {nav}
     <h2>{header}</h2>
     {form}
     {script}
@@ -504,28 +564,28 @@ def render_form(header, form="", script="", footer_content=""):
     return render_centered_html(content, footer_content)
 
 
-def render_success(message, timeout=10, optional_text=""):
-    button_html = render_button(f"Wait time... {timeout}", "secondary", {"id": "nextButton", "disabled": "true"})
+def render_success(message, timeout=5, optional_text=""):
+    button_html = render_button("Go to Home", "primary", {"id": "nextButton"})
     script = f'''
         <script>
             let counter = {timeout};
             const btn = document.getElementById('nextButton');
+            const info = document.getElementById('redirect-info');
             const interval = setInterval(() => {{
                 counter--;
-                btn.innerText = `Wait time... ${{counter}}`;
+                if (info) info.textContent = `Redirecting in ${{counter}}s...`;
                 if (counter === 0) {{
                     clearInterval(interval);
-                    btn.innerText = 'Continue';
-                    btn.disabled = false;
-                    btn.className = 'btn-primary';
-                    btn.onclick = () => window.location.href = '/';
+                    window.location.href = '/';
                 }}
             }}, 1000);
+            btn.onclick = () => {{ clearInterval(interval); window.location.href = '/'; }};
         </script>
     '''
     content = f'''<h1><img src="{images.logo}" type="image/png" alt="kuasarr logo" class="logo"/>kuasarr</h1>
     <h2>{message}</h2>
     {optional_text}
+    <p id="redirect-info" style="color:var(--text-muted);font-size:0.85rem;">Redirecting in {timeout}s...</p>
     {button_html}
     {script}
     '''

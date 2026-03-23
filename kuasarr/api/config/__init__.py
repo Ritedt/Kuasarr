@@ -15,7 +15,7 @@ def setup_config(app, shared_state):
         back_button = f'''<p>
                         {render_button("Back", "secondary", {"onclick": "location.href='/'"})}
                     </p>'''
-        return render_form("Hostnames", hostname_form_html(shared_state, message) + back_button)
+        return render_form("Hostnames", hostname_form_html(shared_state, message) + back_button, active_page="/hosters")
 
     @app.post("/api/hostnames")
     def hostnames_api():
@@ -72,7 +72,7 @@ def setup_config(app, shared_state):
         }
         </script>
         '''
-        return render_form("Configure Captcha Service", form_html, js)
+        return render_form("Configure Captcha Service", form_html, js, active_page="/captcha-config")
 
     @app.post('/api/dbc_credentials')
     def set_dbc_credentials():
@@ -226,7 +226,7 @@ def setup_config(app, shared_state):
             }}
         </style>
         '''
-        return render_form("Global Settings", form_html)
+        return render_form("Global Settings", form_html, active_page="/settings")
 
     @app.post('/api/settings')
     def save_settings_api():

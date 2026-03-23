@@ -1,5 +1,10 @@
 FROM alpine:latest
-LABEL maintainer="Ritedt"
+LABEL maintainer="Ritedt" \
+      org.opencontainers.image.title="Kuasarr" \
+      org.opencontainers.image.description="Bridges JDownloader 2 with Radarr, Sonarr and LazyLibrarian by emulating a Newznab indexer and SABnzbd client. Scrapes DDL sites, decrypts CAPTCHA-protected links, and dispatches downloads to JDownloader via My-JDownloader API." \
+      org.opencontainers.image.url="https://github.com/Ritedt/Kuasarr" \
+      org.opencontainers.image.source="https://github.com/Ritedt/Kuasarr" \
+      org.opencontainers.image.licenses="MIT"
 
 # Define package name
 ARG PACKAGE_NAME=kuasarr

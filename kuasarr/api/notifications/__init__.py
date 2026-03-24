@@ -177,7 +177,7 @@ def setup_notifications_routes(app, shared_state):
         </script>
         '''
 
-        return render_form("Notification Settings", form_html, js)
+        return render_form("Notification Settings", form_html, js, active_page="/notifications")
 
     @app.post('/api/notifications/save')
     def notifications_save():

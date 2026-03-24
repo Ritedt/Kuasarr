@@ -377,22 +377,40 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - id: version
         run: |
           set -euo pipefail
-          if [ ! -f version.json ]; then
-            echo "ERROR: version.json not found" >&2; exit 1
+
+          # Fetch all tags to find the latest release
+          git fetch --tags
+
+          # Get latest tag matching strict semver (vMAJOR.MINOR.PATCH only, no suffixes)
+          latest_tag=$(git tag -l 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
+
+          if [ -z "$latest_tag" ]; then
+            # No git tag yet – seed from root version.json
+            if [ ! -f version.json ]; then
+              echo "ERROR: version.json not found" >&2; exit 1
+            fi
+            BASE_VERSION=$(jq -re .version version.json)
+          else
+            BASE_VERSION="${latest_tag#v}"
           fi
-          VERSION=$(jq -re .version version.json)
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "ERROR: Invalid semver in version.json: '$VERSION'" >&2; exit 1
+
+          if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid semver base: '$BASE_VERSION'" >&2; exit 1
           fi
+
+          # Increment patch by 1 and append -beta
+          IFS=. read -r major minor patch <<< "$BASE_VERSION"
+          BETA_VERSION="${major}.${minor}.$((patch + 1))-beta"
+
           EPOCH=$(date +%s)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$BETA_VERSION" >> $GITHUB_OUTPUT
           echo "epoch=$EPOCH" >> $GITHUB_OUTPUT
-          echo "Beta version: $VERSION ($EPOCH)"
+          echo "Beta version: $BETA_VERSION (based on latest tag: ${latest_tag:-none})"
 
   # ═══════════════════════════════════════════════════════════════
   # BETA BUILD WHEEL (PRs only)
@@ -424,6 +442,15 @@ jobs:
           set -euo pipefail
           pip install wheel setuptools
           pip install -r requirements.txt
+
+      - name: Patch version.json with beta version
+        env:
+          BETA_VERSION: ${{ needs.beta-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "{\"version\": \"$BETA_VERSION\"}" > version.json
+          echo "{\"version\": \"$BETA_VERSION\"}" > kuasarr/version.json
+          echo "Patched version.json with: $BETA_VERSION"
 
       - name: Build Wheel
         run: |
@@ -485,6 +512,16 @@ jobs:
           set -euo pipefail
           pip install -r requirements.txt
           pip install pyinstaller build
+
+      - name: Patch version.json with beta version
+        shell: bash
+        env:
+          VERSION: ${{ needs.beta-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "{\"version\": \"$VERSION\"}" > version.json
+          echo "{\"version\": \"$VERSION\"}" > kuasarr/version.json
+          echo "Patched version.json with: $VERSION"
 
       - name: Build EXE
         shell: bash

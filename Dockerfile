@@ -9,21 +9,17 @@ LABEL maintainer="Ritedt" \
 # Define package name
 ARG PACKAGE_NAME=kuasarr
 
-# install system deps
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 RUN apk add --no-cache \
     python3 \
-    py3-pip \
     python3-dev \
     build-base
 
-# allow pip to manage the system installation (PEP 668)
-RUN mkdir -p ~/.config/pip && echo -e "[global]\nbreak-system-packages = true" > ~/.config/pip/pip.conf \
-    && pip3 install --upgrade pip \
-    && pip3 install wheel
-
 # install local package (assumes .whl is in dist/ folder during build)
 COPY dist/*.whl /tmp/
-RUN pip install /tmp/*.whl && rm /tmp/*.whl && \
+RUN uv pip install --system /tmp/*.whl && rm /tmp/*.whl && \
     apk del build-base python3-dev
 
 # runtime defaults

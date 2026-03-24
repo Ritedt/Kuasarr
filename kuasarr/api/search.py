@@ -16,6 +16,7 @@ from bottle import Bottle, HTTPError, request, response
 from kuasarr.downloads import download
 from kuasarr.downloads.packages import get_packages
 from kuasarr.providers import shared_state
+from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.ui.html_templates import render_centered_html, render_button
 from kuasarr.providers.log import debug, info
 from kuasarr.search import get_search_results
@@ -623,7 +624,7 @@ def setup_search_routes(app: Bottle) -> None:
                 console.log('[SearchUI] performSearch', { query });
 
                 try {
-                    const res = await fetch('/api/search', {
+                    const res = await kuasarrApiFetch('/api/search', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ query })
@@ -657,7 +658,7 @@ def setup_search_routes(app: Bottle) -> None:
                 setMessage(dom.message, 'Download wird gestartet...');
                 console.log('[SearchUI] performDownload', items);
                 try {
-                    const res = await fetch('/api/search/download', {
+                    const res = await kuasarrApiFetch('/api/search/download', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ items: items.map(item => ({ link: item.link, title: item.title })) })
@@ -689,7 +690,7 @@ def setup_search_routes(app: Bottle) -> None:
                 setMessage(dom.statusMessage, 'Lade Status...');
                 console.log('[SearchUI] loadStatus ausgelöst');
                 try {
-                    const res = await fetch('/api/search/status');
+                    const res = await kuasarrApiFetch('/api/search/status');
                     if (!res.ok) {
                         throw new Error(await res.text());
                     }
@@ -851,6 +852,7 @@ def setup_search_routes(app: Bottle) -> None:
         return render_centered_html(content)
 
     @app.post('/api/search')
+    @require_api_key
     def search_api() -> Dict[str, Any]:
         payload = request.json or {}
         query = str(payload.get("query", "")).strip()
@@ -876,6 +878,7 @@ def setup_search_routes(app: Bottle) -> None:
         })
 
     @app.post('/api/search/download')
+    @require_api_key
     def search_download_api() -> Dict[str, Any]:
         payload = request.json or {}
         items = _parse_items(payload)
@@ -889,6 +892,7 @@ def setup_search_routes(app: Bottle) -> None:
         })
 
     @app.get('/api/search/status')
+    @require_api_key
     def search_status_api() -> Dict[str, Any]:
         return _json(_collect_status())
 

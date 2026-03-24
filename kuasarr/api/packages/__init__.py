@@ -3,18 +3,16 @@
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 import html
-import base64
 import json
 import logging
-import os
 
 from bottle import request, response, redirect
 
 import kuasarr.providers.ui.html_images as images
 from kuasarr.downloads.packages import delete_package, get_packages
 from kuasarr.providers import shared_state
+from kuasarr.providers.auth import require_api_key, is_browser_authenticated
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html
-from kuasarr.storage.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -57,40 +55,6 @@ def _escape_js(s: str) -> str:
     return json.dumps(str(s))[1:-1]  # e.g.  hello\nworld  ->  hello\\nworld
 
 
-
-def _require_webui_auth() -> bool:
-    """Check if WebUI auth is required and satisfied.
-
-    Returns True if access is allowed (auth not configured, or credentials valid).
-    Returns False if credentials are configured but missing or incorrect.
-    """
-    webui_user = (
-        os.environ.get("KUASARR_WEBUI_USER", "").strip()
-        or Config("WebUI").get("user")
-        or ""
-    )
-    webui_pass = (
-        os.environ.get("KUASARR_WEBUI_PASS", "").strip()
-        or Config("WebUI").get("password")
-        or ""
-    )
-
-    if not webui_user or not webui_pass:
-        return True  # Auth not configured — allow access
-
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Basic "):
-        return False
-
-    try:
-        encoded = auth_header[6:]
-        decoded = base64.b64decode(encoded).decode("utf-8")
-        if ":" not in decoded:
-            return False
-        username, password = decoded.split(":", 1)
-        return username == webui_user and password == webui_pass
-    except Exception:
-        return False
 
 def _render_queue_item(item: dict) -> str:
     filename = item.get("filename", "Unknown")
@@ -675,7 +639,7 @@ def setup_packages_routes(app) -> None:
 
                 function performDelete() {{
                     if (!deletePackageId) return;
-                    fetch('/api/packages/delete', {{
+                    kuasarrApiFetch('/api/packages/delete', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
                         body: JSON.stringify({{package_id: deletePackageId}})
@@ -768,9 +732,10 @@ def setup_packages_routes(app) -> None:
         return render_centered_html(packages_html)
 
     @app.get("/api/packages/content")
+    @require_api_key
     def packages_content_api():
         """AJAX endpoint — returns only the packages content HTML for background refresh."""
-        if not _require_webui_auth():
+        if not is_browser_authenticated():
             response.status = 401
             response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
             response.content_type = "application/json"
@@ -787,10 +752,11 @@ def setup_packages_routes(app) -> None:
         return _render_packages_content()
 
     @app.get("/api/packages")
+    @require_api_key
     def packages_json_api():
         """JSON status endpoint."""
         response.content_type = "application/json"
-        if not _require_webui_auth():
+        if not is_browser_authenticated():
             response.status = 401
             response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
             return '{"error": "Unauthorized"}'
@@ -806,10 +772,11 @@ def setup_packages_routes(app) -> None:
         })
 
     @app.post("/api/packages/delete")
+    @require_api_key
     def packages_delete():
         """Delete a package by ID. POST replaces the old GET route to prevent CSRF."""
         response.content_type = "application/json"
-        if not _require_webui_auth():
+        if not is_browser_authenticated():
             response.status = 401
             response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
             return '{"error": "Unauthorized"}'
@@ -835,10 +802,11 @@ def setup_packages_routes(app) -> None:
             return json.dumps({"success": False, "error": str(exc)})
 
     @app.post("/api/packages/pause")
+    @require_api_key
     def packages_pause():
         """Pause a specific package or the global download controller."""
         response.content_type = "application/json"
-        if not _require_webui_auth():
+        if not is_browser_authenticated():
             response.status = 401
             response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
             return '{"error": "Unauthorized"}'
@@ -865,10 +833,11 @@ def setup_packages_routes(app) -> None:
         return json.dumps({"success": True})
 
     @app.post("/api/packages/resume")
+    @require_api_key
     def packages_resume():
         """Resume a specific package or the global download controller."""
         response.content_type = "application/json"
-        if not _require_webui_auth():
+        if not is_browser_authenticated():
             response.status = 401
             response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
             return '{"error": "Unauthorized"}'

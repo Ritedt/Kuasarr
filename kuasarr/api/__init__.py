@@ -2,7 +2,6 @@
 # Kuasarr
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
-import base64
 import json
 import os
 
@@ -20,6 +19,7 @@ from kuasarr.api.search import setup_search_routes
 from kuasarr.api.packages import setup_packages_routes
 from kuasarr.api.statistics import setup_statistics
 from kuasarr.providers import shared_state
+from kuasarr.providers.auth import add_auth_hook, add_auth_routes, require_api_key
 from kuasarr.providers.log import debug
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html, render_success_no_wait
 from kuasarr.providers.web_server import Server
@@ -31,58 +31,8 @@ def get_api(shared_state_dict, shared_state_lock):
 
     app = Bottle()
 
-    # --- WebUI Basic Auth (ENV or kuasarr.ini) ---
-    ini_webui = Config('WebUI')
-    WEBUI_USER = os.environ.get("KUASARR_WEBUI_USER", "").strip() or ini_webui.get("user") or ""
-    WEBUI_PASS = os.environ.get("KUASARR_WEBUI_PASS", "").strip() or ini_webui.get("password") or ""
-    WEBUI_AUTH_ENABLED = bool(WEBUI_USER and WEBUI_PASS)
-
-    if WEBUI_AUTH_ENABLED:
-        debug(f"WebUI Auth is ENABLED (User: {WEBUI_USER})")
-    else:
-        debug("WebUI Auth is DISABLED (User/Pass not set in Config or ENV)")
-
-    # API paths that should NEVER require BasicAuth (Radarr/Sonarr/machine-to-machine)
-    API_BYPASS_PREFIXES = (
-        "/api",
-        "/download/",
-        "/dbc/api/",
-    )
-
-    def _check_basic_auth():
-        """Returns True if credentials are valid, False otherwise."""
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Basic "):
-            return False
-        try:
-            encoded = auth_header[6:]
-            decoded = base64.b64decode(encoded).decode("utf-8")
-            if ":" not in decoded:
-                return False
-            username, password = decoded.split(":", 1)
-            return username == WEBUI_USER and password == WEBUI_PASS
-        except Exception:
-            return False
-
-    @app.hook("before_request")
-    def webui_basic_auth():
-        """Require BasicAuth for WebUI routes if credentials are configured."""
-        if not WEBUI_AUTH_ENABLED:
-            return  # Auth not configured, allow all
-
-        path = request.path
-
-        # Bypass API routes (Radarr/Sonarr etc.)
-        for prefix in API_BYPASS_PREFIXES:
-            if path.startswith(prefix):
-                return  # No auth required for API
-
-        # All other routes require BasicAuth
-        if not _check_basic_auth():
-            debug(f"WebUI Auth failed for path: {path} (Header present: {bool(request.headers.get('Authorization'))})")
-            response.status = 401
-            response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
-            return "401 Unauthorized"
+    add_auth_routes(app)
+    add_auth_hook(app, whitelist=[".user.js"])
 
     setup_arr_routes(app)
     setup_captcha_routes(app)
@@ -466,6 +416,7 @@ def get_api(shared_state_dict, shared_state_lock):
         return render_centered_html(info)
 
     @app.post('/api/jdownloader/verify')
+    @require_api_key
     def jd_verify():
         """Verify JDownloader credentials and return list of devices."""
         response.content_type = 'application/json'
@@ -488,6 +439,7 @@ def get_api(shared_state_dict, shared_state_lock):
         return json.dumps({'devices': names})
 
     @app.post('/api/jdownloader/save')
+    @require_api_key
     def jd_save():
         """Save JDownloader credentials and connect."""
         response.content_type = 'application/json'

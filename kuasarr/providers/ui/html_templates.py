@@ -4,15 +4,24 @@
 
 import kuasarr.providers.ui.html_images as images
 from kuasarr.providers.version import get_version
+from kuasarr.providers.auth import is_auth_enabled, is_browser_authenticated
+from kuasarr.storage.config import Config
 
 
 def render_centered_html(inner_content, footer_content=""):
-    # NOTE: API key is intentionally NOT exposed to JavaScript for security.
-    # WebUI routes use BasicAuth (if configured) or session-based auth.
-    # API routes (/api/*) use X-API-Key header provided by Radarr/Sonarr.
+    # Inject API key into WebUI when auth is disabled OR browser is authenticated
+    api_key = ""
+    if not is_auth_enabled() or is_browser_authenticated():
+        try:
+            api_key = Config("API").get("key") or ""
+        except Exception:
+            api_key = ""
+
+    api_key = api_key.replace('"', '')
+    api_key_script = f'        <script>\n            window.KUASARR_API_KEY = "{api_key}";\n        </script>\n' if api_key else ''
 
     head = (
-        '''
+        f'''
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -454,14 +463,33 @@ def render_centered_html(inner_content, footer_content=""):
             if (h1) {
                 h1.onclick = function() { window.location.href = '/'; };
             }
+            // Auto-inject apikey into HTML forms targeting /api endpoints
+            if (window.KUASARR_API_KEY) {
+                document.querySelectorAll('form[action^="/api"]').forEach(function(form) {
+                    if (form.querySelector('input[name="apikey"]')) return;
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = 'apikey';
+                    input.value = window.KUASARR_API_KEY;
+                    form.appendChild(input);
+                });
+            }
         });
 
-        // Helper for WebUI API calls (no API key needed - uses session/BasicAuth)
+        // Helper for WebUI API calls — injects X-API-Key header when available
         function kuasarrApiFetch(path, options) {
-            return fetch(path, options);
+            const opts = options ? { ...options } : {};
+            const headers = new Headers(opts.headers || {});
+            if (window.KUASARR_API_KEY && !headers.has('X-API-Key')) {
+                headers.set('X-API-Key', window.KUASARR_API_KEY);
+            }
+            opts.headers = headers;
+            return fetch(path, opts);
         }
         </script>
-    </head>'''
+'''
+        + api_key_script
+        + '''    </head>'''
     )
 
     sw_script = '''

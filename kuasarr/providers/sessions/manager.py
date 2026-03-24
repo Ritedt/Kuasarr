@@ -270,8 +270,8 @@ def cleanup_expired_sessions(
                     pass
                 continue
 
-            created_at = session_data.get("created_at", 0)
-            expires_at = session_data.get("expires_at", 0)
+            created_at = session_data.get("created_at") or 0
+            expires_at = session_data.get("expires_at") or 0
 
             # Delete if expired or older than max_age
             if time.time() > expires_at or created_at < cutoff_time:

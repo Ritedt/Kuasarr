@@ -403,3 +403,22 @@ def dl_search(shared_state, start_time, request_from, search_string,
     debug(f"Time taken: {elapsed:.2f}s ({hostname})")
 
     return releases
+
+
+from kuasarr.search.base import AbstractSearchSource
+
+
+class Source(AbstractSearchSource):
+    initials = "dl"
+    supports_imdb = True
+    supports_phrase = True
+    supports_feed = True
+    supported_categories = {"movies", "tv-shows", "books"}
+
+    def search(self, shared_state, start_time, request_from, search_string,
+               mirror=None, season=None, episode=None):
+        return dl_search(shared_state, start_time, request_from, search_string,
+                         mirror=mirror, season=season, episode=episode)
+
+    def feed(self, shared_state, start_time, request_from, mirror=None):
+        return dl_feed(shared_state, start_time, request_from, mirror=mirror)

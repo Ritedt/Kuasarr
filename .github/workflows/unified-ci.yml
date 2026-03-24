@@ -381,6 +381,8 @@ jobs:
           fetch-depth: 0
 
       - id: version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -404,14 +406,26 @@ jobs:
             echo "ERROR: Invalid semver base: '$BASE_VERSION'" >&2; exit 1
           fi
 
-          # Increment patch by 1 and append -beta
+          # Increment patch by 1
           IFS=. read -r major minor patch <<< "$BASE_VERSION"
-          BETA_VERSION="${major}.${minor}.$((patch + 1))-beta"
+          NEXT_VERSION="${major}.${minor}.$((patch + 1))"
+
+          # Count workflow runs for this PR branch to get the beta run counter
+          BETA_COUNT=$(curl -s \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/unified-ci.yml/runs?branch=${{ github.head_ref }}&event=pull_request&per_page=1" \
+            | jq -r '.total_count // empty')
+          if ! [[ "${BETA_COUNT:-}" =~ ^[0-9]+$ ]] || [ "${BETA_COUNT:-0}" -lt 1 ]; then
+            BETA_COUNT=1
+          fi
+
+          BETA_VERSION="${NEXT_VERSION}-beta${BETA_COUNT}"
 
           EPOCH=$(date +%s)
           echo "version=$BETA_VERSION" >> $GITHUB_OUTPUT
           echo "epoch=$EPOCH" >> $GITHUB_OUTPUT
-          echo "Beta version: $BETA_VERSION (based on latest tag: ${latest_tag:-none})"
+          echo "Beta version: $BETA_VERSION (based on latest tag: ${latest_tag:-none}, run #${BETA_COUNT})"
 
   # ═══════════════════════════════════════════════════════════════
   # BETA BUILD WHEEL (PRs only)

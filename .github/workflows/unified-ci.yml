@@ -137,6 +137,7 @@ jobs:
               - 'setup.py'
               - 'pyproject.toml'
               - 'requirements.txt'
+              - 'uv.lock'
               - 'Kuasarr.py'
               - 'MANIFEST.in'
               - '.github/workflows/**'
@@ -144,6 +145,7 @@ jobs:
               - 'Dockerfile'
               - 'kuasarr/**'
               - 'requirements.txt'
+              - 'uv.lock'
             version-file:
               - 'version.json'
 
@@ -198,16 +200,15 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
+          enable-cache: true
 
       - name: Install dependencies
         run: |
           set -euo pipefail
-          pip install -r requirements.txt
-          pip install -e .
+          uv sync
 
       - name: Run import smoke test
         run: |
@@ -432,16 +433,15 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
+          enable-cache: true
 
       - name: Install build dependencies
         run: |
           set -euo pipefail
-          pip install wheel setuptools
-          pip install -r requirements.txt
+          uv sync
 
       - name: Patch version.json with beta version
         env:
@@ -455,7 +455,7 @@ jobs:
       - name: Build Wheel
         run: |
           set -euo pipefail
-          python setup.py sdist bdist_wheel
+          uv build
 
       - id: attest
         uses: actions/attest-build-provenance@v4
@@ -488,9 +488,10 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: '3.12'
+          enable-cache: true
 
       - name: Cache PyInstaller Analysis
         uses: actions/cache@v5
@@ -498,7 +499,7 @@ jobs:
           path: |
             build
             .pyinstaller-cache
-          key: pyinstaller-analysis-${{ runner.os }}-beta-${{ hashFiles('requirements.txt') }}
+          key: pyinstaller-analysis-${{ runner.os }}-beta-${{ hashFiles('uv.lock') }}
           restore-keys: |
             pyinstaller-analysis-${{ runner.os }}-beta-
 
@@ -510,8 +511,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pip install -r requirements.txt
-          pip install pyinstaller build
+          uv sync --group dev
 
       - name: Patch version.json with beta version
         shell: bash
@@ -762,9 +762,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 1
-      - uses: actions/setup-python@v6
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: '3.12'
+          enable-cache: true
 
       - name: Inject version into all version files
         run: |
@@ -780,15 +781,14 @@ jobs:
       - name: Install build dependencies
         run: |
           set -euo pipefail
-          pip install wheel setuptools
-          pip install -r requirements.txt
+          uv sync
       - name: Build Wheel
         env:
           VERSION: ${{ needs.version-output.outputs.version }}
         run: |
           set -euo pipefail
           echo "Building wheel with version: $VERSION"
-          python setup.py sdist bdist_wheel
+          uv build
       - uses: actions/upload-artifact@v7
         with:
           name: wheel
@@ -806,9 +806,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 1
-      - uses: actions/setup-python@v6
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: '3.12'
+          enable-cache: true
 
       - name: Inject version into all version files
         shell: bash
@@ -826,8 +827,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pip install -r requirements.txt
-          pip install pyinstaller build
+          uv sync --group dev
       - name: Build EXE
         shell: bash
         env:
@@ -1028,10 +1028,11 @@ jobs:
 
       - name: Upload to PyPI
         if: ${{ !inputs.skip_pypi }}
+        env:
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
         run: |
           set -euo pipefail
-          pip install -U twine packaging
-          python -m twine upload ./dist/*.whl -u __token__ -p ${{ secrets.PYPI_TOKEN }}
+          uvx twine upload ./dist/*.whl -u __token__
 
   # ═══════════════════════════════════════════════════════════════
   # CI SUMMARY

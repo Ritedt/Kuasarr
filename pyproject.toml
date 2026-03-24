@@ -11,6 +11,7 @@ license = "MIT"
 authors = [
     { name = "Ritedt", email = "weedo0780@protonmail.com" }
 ]
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
@@ -38,3 +39,11 @@ include = ["kuasarr*"]
 
 [tool.setuptools.package-data]
 kuasarr = ["static/*.png", "static/*.js", "static/*.html", "static/*.webmanifest", "version.json"]
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.0",
+]

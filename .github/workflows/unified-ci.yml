@@ -1006,6 +1006,10 @@ jobs:
           name: exe
           path: ./dist
 
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
+
       - name: Generate changelog
         id: changelog
         # continue-on-error: first release on a new repo has no previous release to compare against

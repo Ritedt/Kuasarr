@@ -6,7 +6,6 @@ import traceback
 import xml.sax.saxutils as sax_utils
 from base64 import urlsafe_b64decode
 from datetime import datetime
-from functools import wraps
 from urllib.parse import urlparse, parse_qs
 from xml.etree import ElementTree
 
@@ -15,23 +14,11 @@ from bottle import abort, request
 from kuasarr.downloads import download
 from kuasarr.downloads.packages import get_packages, delete_package
 from kuasarr.providers import shared_state
+from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.log import info, debug
 from kuasarr.providers.version import get_version
 from kuasarr.search import get_search_results
 from kuasarr.storage.config import Config
-
-
-def require_api_key(func):
-    @wraps(func)
-    def decorated(*args, **kwargs):
-        api_key = Config('API').get('key')
-        if not request.query.apikey:
-            return abort(401, "Missing API key")
-        if request.query.apikey != api_key:
-            return abort(403, "Invalid API key")
-        return func(*args, **kwargs)
-
-    return decorated
 
 
 def setup_arr_routes(app):

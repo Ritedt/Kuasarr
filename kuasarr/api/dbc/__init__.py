@@ -10,6 +10,7 @@ from bottle import request, abort, response
 
 from kuasarr.downloads import fail
 from kuasarr.providers import shared_state
+from kuasarr.providers.auth import public_endpoint
 from kuasarr.providers.captcha import push_jobs
 from kuasarr.providers.captcha import create_captcha_client
 from kuasarr.providers.captcha.base_client import (
@@ -32,6 +33,7 @@ def setup_dbc_routes(app):
     """Setup DBC API routes."""
     
     @app.get("/dbc/api/status/")
+    @public_endpoint
     def dbc_status():
         """Get captcha service status including balance and job statistics."""
         try:
@@ -93,6 +95,7 @@ def setup_dbc_routes(app):
             return {"error": str(e)}
     
     @app.get("/dbc/api/balance/")
+    @public_endpoint
     def dbc_balance():
         """Get current captcha service account balance."""
         try:
@@ -121,6 +124,7 @@ def setup_dbc_routes(app):
             return abort(500, str(e))
     
     @app.get("/dbc/api/service_status/")
+    @public_endpoint
     def dbc_service_status():
         """Get DBC service status (accuracy, solve time, overload)."""
         try:
@@ -140,6 +144,7 @@ def setup_dbc_routes(app):
             return abort(500, str(e))
     
     @app.get("/dbc/api/packages/")
+    @public_endpoint
     def dbc_packages():
         """Get list of protected packages waiting for captcha solving."""
         try:
@@ -164,6 +169,7 @@ def setup_dbc_routes(app):
             return {"error": str(e)}
     
     @app.get("/dbc/api/jobs/")
+    @public_endpoint
     def dbc_jobs():
         """Get list of active captcha solving jobs."""
         try:
@@ -185,6 +191,7 @@ def setup_dbc_routes(app):
             return {"error": str(e)}
     
     @app.delete("/dbc/api/job/<job_id>/")
+    @public_endpoint
     def dbc_cancel_job(job_id):
         """Cancel a specific captcha solving job."""
         try:
@@ -200,6 +207,7 @@ def setup_dbc_routes(app):
             return abort(500, str(e))
     
     @app.post("/dbc/api/retry/<package_id>/")
+    @public_endpoint
     def dbc_retry_package(package_id):
         """Retry captcha solving for a specific package."""
         try:
@@ -218,6 +226,7 @@ def setup_dbc_routes(app):
             return abort(500, str(e))
     
     @app.delete("/dbc/api/package/<package_id>/")
+    @public_endpoint
     def dbc_fail_package(package_id):
         """Mark a package as failed and remove it."""
         try:
@@ -244,6 +253,7 @@ def setup_dbc_routes(app):
             return abort(500, str(e))
     
     @app.post("/dbc/api/test_credentials/")
+    @public_endpoint
     def dbc_test_credentials():
         """Test DBC credentials by fetching balance."""
         try:
@@ -286,6 +296,7 @@ def setup_dbc_routes(app):
             return {"success": False, "error": str(e)}
     
     @app.post("/dbc/api/test_2captcha/")
+    @public_endpoint
     def test_2captcha_credentials():
         """Test 2Captcha API key by fetching balance."""
         try:

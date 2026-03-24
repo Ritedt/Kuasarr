@@ -7,6 +7,7 @@ import json
 from bottle import request, response
 
 from kuasarr.providers import shared_state
+from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.hosters import SUPPORTED_HOSTERS
 from kuasarr.providers.ui.html_templates import render_centered_html, render_button
 from kuasarr.storage.config import Config
@@ -138,7 +139,7 @@ def setup_hosters_routes(app):
             async function toggleHoster(hosterId, currentlyBlocked) {{
                 const action = currentlyBlocked ? 'unblock' : 'block';
                 try {{
-                    const response = await fetch('/api/hosters/' + action, {{
+                    const response = await kuasarrApiFetch('/api/hosters/' + action, {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
                         body: JSON.stringify({{hoster_id: hosterId}})
@@ -156,7 +157,7 @@ def setup_hosters_routes(app):
             async function blockAll() {{
                 if (!confirm('Block all hosters?')) return;
                 try {{
-                    const response = await fetch('/api/hosters/block-all', {{method: 'POST'}});
+                    const response = await kuasarrApiFetch('/api/hosters/block-all', {{method: 'POST'}});
                     if (response.ok) location.reload();
                 }} catch (e) {{
                     alert('Error: ' + e.message);
@@ -166,7 +167,7 @@ def setup_hosters_routes(app):
             async function unblockAll() {{
                 if (!confirm('Unblock all hosters?')) return;
                 try {{
-                    const response = await fetch('/api/hosters/unblock-all', {{method: 'POST'}});
+                    const response = await kuasarrApiFetch('/api/hosters/unblock-all', {{method: 'POST'}});
                     if (response.ok) location.reload();
                 }} catch (e) {{
                     alert('Error: ' + e.message);
@@ -177,6 +178,7 @@ def setup_hosters_routes(app):
         return render_centered_html(html)
 
     @app.get('/api/hosters')
+    @require_api_key
     def get_hosters():
         """Get all hosters with their block status."""
         response.content_type = 'application/json'
@@ -194,6 +196,7 @@ def setup_hosters_routes(app):
         return json.dumps(sorted(result, key=lambda x: x["name"]))
 
     @app.post('/api/hosters/block')
+    @require_api_key
     def block_hoster():
         """Block a specific hoster."""
         response.content_type = 'application/json'
@@ -216,6 +219,7 @@ def setup_hosters_routes(app):
             return json.dumps({"error": str(e)})
 
     @app.post('/api/hosters/unblock')
+    @require_api_key
     def unblock_hoster():
         """Unblock a specific hoster."""
         response.content_type = 'application/json'
@@ -238,6 +242,7 @@ def setup_hosters_routes(app):
             return json.dumps({"error": str(e)})
 
     @app.post('/api/hosters/block-all')
+    @require_api_key
     def block_all_hosters():
         """Block all hosters."""
         response.content_type = 'application/json'
@@ -250,6 +255,7 @@ def setup_hosters_routes(app):
             return json.dumps({"error": str(e)})
 
     @app.post('/api/hosters/unblock-all')
+    @require_api_key
     def unblock_all_hosters():
         """Unblock all hosters."""
         response.content_type = 'application/json'

@@ -8,6 +8,8 @@ from urllib.parse import urlencode
 
 from bottle import Bottle, HTTPError, redirect, request, response
 
+from kuasarr.providers.auth import require_api_key
+
 import kuasarr.providers.ui.html_images as images
 try:
     import kuasarr.downloads.manual_jobs as manual_jobs
@@ -482,6 +484,7 @@ def setup_manual_link_routes(app: Bottle) -> None:
         redirect(f"/manual-links/{job_id}?{urlencode({'msg': 'updated'})}")
 
     @app.get('/api/manual-links')
+    @require_api_key
     def list_manual_links():
         try:
             status = request.query.get('status') or None
@@ -497,6 +500,7 @@ def setup_manual_link_routes(app: Bottle) -> None:
         return _json({"jobs": jobs})
 
     @app.post('/api/manual-links')
+    @require_api_key
     def create_manual_link_job():
         payload = request.json or {}
         links = _parse_links(payload)
@@ -515,6 +519,7 @@ def setup_manual_link_routes(app: Bottle) -> None:
         return _json({"job": job})
 
     @app.get('/api/manual-links/<job_id>')
+    @require_api_key
     def get_manual_link_job(job_id: str):
         events_limit = request.query.get('events_limit')
         try:
@@ -529,6 +534,7 @@ def setup_manual_link_routes(app: Bottle) -> None:
         return _json(detail)
 
     @app.post('/api/manual-links/<job_id>/update')
+    @require_api_key
     def update_manual_link_job(job_id: str):
         payload = request.json or {}
         links = _parse_links(payload)
@@ -548,6 +554,7 @@ def setup_manual_link_routes(app: Bottle) -> None:
         return _json({"job": job})
 
     @app.post('/api/manual-links/<job_id>/start')
+    @require_api_key
     def start_manual_link_job(job_id: str):
         try:
             job = manual_jobs.process_job(job_id)
@@ -560,6 +567,7 @@ def setup_manual_link_routes(app: Bottle) -> None:
         return _json({"job": job})
 
     @app.post('/api/manual-links/<job_id>/cancel')
+    @require_api_key
     def cancel_manual_link_job(job_id: str):
         try:
             job = manual_jobs.cancel_job(job_id)

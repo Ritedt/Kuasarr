@@ -1,5 +1,15 @@
 # Kuasarr — Claude Code Context
 
+## Repository
+
+* **Primary Repository**: `Ritedt/Kuasarr` (GitHub)
+* **Docker Registry**: `ghcr.io/ritedt/kuasarr`
+
+**Note**: The repository `weedo078/Kuasarr` has been archived and is read-only. All active development happens on `Ritedt/Kuasarr`. Ensure your git remote points to the correct repository:
+```bash
+git remote set-url origin git@github.com:Ritedt/Kuasarr.git
+```
+
 ## Project Overview
 
 Kuasarr is a Python-based fork of [quasarr](https://github.com/rix1337/quasarr) that bridges JDownloader 2 with Radarr, Sonarr, and LazyLibrarian. It emulates a Newznab indexer and SABnzbd client, scrapes DDL sites for download links, decrypts CAPTCHA-protected links, and dispatches jobs to JDownloader via My-JDownloader API. It does **not** handle NZB or torrent files.
@@ -89,13 +99,20 @@ docker run -d \\
 * API endpoints (`/api`, `/download/`, `/dbc/api/`) are **never** protected — Radarr/Sonarr use API key only
 * Disabled by default (backwards compatible)
 
+## Coding Standards & Agenten-Verwendung
+
+* **Immer `/coding-standards` Skill nutzen** vor jeder Implementierung — Enforces PEP 8, Pythonic idioms, und Projekt-Konventionen
+* **Immer Agenten nutzen** für Implementierungsaufgaben — Bevorzuge `Skill({skill: "..."})` oder `Agent({subagent_type: "..."})` gegenüber direkter Datei-Manipulation
+* Nutze Sub-Agenten mit spezialisierten Rollen (z.B. `everything-claude-code:python-reviewer`, `everything-claude-code:planner`)
+* Bevorzuge `/everything-claude-code:plan` für komplexe Features mit Multi-Model-Analyse
+
 ## Coding Conventions
 
 * Follow existing Python style in `kuasarr/` — no enforced linter config found, keep consistent with surrounding code
 * ENV vars: `SCREAMING\_SNAKE\_CASE`
 * INI keys: `lowercase\_with\_underscores`
 * Sensitive values (passwords, tokens, API keys) must **never** be hardcoded — always read from ENV or INI
-* Version bumps go in `version.json` only — do not hardcode version strings elsewhere
+* Version bumps: nur `Hier_Version_\u00c4ndern.txt` \u00e4ndern — CI propagiert an alle Stellen
 
 ## Important Constraints
 

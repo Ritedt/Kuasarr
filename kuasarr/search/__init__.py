@@ -182,7 +182,7 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
 
     results = _enrich_with_xrel(shared_state, results)
 
-    # Ergebnisse nach Datum sortieren (neueste zuerst)
+    # Sort results by date (newest first)
     def _parse_date(r):
         date_str = r.get("details", {}).get("date", "")
         try:
@@ -192,14 +192,14 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
 
     results.sort(key=_parse_date, reverse=True)
 
-    # Max 1000 Ergebnisse insgesamt
-    results = results[:1000]
-
-    # Paginierung per offset/limit anwenden
+    # Apply pagination before capping so offset+limit always returns up to limit results
     if offset > 0 or limit > 0:
         start = offset
         end = (offset + limit) if limit > 0 else len(results)
         results = results[start:end]
+
+    # Cap total response size
+    results = results[:1000]
 
     return results
 

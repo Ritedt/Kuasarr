@@ -2,8 +2,41 @@
 # Kuasarr
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
+import threading
+
 import requests
 from bs4 import BeautifulSoup
+
+
+def _check_flaresolverr_availability(flaresolverr_url):
+    from kuasarr.providers.log import info
+    payload = {
+        "cmd": "request.get",
+        "url": "http://www.google.com/",
+        "maxTimeout": 30000,
+    }
+    try:
+        resp = requests.post(
+            flaresolverr_url,
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=35,
+        )
+        if resp.status_code == 200:
+            info(f'FlareSolverr reachable at "{flaresolverr_url}"')
+        else:
+            info(f'FlareSolverr returned unexpected status {resp.status_code} at "{flaresolverr_url}"')
+    except Exception as e:
+        info(f'FlareSolverr not reachable at "{flaresolverr_url}": {e}')
+
+
+def check_flaresolverr_availability_async(flaresolverr_url):
+    """Start a background daemon thread to check FlareSolverr availability without blocking startup."""
+    threading.Thread(
+        target=_check_flaresolverr_availability,
+        args=(flaresolverr_url,),
+        daemon=True,
+    ).start()
 
 
 def is_cloudflare_challenge(html: str) -> bool:

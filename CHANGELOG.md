@@ -2,6 +2,20 @@
 
 All notable changes to Kuasarr will be documented in this file.
 
+## [1.17.0] - 2026-03-23
+
+### Added
+- **Search pagination** — results capped at 1000 entries; `offset`/`limit` from Newznab query params are applied post-search (Sprint 8 / Quasarr v2.7.0)
+- **Feed sorting** — results sorted by date descending after xREL enrichment (Sprint 8 / Quasarr v2.7.2)
+- **FlareSolverr availability check non-blocking** — startup check runs in a daemon thread and no longer delays the first request (Sprint 8 / Quasarr v2.3.0)
+- **IMDb CDN fallback via FlareSolverr** — `get_localized_title()` retries via FlareSolverr when direct IMDb request fails with 403 (Sprint 8 / Quasarr v2.3.2)
+
+### Fixed
+- **Feed pagination** — offset/limit now correctly applied to feed results (Sprint 8 / Quasarr v2.7.3)
+- **Newznab offset handling** — removed early-return on non-zero offset that caused empty responses for paginated queries
+
+---
+
 ## [1.16.0] - 2026-03-21
 
 ### Added

@@ -301,50 +301,65 @@ def setup_arr_routes(app):
                     except (AttributeError, ValueError):
                         offset = 0
 
-                    if offset > 0:
-                        debug(f"Ignoring offset parameter: {offset} - it leads to redundant requests")
+                    try:
+                        limit = int(getattr(request.query, 'limit', 0))
+                    except (AttributeError, ValueError):
+                        limit = 0
 
-                    else:
-                        if mode == 'movie':
-                            # supported params: imdbid
-                            imdb_id = getattr(request.query, 'imdbid', '')
+                    is_feed = not getattr(request.query, 'imdbid', '') and not getattr(request.query, 'q', '')
 
-                            releases = get_search_results(shared_state, request_from,
-                                                          imdb_id=imdb_id,
-                                                          mirror=mirror
-                                                          )
+                    if mode == 'movie':
+                        # supported params: imdbid
+                        imdb_id = getattr(request.query, 'imdbid', '')
 
-                        elif mode == 'tvsearch':
-                            # supported params: imdbid, season, ep
-                            imdb_id = getattr(request.query, 'imdbid', '')
-                            season = getattr(request.query, 'season', None)
-                            episode = getattr(request.query, 'ep', None)
-                            releases = get_search_results(shared_state, request_from,
-                                                          imdb_id=imdb_id,
-                                                          mirror=mirror,
-                                                          season=season,
-                                                          episode=episode
-                                                          )
-                        elif mode == 'book':
-                            author = getattr(request.query, 'author', '')
-                            title = getattr(request.query, 'title', '')
-                            search_phrase = " ".join(filter(None, [author, title]))
+                        releases = get_search_results(shared_state, request_from,
+                                                      imdb_id=imdb_id,
+                                                      mirror=mirror,
+                                                      offset=offset,
+                                                      limit=limit,
+                                                      is_feed=is_feed
+                                                      )
+
+                    elif mode == 'tvsearch':
+                        # supported params: imdbid, season, ep
+                        imdb_id = getattr(request.query, 'imdbid', '')
+                        season = getattr(request.query, 'season', None)
+                        episode = getattr(request.query, 'ep', None)
+                        releases = get_search_results(shared_state, request_from,
+                                                      imdb_id=imdb_id,
+                                                      mirror=mirror,
+                                                      season=season,
+                                                      episode=episode,
+                                                      offset=offset,
+                                                      limit=limit,
+                                                      is_feed=is_feed
+                                                      )
+                    elif mode == 'book':
+                        author = getattr(request.query, 'author', '')
+                        title = getattr(request.query, 'title', '')
+                        search_phrase = " ".join(filter(None, [author, title]))
+                        releases = get_search_results(shared_state, request_from,
+                                                      search_phrase=search_phrase,
+                                                      mirror=mirror,
+                                                      offset=offset,
+                                                      limit=limit,
+                                                      is_feed=is_feed
+                                                      )
+
+                    elif mode == 'search':
+                        if "lazylibrarian" in request_from.lower():
+                            search_phrase = getattr(request.query, 'q', '')
                             releases = get_search_results(shared_state, request_from,
                                                           search_phrase=search_phrase,
-                                                          mirror=mirror
+                                                          mirror=mirror,
+                                                          offset=offset,
+                                                          limit=limit,
+                                                          is_feed=is_feed
                                                           )
-
-                        elif mode == 'search':
-                            if "lazylibrarian" in request_from.lower():
-                                search_phrase = getattr(request.query, 'q', '')
-                                releases = get_search_results(shared_state, request_from,
-                                                              search_phrase=search_phrase,
-                                                              mirror=mirror
-                                                              )
-                            else:
-                                info(
-                                    f'Ignoring search request from {request_from} - only imdbid searches are supported')
-                                releases = []  # sonarr expects this but we will not support non-imdbid searches
+                        else:
+                            info(
+                                f'Ignoring search request from {request_from} - only imdbid searches are supported')
+                            releases = []  # sonarr expects this but we will not support non-imdbid searches
 
                     items = ""
                     for release in releases:

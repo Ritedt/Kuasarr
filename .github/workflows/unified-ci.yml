@@ -996,6 +996,11 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Releasing version: ${VERSION}"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false  # disabled for reproducible releases
+
       - uses: actions/download-artifact@v8
         with:
           name: wheel
@@ -1005,10 +1010,6 @@ jobs:
         with:
           name: exe
           path: ./dist
-
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: false
 
       - name: Generate changelog
         id: changelog

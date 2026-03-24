@@ -5,6 +5,7 @@
 # Special note: The signatures of all handlers must stay the same so we can neatly call them in download()
 # Same is true for every get_xx_download_links() function in sources/xx.py
 
+import hashlib
 import json
 
 from kuasarr.categories import get_destination_folder
@@ -439,7 +440,7 @@ def download(shared_state, request_from, title, url, mirror, size_mb, password, 
         else:
             category = "tv-shows"
 
-    package_hash = str(hash(title + url)).replace('-', '')
+    package_hash = hashlib.sha256(f"{title}|{url}".encode("utf-8")).hexdigest()[:16]
     package_id = f"kuasarr_{category}_{package_hash}"
 
     # Append manual job ID if provided

@@ -242,6 +242,29 @@ CATEGORY_CONFIDENCE_THRESHOLD = 0.6
 
 
 # ==============================================================================
+# NEWZNAB CATEGORY IDS (für API-Kompatibilität mit Radarr/Sonarr)
+# ==============================================================================
+
+NEWZNAB_CAT_MOVIES = 2000
+NEWZNAB_CAT_MOVIES_HD = 2040
+NEWZNAB_CAT_MOVIES_4K = 2045
+NEWZNAB_CAT_MOVIES_SD = 2060
+NEWZNAB_CAT_TV = 5000
+NEWZNAB_CAT_TV_HD = 5040
+NEWZNAB_CAT_TV_4K = 5045
+NEWZNAB_CAT_TV_ANIME = 5070
+NEWZNAB_CAT_AUDIO = 3000
+NEWZNAB_CAT_AUDIO_MP3 = 3010
+NEWZNAB_CAT_AUDIO_AUDIOBOOK = 3030
+NEWZNAB_CAT_AUDIO_LOSSLESS = 3040
+NEWZNAB_CAT_BOOKS = 7000
+NEWZNAB_CAT_BOOKS_EBOOK = 7020
+NEWZNAB_CAT_BOOKS_COMICS = 7030
+NEWZNAB_CAT_SOFTWARE = 4000
+NEWZNAB_CAT_GAMES = 6000
+
+
+# ==============================================================================
 # EXPORTS
 # ==============================================================================
 
@@ -294,4 +317,22 @@ __all__ = [
     "CATEGORY_PATH_TEMPLATES",
     "CATEGORY_EXTENSIONS",
     "CATEGORY_CONFIDENCE_THRESHOLD",
+    # Newznab Category IDs
+    "NEWZNAB_CAT_MOVIES",
+    "NEWZNAB_CAT_MOVIES_HD",
+    "NEWZNAB_CAT_MOVIES_4K",
+    "NEWZNAB_CAT_MOVIES_SD",
+    "NEWZNAB_CAT_TV",
+    "NEWZNAB_CAT_TV_HD",
+    "NEWZNAB_CAT_TV_4K",
+    "NEWZNAB_CAT_TV_ANIME",
+    "NEWZNAB_CAT_AUDIO",
+    "NEWZNAB_CAT_AUDIO_MP3",
+    "NEWZNAB_CAT_AUDIO_AUDIOBOOK",
+    "NEWZNAB_CAT_AUDIO_LOSSLESS",
+    "NEWZNAB_CAT_BOOKS",
+    "NEWZNAB_CAT_BOOKS_EBOOK",
+    "NEWZNAB_CAT_BOOKS_COMICS",
+    "NEWZNAB_CAT_SOFTWARE",
+    "NEWZNAB_CAT_GAMES",
 ]

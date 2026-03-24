@@ -624,7 +624,7 @@ def setup_search_routes(app: Bottle) -> None:
                 console.log('[SearchUI] performSearch', { query });
 
                 try {
-                    const res = await fetch('/api/search', {
+                    const res = await kuasarrApiFetch('/api/search', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ query })
@@ -658,7 +658,7 @@ def setup_search_routes(app: Bottle) -> None:
                 setMessage(dom.message, 'Download wird gestartet...');
                 console.log('[SearchUI] performDownload', items);
                 try {
-                    const res = await fetch('/api/search/download', {
+                    const res = await kuasarrApiFetch('/api/search/download', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ items: items.map(item => ({ link: item.link, title: item.title })) })
@@ -690,7 +690,7 @@ def setup_search_routes(app: Bottle) -> None:
                 setMessage(dom.statusMessage, 'Lade Status...');
                 console.log('[SearchUI] loadStatus ausgelöst');
                 try {
-                    const res = await fetch('/api/search/status');
+                    const res = await kuasarrApiFetch('/api/search/status');
                     if (!res.ok) {
                         throw new Error(await res.text());
                     }

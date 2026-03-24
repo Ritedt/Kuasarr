@@ -639,7 +639,7 @@ def setup_packages_routes(app) -> None:
 
                 function performDelete() {{
                     if (!deletePackageId) return;
-                    fetch('/api/packages/delete', {{
+                    kuasarrApiFetch('/api/packages/delete', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
                         body: JSON.stringify({{package_id: deletePackageId}})

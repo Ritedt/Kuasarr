@@ -159,7 +159,7 @@ def setup_notifications_routes(app, shared_state):
             var statusEl = document.getElementById(service + '_test_status');
             statusEl.textContent = 'Sending...';
             statusEl.style.color = '';
-            fetch('/api/notifications/test/' + service, {method: 'POST'})
+            kuasarrApiFetch('/api/notifications/test/' + service, {method: 'POST'})
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     if (data.success) {

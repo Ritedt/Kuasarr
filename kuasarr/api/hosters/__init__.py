@@ -139,7 +139,7 @@ def setup_hosters_routes(app):
             async function toggleHoster(hosterId, currentlyBlocked) {{
                 const action = currentlyBlocked ? 'unblock' : 'block';
                 try {{
-                    const response = await fetch('/api/hosters/' + action, {{
+                    const response = await kuasarrApiFetch('/api/hosters/' + action, {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
                         body: JSON.stringify({{hoster_id: hosterId}})
@@ -157,7 +157,7 @@ def setup_hosters_routes(app):
             async function blockAll() {{
                 if (!confirm('Block all hosters?')) return;
                 try {{
-                    const response = await fetch('/api/hosters/block-all', {{method: 'POST'}});
+                    const response = await kuasarrApiFetch('/api/hosters/block-all', {{method: 'POST'}});
                     if (response.ok) location.reload();
                 }} catch (e) {{
                     alert('Error: ' + e.message);
@@ -167,7 +167,7 @@ def setup_hosters_routes(app):
             async function unblockAll() {{
                 if (!confirm('Unblock all hosters?')) return;
                 try {{
-                    const response = await fetch('/api/hosters/unblock-all', {{method: 'POST'}});
+                    const response = await kuasarrApiFetch('/api/hosters/unblock-all', {{method: 'POST'}});
                     if (response.ok) location.reload();
                 }} catch (e) {{
                     alert('Error: ' + e.message);

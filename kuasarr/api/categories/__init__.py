@@ -90,7 +90,7 @@ def setup_categories_routes(app):
                 'name': name,
                 'download_path': download_path,
                 'file_patterns': validated_patterns,
-                'created_at': int(time.time()) if 'time' in dir() else 0
+                'created_at': int(time.time())
             }
 
             _save_category(category_id, category)

@@ -213,14 +213,21 @@ def check_rate_limit(key: str, max_requests: int = None, window: int = None) -> 
 
     now = time.time()
 
-    # Clean old entries
+    # Clean old entries for this key
     if key in _rate_limit_store:
         _rate_limit_store[key] = [
             (ts, count) for ts, count in _rate_limit_store[key]
             if now - ts < window
         ]
-    else:
+        if not _rate_limit_store[key]:
+            del _rate_limit_store[key]
+    if key not in _rate_limit_store:
         _rate_limit_store[key] = []
+
+    # Evict stale keys (empty lists) to prevent unbounded growth
+    stale_keys = [k for k, v in _rate_limit_store.items() if k != key and not v]
+    for k in stale_keys:
+        del _rate_limit_store[k]
 
     # Count requests in current window
     total_requests = sum(count for ts, count in _rate_limit_store[key])

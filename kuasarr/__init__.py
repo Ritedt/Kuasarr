@@ -284,15 +284,17 @@ def run():
         print(f"For efficiency it is recommended to set up as few hostnames as needed.")
 
         flaresolverr_url = Config('FlareSolverr').get('url')
+        flaresolverr_checked = False
 
         ad = Config('Hostnames').get('ad')
         if ad:
             if not flaresolverr_url:
                 flaresolverr_config(shared_state)
                 flaresolverr_url = Config('FlareSolverr').get('url')
-            else:
+            if flaresolverr_url and not flaresolverr_checked:
                 print(f'Using Flaresolverr URL: "{flaresolverr_url}"')
                 check_flaresolverr_availability_async(flaresolverr_url)
+                flaresolverr_checked = True
             # AD requires no login, only FlareSolverr for Cloudflare bypass
 
         al = Config('Hostnames').get('al')
@@ -300,9 +302,10 @@ def run():
             if not flaresolverr_url:
                 flaresolverr_config(shared_state)
                 flaresolverr_url = Config('FlareSolverr').get('url')
-            else:
+            if flaresolverr_url and not flaresolverr_checked:
                 print(f'Using Flaresolverr URL: "{flaresolverr_url}"')
                 check_flaresolverr_availability_async(flaresolverr_url)
+                flaresolverr_checked = True
             user = Config('AL').get('user')
             password = Config('AL').get('password')
             if not user or not password:

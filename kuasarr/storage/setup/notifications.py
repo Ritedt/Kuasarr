@@ -89,8 +89,8 @@ def _validate_notification_provider_credentials(
     telegram_bot_token,
     telegram_chat_id,
 ):
-    discord_webhook_pattern = r"^https://discord\.com/api/webhooks/\d+/[\w-]+$"
-    telegram_token_pattern = r"^\d+:[A-Za-z0-9_-]{35,}$"
+    discord_webhook_pattern = r"^https://discord\.com/api/webhooks/\d+/[A-Za-z0-9_-]+$"
+    telegram_token_pattern = r"^\d+:[A-Za-z0-9_-]+$"
 
     if discord_webhook and not re.match(discord_webhook_pattern, discord_webhook):
         return "Invalid Discord Webhook URL"
@@ -119,14 +119,11 @@ def initialize_notification_settings(shared_state):
 
 
 def get_notification_settings_data(shared_state):
-    response.content_type = "application/json"
     settings = refresh_notification_settings(shared_state)
     return {"success": True, "settings": settings}
 
 
 def save_notification_settings(shared_state):
-    response.content_type = "application/json"
-
     data = request.json
     if not isinstance(data, dict):
         return {"success": False, "message": "Invalid JSON payload"}
@@ -145,10 +142,6 @@ def save_notification_settings(shared_state):
     if validation_error:
         return {"success": False, "message": validation_error}
 
-    notification_config = Config("Notifications")
-    notification_config.save("discord_webhook", discord_webhook)
-    notification_config.save("telegram_token", telegram_bot_token)
-    notification_config.save("telegram_chat_id", telegram_chat_id)
     notification_settings_db = DataBase(NOTIFICATION_SETTINGS_TABLE)
 
     for provider in NOTIFICATION_PROVIDERS:
@@ -203,8 +196,6 @@ def save_notification_settings(shared_state):
 
 
 def send_notification_test(shared_state):
-    response.content_type = "application/json"
-
     data = request.json
     if not isinstance(data, dict):
         return {"success": False, "message": "Invalid JSON payload"}
@@ -268,6 +259,7 @@ def send_notification_test(shared_state):
     if message is None:
         return {"success": False, "message": "Failed to build Telegram test message"}
 
+    telegram_destination = None
     try:
         sent = telegram.send(shared_state, message, silent=False)
         if not sent:
@@ -281,7 +273,7 @@ def send_notification_test(shared_state):
     if sent:
         return {"success": True, "message": "Telegram test message sent"}
 
-    destination_message = telegram_destination.get("message")
+    destination_message = telegram_destination.get("message") if telegram_destination else None
     if destination_message:
         return {
             "success": False,

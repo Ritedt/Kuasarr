@@ -41,6 +41,39 @@ def _escape_html_attribute(value):
     return escape(str(value), quote=True)
 
 
+# Allowlist of allowed image domains for SSRF protection
+_ALLOWED_IMAGE_DOMAINS = {
+    "m.media-amazon.com",
+    "media-amazon.com",
+    "imdb.com",
+    "www.imdb.com",
+    "image.tmdb.org",
+    "themoviedb.org",
+    "raw.githubusercontent.com",
+    "github.com",
+    "i.imgur.com",
+    "imgur.com",
+}
+
+
+def _is_allowed_image_domain(image_url):
+    """Check if the image URL is from an allowed domain (SSRF protection)."""
+    try:
+        parsed = urlparse(image_url)
+        hostname = (parsed.hostname or "").lower()
+        if not hostname:
+            return False
+        # Check exact match or suffix match for subdomains
+        if hostname in _ALLOWED_IMAGE_DOMAINS:
+            return True
+        for domain in _ALLOWED_IMAGE_DOMAINS:
+            if hostname.endswith("." + domain):
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _get_photo_request_headers(shared_state, image_url):
     headers = {"Accept": "image/*,*/*;q=0.8"}
     user_agent = shared_state.values.get("user_agent")
@@ -55,6 +88,10 @@ def _get_photo_request_headers(shared_state, image_url):
 
 
 def _build_photo_upload(shared_state, image_url):
+    # SSRF protection: only allow images from trusted domains
+    if not _is_allowed_image_domain(image_url):
+        raise ValueError(f"Image URL domain not in allowlist: {image_url}")
+
     response = requests.get(
         image_url,
         headers=_get_photo_request_headers(shared_state, image_url),

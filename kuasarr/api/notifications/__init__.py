@@ -234,6 +234,7 @@ def setup_notifications_routes(app, shared_state):
     @require_api_key
     def notifications_settings_get():
         """Get current notification settings."""
+        response.content_type = 'application/json'
         result = get_notification_settings_data(shared_state)
         return result
 
@@ -241,6 +242,7 @@ def setup_notifications_routes(app, shared_state):
     @require_api_key
     def notifications_settings_post():
         """Save notification settings."""
+        response.content_type = 'application/json'
         result = save_notification_settings(shared_state)
         if not result.get("success"):
             response.status = 400
@@ -250,6 +252,7 @@ def setup_notifications_routes(app, shared_state):
     @require_api_key
     def notifications_test():
         """Send a test notification to configured providers."""
+        response.content_type = 'application/json'
         result = send_notification_test(shared_state)
         if not result.get("success"):
             response.status = 400

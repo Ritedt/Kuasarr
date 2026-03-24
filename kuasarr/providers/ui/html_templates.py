@@ -463,6 +463,17 @@ def render_centered_html(inner_content, footer_content=""):
             if (h1) {
                 h1.onclick = function() { window.location.href = '/'; };
             }
+            // Auto-inject apikey into HTML forms targeting /api endpoints
+            if (window.KUASARR_API_KEY) {
+                document.querySelectorAll('form[action^="/api"]').forEach(function(form) {
+                    if (form.querySelector('input[name="apikey"]')) return;
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = 'apikey';
+                    input.value = window.KUASARR_API_KEY;
+                    form.appendChild(input);
+                });
+            }
         });
 
         // Helper for WebUI API calls — injects X-API-Key header when available

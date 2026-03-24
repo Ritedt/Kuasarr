@@ -165,21 +165,24 @@ def clean_url_params(url, keep_params=None):
 def get_final_url(url, session=None, timeout=None):
     """
     Folgt Redirects und gibt die finale URL zurÃ¼ck
-    
+
     Args:
         url (str): Start-URL
         session: Optional requests Session
-        timeout (int): Timeout in Sekunden
-        
+        timeout (int): Timeout in Sekunden (default: HTTP_DEFAULT_TIMEOUT_SECONDS with slow mode)
+
     Returns:
         str: Finale URL oder ursprÃ¼ngliche URL bei Fehler
     """
+    # Apply slow mode multiplier
+    effective_timeout = get_timeout(timeout or HTTP_DEFAULT_TIMEOUT_SECONDS)
+
     try:
         if session:
-            response = session.head(url, timeout=timeout, allow_redirects=True)
+            response = session.head(url, timeout=effective_timeout, allow_redirects=True)
         else:
-            response = requests.head(url, timeout=timeout, allow_redirects=True)
-        
+            response = requests.head(url, timeout=effective_timeout, allow_redirects=True)
+
         return response.url
     except:
         return url
@@ -212,28 +215,31 @@ def get_url_headers(url=None):
     
     return headers
 
-def get_url(url, session=None, timeout=10, headers=None):
+def get_url(url, session=None, timeout=None, headers=None):
     """
     Macht einen GET-Request zu einer URL
-    
+
     Args:
         url (str): Die URL
         session: Optional requests Session
-        timeout (int): Timeout in Sekunden
+        timeout (int): Timeout in Sekunden (default: HTTP_DEFAULT_TIMEOUT_SECONDS with slow mode)
         headers (dict): Optional Headers
-        
+
     Returns:
         requests.Response: Response-Objekt oder None bei Fehler
     """
     if not headers:
         headers = get_url_headers(url)
-    
+
+    # Apply slow mode multiplier
+    effective_timeout = get_timeout(timeout or HTTP_DEFAULT_TIMEOUT_SECONDS)
+
     try:
         if session:
-            response = session.get(url, timeout=timeout, headers=headers)
+            response = session.get(url, timeout=effective_timeout, headers=headers)
         else:
-            response = requests.get(url, timeout=timeout, headers=headers)
-        
+            response = requests.get(url, timeout=effective_timeout, headers=headers)
+
         return response
     except Exception as e:
         print(f"Error getting URL {url}: {e}")

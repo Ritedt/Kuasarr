@@ -13,6 +13,12 @@ from bs4 import BeautifulSoup
 from requests.exceptions import Timeout, RequestException
 
 from kuasarr.providers.log import info, debug
+from kuasarr.constants import (
+    SESSION_REQUEST_TIMEOUT_SECONDS,
+    FLARESOLVERR_REQUEST_TIMEOUT_SECONDS,
+    get_timeout,
+    get_flaresolverr_max_timeout,
+)
 
 hostname = "al"
 
@@ -42,7 +48,8 @@ def create_and_persist_session(shared_state):
         }
 
         try:
-            fs_resp = requests.post(flaresolverr_url, headers=fs_headers, json=fs_payload, timeout=30)
+            fs_resp = requests.post(flaresolverr_url, headers=fs_headers, json=fs_payload,
+                                    timeout=get_timeout(FLARESOLVERR_REQUEST_TIMEOUT_SECONDS))
             fs_resp.raise_for_status()
         except Timeout:
             info(f"{hostname}: FlareSolverr request timed out")
@@ -92,7 +99,7 @@ def create_and_persist_session(shared_state):
         r = sess.post(f'https://www.{host}/auth/signin',
                       data=encoded_data,
                       headers=login_headers,
-                      timeout=30)
+                      timeout=get_timeout(SESSION_REQUEST_TIMEOUT_SECONDS))
 
         if r.status_code != 200 or "invalid" in r.text.lower():
             info(f'Login failed: "{hostname}" - {r.status_code} - {r.text}')
@@ -211,7 +218,7 @@ def fetch_via_flaresolverr(shared_state,
                            method: str,
                            target_url: str,
                            post_data: dict = None,
-                           timeout: int = 60):
+                           timeout: int = None):
     """
     Load (or recreate) the requests.Session from DB.
     Package its cookies into FlareSolverr payload.
@@ -228,11 +235,14 @@ def fetch_via_flaresolverr(shared_state,
 
     sess = retrieve_and_validate_session(shared_state)
 
+    # Apply slow mode multiplier
+    effective_timeout = get_timeout(timeout or FLARESOLVERR_REQUEST_TIMEOUT_SECONDS)
+
     cmd = "request.get" if method.upper() == "GET" else "request.post"
     fs_payload = {
         "cmd": cmd,
         "url": target_url,
-        "maxTimeout": timeout * 1000,
+        "maxTimeout": get_flaresolverr_max_timeout(effective_timeout),
         # Inject every cookie from our Python session into FlareSolverr
         "cookies": _load_session_cookies_for_flaresolverr(sess)
     }
@@ -249,7 +259,7 @@ def fetch_via_flaresolverr(shared_state,
             flaresolverr_url,
             headers=fs_headers,
             json=fs_payload,
-            timeout=timeout + 10
+            timeout=effective_timeout + 10
         )
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
@@ -305,7 +315,7 @@ def fetch_via_flaresolverr(shared_state,
     }
 
 
-def fetch_via_requests_session(shared_state, method: str, target_url: str, post_data: dict = None, timeout: int = 30):
+def fetch_via_requests_session(shared_state, method: str, target_url: str, post_data: dict = None, timeout: int = None):
     """
     â€“ method: "GET" or "POST"
     â€“ post_data: for POST only (will be sent as form-data unless you explicitly JSON-encode)
@@ -325,11 +335,14 @@ def fetch_via_requests_session(shared_state, method: str, target_url: str, post_
                 raise requests.exceptions.HTTPError("Failed to create session")
         return DummyResponse()
 
+
+    # Apply slow mode multiplier
+    effective_timeout = get_timeout(timeout or SESSION_REQUEST_TIMEOUT_SECONDS)
     # Execute request
     if method.upper() == "GET":
-        resp = sess.get(target_url, timeout=timeout)
+        resp = sess.get(target_url, timeout=effective_timeout)
     else:  # POST
-        resp = sess.post(target_url, data=post_data, timeout=timeout)
+        resp = sess.post(target_url, data=post_data, timeout=effective_timeout)
 
     # Re-persist cookies, since the site might have modified them during the request
     _persist_session_to_db(shared_state, sess)

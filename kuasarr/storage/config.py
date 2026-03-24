@@ -109,7 +109,8 @@ class Config(object):
         'Connection': [
             ("internal_address", "str", ""),
             ("external_address", "str", ""),
-            ("timezone", "str", "Europe/Berlin")
+            ("timezone", "str", "Europe/Berlin"),
+            ("slow_mode", "bool", "false")  # Enable 3x timeout multiplier for slow connections
         ],
         'PWA': [
             ("install_prompted", "bool", "false")  # Track if PWA install was prompted on Windows EXE

@@ -20,6 +20,7 @@ import requests
 from requests import RequestException
 
 from kuasarr.providers.log import info, debug, error
+from kuasarr.constants import CAPTCHA_SOLVE_TIMEOUT_SECONDS, get_timeout
 
 
 # Affiliate link for when balance is empty
@@ -92,20 +93,20 @@ class DeathByCaptchaClient:
     def __init__(
         self,
         authtoken: str = "",
-        timeout: int = 120,
+        timeout: int = None,
         max_retries: int = 3,
         retry_backoff: int = 5,
     ) -> None:
         """Initialize the DBC client.
-        
+
         Args:
             authtoken: DBC authentication token
-            timeout: Request timeout in seconds
+            timeout: Request timeout in seconds (default: CAPTCHA_SOLVE_TIMEOUT_SECONDS with slow mode)
             max_retries: Maximum number of retries for failed requests
             retry_backoff: Seconds to wait between retries
         """
         self.authtoken = authtoken
-        self.timeout = max(1, int(timeout))
+        self.timeout = get_timeout(timeout or CAPTCHA_SOLVE_TIMEOUT_SECONDS)
         self.max_retries = max(1, int(max_retries))
         self.retry_backoff = max(1, int(retry_backoff))
         self._session = requests.Session()

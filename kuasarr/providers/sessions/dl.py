@@ -10,6 +10,12 @@ from requests.exceptions import Timeout, RequestException
 
 from kuasarr.providers.log import info, debug
 from kuasarr.providers.network.cloudflare import is_cloudflare_challenge, update_session_via_flaresolverr
+from kuasarr.constants import (
+    SESSION_REQUEST_TIMEOUT_SECONDS,
+    FLARESOLVERR_REQUEST_TIMEOUT_SECONDS,
+    get_timeout,
+    get_flaresolverr_max_timeout,
+)
 
 hostname = "dl"
 
@@ -52,7 +58,8 @@ def create_and_persist_session(shared_state):
             }
 
             try:
-                fs_resp = requests.post(flaresolverr_url, headers=fs_headers, json=fs_payload, timeout=30)
+                fs_resp = requests.post(flaresolverr_url, headers=fs_headers, json=fs_payload,
+                                        timeout=get_timeout(FLARESOLVERR_REQUEST_TIMEOUT_SECONDS))
                 fs_resp.raise_for_status()
                 fs_json = fs_resp.json()
                 
@@ -79,7 +86,7 @@ def create_and_persist_session(shared_state):
     try:
         # Step 1: Get login page to retrieve CSRF token
         login_page_url = f'https://www.{clean_host}/login/'
-        login_page = sess.get(login_page_url, timeout=30)
+        login_page = sess.get(login_page_url, timeout=get_timeout(SESSION_REQUEST_TIMEOUT_SECONDS))
 
         if login_page.status_code != 200:
             info(f'Failed to load login page for: "{hostname}" - Status {login_page.status_code}')
@@ -105,10 +112,10 @@ def create_and_persist_session(shared_state):
         }
 
         login_url = f'https://www.{clean_host}/login/login'
-        login_response = sess.post(login_url, data=login_data, timeout=30)
+        login_response = sess.post(login_url, data=login_data, timeout=get_timeout(SESSION_REQUEST_TIMEOUT_SECONDS))
 
         # Step 3: Verify login success
-        verify_response = sess.get(f'https://www.{clean_host}/', timeout=30)
+        verify_response = sess.get(f'https://www.{clean_host}/', timeout=get_timeout(SESSION_REQUEST_TIMEOUT_SECONDS))
 
         if 'data-logged-in="true"' not in verify_response.text:
             info(f'Login verification failed for: "{hostname}" - invalid credentials or login failed')
@@ -187,28 +194,31 @@ def _persist_session_to_db(shared_state, sess):
     shared_state.values["database"]("sessions").update_store(hostname, session_data)
 
 
-def fetch_via_requests_session(shared_state, method: str, target_url: str, post_data: dict = None, get_params: dict = None, timeout: int = 30):
+def fetch_via_requests_session(shared_state, method: str, target_url: str, post_data: dict = None, get_params: dict = None, timeout: int = None):
     """Execute request using the session, with automatic Cloudflare bypass."""
     sess = retrieve_and_validate_session(shared_state)
     if not sess:
         raise Exception(f"Could not retrieve valid session for {hostname}")
 
+    # Apply slow mode multiplier
+    effective_timeout = get_timeout(timeout or SESSION_REQUEST_TIMEOUT_SECONDS)
+
     # Execute request
     if method.upper() == "GET":
-        resp = sess.get(target_url, params=get_params, timeout=timeout)
+        resp = sess.get(target_url, params=get_params, timeout=effective_timeout)
     else:  # POST
-        resp = sess.post(target_url, data=post_data, timeout=timeout)
+        resp = sess.post(target_url, data=post_data, timeout=effective_timeout)
 
     # Detect Cloudflare
     if resp.status_code == 403 or is_cloudflare_challenge(resp.text):
         debug(f"{hostname}: Cloudflare detected during fetch. Attempting FlareSolverr bypass...")
-        fs_result = update_session_via_flaresolverr(debug, shared_state, sess, target_url)
+        fs_result = update_session_via_flaresolverr(debug, shared_state, sess, target_url, timeout=effective_timeout)
         if fs_result and not isinstance(fs_result, dict) or (isinstance(fs_result, dict) and not fs_result.get("error")):
             # If update_session_via_flaresolverr updated the session, retry the request
             if method.upper() == "GET":
-                resp = sess.get(target_url, params=get_params, timeout=timeout)
+                resp = sess.get(target_url, params=get_params, timeout=effective_timeout)
             else:
-                resp = sess.post(target_url, data=post_data, timeout=timeout)
+                resp = sess.post(target_url, data=post_data, timeout=effective_timeout)
             debug(f"{hostname}: FlareSolverr bypass successful, retry status: {resp.status_code}")
 
     # Re-persist cookies
@@ -230,7 +240,7 @@ def _load_session_cookies_for_flaresolverr(sess):
     return cookie_list
 
 
-def fetch_via_flaresolverr(shared_state, method: str, target_url: str, post_data: dict = None, timeout: int = 60):
+def fetch_via_flaresolverr(shared_state, method: str, target_url: str, post_data: dict = None, timeout: int = None):
     """Execute request via FlareSolverr using session cookies."""
     flaresolverr_url = shared_state.values["config"]('FlareSolverr').get('url')
     if not flaresolverr_url:
@@ -240,11 +250,14 @@ def fetch_via_flaresolverr(shared_state, method: str, target_url: str, post_data
     if not sess:
         return {"error": "Could not retrieve valid session"}
 
+    # Apply slow mode multiplier
+    effective_timeout = get_timeout(timeout or FLARESOLVERR_REQUEST_TIMEOUT_SECONDS)
+
     cmd = "request.get" if method.upper() == "GET" else "request.post"
     fs_payload = {
         "cmd": cmd,
         "url": target_url,
-        "maxTimeout": timeout * 1000,
+        "maxTimeout": get_flaresolverr_max_timeout(effective_timeout),
         "cookies": _load_session_cookies_for_flaresolverr(sess)
     }
 
@@ -252,8 +265,8 @@ def fetch_via_flaresolverr(shared_state, method: str, target_url: str, post_data
         fs_payload["postData"] = urllib.parse.urlencode(post_data or {})
 
     try:
-        resp = requests.post(flaresolverr_url, headers={"Content-Type": "application/json"}, 
-                           json=fs_payload, timeout=timeout + 10)
+        resp = requests.post(flaresolverr_url, headers={"Content-Type": "application/json"},
+                           json=fs_payload, timeout=effective_timeout + 10)
         resp.raise_for_status()
         fs_json = resp.json()
         

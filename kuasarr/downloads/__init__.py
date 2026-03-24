@@ -1,12 +1,14 @@
 ﻿# -*- coding: utf-8 -*-
 # Kuasarr
-# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 #
 # Special note: The signatures of all handlers must stay the same so we can neatly call them in download()
 # Same is true for every get_xx_download_links() function in sources/xx.py
 
 import json
 
+from kuasarr.categories import get_destination_folder
+from kuasarr.categories.matcher import match_release_to_category, SOURCE_CATEGORY_MAP
 from kuasarr.downloads.linkcrypters.hide import decrypt_links_if_hide
 from kuasarr.downloads.sources.ad import get_ad_download_links
 from kuasarr.downloads.sources.al import get_al_download_links
@@ -26,7 +28,7 @@ from kuasarr.downloads.sources.sf import get_sf_download_links, resolve_sf_redir
 from kuasarr.downloads.sources.sl import get_sl_download_links
 from kuasarr.downloads.sources.wd import get_wd_download_links
 from kuasarr.downloads.sources.wx import get_wx_download_links
-from kuasarr.providers.log import info
+from kuasarr.providers.log import info, debug
 from kuasarr.providers.notifications import send_discord_message
 from kuasarr.providers.statistics import StatsHelper
 
@@ -401,19 +403,59 @@ def handle_dl(shared_state, title, password, package_id, imdb_id, url, mirror, s
 
 
 def download(shared_state, request_from, title, url, mirror, size_mb, password, imdb_id=None,
-             destination_folder=None):
-    if "lazylibrarian" in request_from.lower():
-        category = "docs"
-    elif "radarr" in request_from.lower():
-        category = "movies"
-    else:
-        category = "tv"
+             destination_folder=None, preferred_category=None, manual_job_id=None):
+    """
+    Main download function that handles routing to appropriate source handlers.
+
+    Args:
+        shared_state: Application shared state
+        request_from: Source application (radarr, sonarr, lazylibrarian)
+        title: Release title
+        url: Download URL
+        mirror: Mirror site identifier
+        size_mb: Size in megabytes
+        password: Archive password
+        imdb_id: IMDB identifier
+        destination_folder: Optional explicit destination folder
+        preferred_category: Optional preferred category ID
+        manual_job_id: Optional manual job ID for tracking
+
+    Returns:
+        dict with success status, package_id, and title
+    """
+    # Detect category using the category system
+    category = match_release_to_category(
+        release_name=title,
+        source=request_from,
+        preferred_category=preferred_category
+    )
+
+    # Fallback to basic detection if category system returns None
+    if not category:
+        if "lazylibrarian" in request_from.lower():
+            category = "docs"
+        elif "radarr" in request_from.lower():
+            category = "movies"
+        else:
+            category = "tv-shows"
 
     package_hash = str(hash(title + url)).replace('-', '')
     package_id = f"kuasarr_{category}_{package_hash}"
 
+    # Append manual job ID if provided
+    if manual_job_id:
+        package_id = f"{package_id}_{manual_job_id}"
+
     if imdb_id is not None and imdb_id.lower() == "none":
         imdb_id = None
+
+    # Determine destination folder using category system if not explicitly provided
+    if destination_folder is None:
+        destination_folder = get_destination_folder(
+            category_id=category,
+            release_name=title
+        )
+        debug(f"Category '{category}' determined for '{title[:50]}...' -> {destination_folder}")
 
     config = shared_state.values["config"]("Hostnames")
     flags = {

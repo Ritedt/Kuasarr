@@ -40,6 +40,7 @@ from Cryptodome.Cipher import AES
 
 from kuasarr.providers.log import debug
 from kuasarr.providers.version import get_version
+from kuasarr.constants import MYJD_API_TIMEOUT_SECONDS, get_timeout
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 BS = 16
@@ -809,7 +810,7 @@ class Myjdapi:
                     params=None,
                     action=None,
                     api=None,
-                    timeout=30,
+                    timeout=MYJD_API_TIMEOUT_SECONDS,
                     output_errors=True):
         """
         Makes a request to the API to the 'path' using the 'http_method' with parameters,'params'.

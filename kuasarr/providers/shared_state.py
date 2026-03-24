@@ -19,6 +19,16 @@ from kuasarr.storage.sqlite_database import DataBase
 from kuasarr.providers.settings_observer import notify_core_settings_changed
 
 # Re-export from submodules for backward compatibility
+from kuasarr.categories import (
+    get_category_manager,
+    get_destination_folder,
+    get_all_categories,
+    get_enabled_categories,
+    get_category,
+    DEFAULT_CATEGORIES,
+)
+from kuasarr.categories.matcher import match_release_to_category
+
 from kuasarr.providers.jdownloader import (
     run_device_request,
     connect_to_jd,
@@ -82,6 +92,14 @@ __all__ = [
     "get_db",
     "get_recently_searched",
     "download_package",
+    # Categories (re-exported)
+    "get_category_manager",
+    "get_destination_folder",
+    "match_release_to_category",
+    "get_all_categories",
+    "get_enabled_categories",
+    "get_category",
+    "DEFAULT_CATEGORIES",
     # JDownloader (re-exported)
     "connect_to_jd",
     "set_device",

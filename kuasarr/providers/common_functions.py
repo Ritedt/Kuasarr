@@ -6,6 +6,8 @@ import re
 import socket
 import requests
 
+from kuasarr.constants import HTTP_DEFAULT_TIMEOUT_SECONDS, get_timeout
+
 def check_ip(ip_address):
     """
     PrÃ¼ft ob eine IP-Adresse gÃ¼ltig ist
@@ -61,28 +63,31 @@ def validate_url(url):
     
     return url_pattern.match(url) is not None
 
-def make_request(url, headers=None, timeout=10, **kwargs):
+def make_request(url, headers=None, timeout=None, **kwargs):
     """
     Macht einen HTTP-Request mit Standardeinstellungen
-    
+
     Args:
         url (str): URL fÃ¼r den Request
         headers (dict): Optional HTTP Headers
-        timeout (int): Timeout in Sekunden
+        timeout (int): Timeout in Sekunden (default: HTTP_DEFAULT_TIMEOUT_SECONDS with slow mode)
         **kwargs: Weitere Argumente fÃ¼r requests
-        
+
     Returns:
         requests.Response: Response-Objekt oder None bei Fehler
     """
     default_headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36'
     }
-    
+
     if headers:
         default_headers.update(headers)
-    
+
+    # Apply slow mode multiplier
+    effective_timeout = get_timeout(timeout or HTTP_DEFAULT_TIMEOUT_SECONDS)
+
     try:
-        response = requests.get(url, headers=default_headers, timeout=timeout, **kwargs)
+        response = requests.get(url, headers=default_headers, timeout=effective_timeout, **kwargs)
         return response
     except Exception as e:
         print(f"Request error for {url}: {e}")

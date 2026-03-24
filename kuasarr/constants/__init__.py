@@ -54,6 +54,29 @@ TIMEOUT_SLOW_MODE_MULTIPLIER = 3
 SLOW_MODE_ENABLED = os.getenv("KUASARR_SLOW_MODE", "false").lower() in ("1", "true", "yes", "on")
 
 
+def _load_slow_mode_from_config() -> bool:
+    """Load slow mode setting from config file if not set via env var.
+
+    This is called lazily when slow mode is first checked to avoid
+    circular imports during startup.
+    """
+    global SLOW_MODE_ENABLED
+    if SLOW_MODE_ENABLED:
+        return True
+
+    try:
+        from kuasarr.storage.config import Config
+        connection_config = Config('Connection')
+        slow_mode_config = connection_config.get('slow_mode', 'false').lower()
+        if slow_mode_config in ('1', 'true', 'yes', 'on'):
+            SLOW_MODE_ENABLED = True
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
 def get_timeout(base_timeout: int) -> int:
     """Get timeout value with slow mode multiplier applied.
 
@@ -66,6 +89,9 @@ def get_timeout(base_timeout: int) -> int:
     Returns:
         Timeout in seconds (base * multiplier if slow mode enabled)
     """
+    # Check config if not already enabled via env var
+    _load_slow_mode_from_config()
+
     if SLOW_MODE_ENABLED:
         return base_timeout * TIMEOUT_SLOW_MODE_MULTIPLIER
     return base_timeout
@@ -79,6 +105,14 @@ def get_captcha_timeout() -> int:
 def get_flaresolverr_timeout() -> int:
     """Get FlareSolverr timeout with slow mode applied."""
     return get_timeout(FLARESOLVERR_REQUEST_TIMEOUT_SECONDS)
+
+
+def get_flaresolverr_max_timeout() -> int:
+    """Get FlareSolverr max timeout with slow mode applied.
+
+    This is used for longer-running FlareSolverr operations.
+    """
+    return get_timeout(FLARESOLVERR_REQUEST_TIMEOUT_SECONDS * 2)
 
 
 def get_search_timeout() -> int:
@@ -148,6 +182,66 @@ MONTHS_MAP = {
 
 
 # ==============================================================================
+# CATEGORY SYSTEM CONSTANTS (Sprint E)
+# ==============================================================================
+
+# Default category IDs
+CATEGORY_MOVIES = "movies"
+CATEGORY_TV_SHOWS = "tv-shows"
+CATEGORY_BOOKS = "books"
+CATEGORY_AUDIO = "audio"
+CATEGORY_SOFTWARE = "software"
+CATEGORY_GAMES = "games"
+CATEGORY_DOCS = "docs"
+
+# Default download paths (JDownloader format)
+DEFAULT_PATH_TEMPLATE = "kuasarr/<jd:packagename>"
+CATEGORY_PATH_TEMPLATES = {
+    CATEGORY_MOVIES: f"kuasarr/{CATEGORY_MOVIES}/<jd:packagename>",
+    CATEGORY_TV_SHOWS: f"kuasarr/{CATEGORY_TV_SHOWS}/<jd:packagename>",
+    CATEGORY_BOOKS: f"kuasarr/{CATEGORY_BOOKS}/<jd:packagename>",
+    CATEGORY_AUDIO: f"kuasarr/{CATEGORY_AUDIO}/<jd:packagename>",
+    CATEGORY_SOFTWARE: f"kuasarr/{CATEGORY_SOFTWARE}/<jd:packagename>",
+    CATEGORY_GAMES: f"kuasarr/{CATEGORY_GAMES}/<jd:packagename>",
+    CATEGORY_DOCS: f"kuasarr/{CATEGORY_DOCS}/<jd:packagename>",
+}
+
+# File extension groups by category
+CATEGORY_EXTENSIONS = {
+    CATEGORY_MOVIES: [
+        ".mkv", ".mp4", ".avi", ".mov", ".wmv", ".flv", ".webm",
+        ".m4v", ".mpg", ".mpeg", ".ts", ".m2ts"
+    ],
+    CATEGORY_TV_SHOWS: [
+        ".mkv", ".mp4", ".avi", ".mov", ".wmv", ".flv", ".webm",
+        ".m4v", ".mpg", ".mpeg", ".ts", ".m2ts"
+    ],
+    CATEGORY_BOOKS: [
+        ".epub", ".mobi", ".azw", ".azw3", ".pdf", ".djvu",
+        ".cbz", ".cbr", ".cb7", ".cbt"
+    ],
+    CATEGORY_AUDIO: [
+        ".mp3", ".flac", ".aac", ".ogg", ".m4a", ".wav",
+        ".wma", ".opus", ".ape", ".wvc"
+    ],
+    CATEGORY_SOFTWARE: [
+        ".exe", ".msi", ".dmg", ".pkg", ".deb", ".rpm",
+        ".appimage", ".apk", ".ipa", ".jar"
+    ],
+    CATEGORY_GAMES: [
+        ".iso", ".bin", ".cue", ".nsp", ".xci", ".nsz",
+        ".xcz", ".wad", ".wbfs"
+    ],
+    CATEGORY_DOCS: [
+        ".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt", ".odf"
+    ],
+}
+
+# Category detection confidence threshold
+CATEGORY_CONFIDENCE_THRESHOLD = 0.6
+
+
+# ==============================================================================
 # EXPORTS
 # ==============================================================================
 
@@ -176,6 +270,7 @@ __all__ = [
     "get_timeout",
     "get_captcha_timeout",
     "get_flaresolverr_timeout",
+    "get_flaresolverr_max_timeout",
     "get_search_timeout",
     "get_download_timeout",
     "get_session_timeout",
@@ -187,4 +282,16 @@ __all__ = [
     "MOVIE_REGEX",
     # Month mapping
     "MONTHS_MAP",
+    # Category system (Sprint E)
+    "CATEGORY_MOVIES",
+    "CATEGORY_TV_SHOWS",
+    "CATEGORY_BOOKS",
+    "CATEGORY_AUDIO",
+    "CATEGORY_SOFTWARE",
+    "CATEGORY_GAMES",
+    "CATEGORY_DOCS",
+    "DEFAULT_PATH_TEMPLATE",
+    "CATEGORY_PATH_TEMPLATES",
+    "CATEGORY_EXTENSIONS",
+    "CATEGORY_CONFIDENCE_THRESHOLD",
 ]

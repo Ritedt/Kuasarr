@@ -705,4 +705,16 @@ def get_al_download_links(shared_state, url, mirror, title,
     }
 
 
+from kuasarr.downloads.base import AbstractDownloadSource
 
+
+class Source(AbstractDownloadSource):
+    initials = "al"
+
+    def get_download_links(self, shared_state, url, mirror, title, password=None):
+        raw = get_al_download_links(shared_state, url, mirror, title, release_id=password)
+        if not raw:
+            return {"links": []}
+        if isinstance(raw, dict):
+            return raw
+        return {"links": raw}

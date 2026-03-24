@@ -47,4 +47,14 @@ def get_mb_download_links(shared_state, url, mirror, title): # signature must al
     return download_links
 
 
+from kuasarr.downloads.base import AbstractDownloadSource
 
+
+class Source(AbstractDownloadSource):
+    initials = "mb"
+
+    def get_download_links(self, shared_state, url, mirror, title, password=None):
+        raw = get_mb_download_links(shared_state, url, mirror, title)
+        if not raw:
+            return {"links": []}
+        return {"links": raw}

@@ -802,3 +802,13 @@ def _get_cached_season_names(page_title):
         return get_all_season_names(page_title)
     except Exception:
         return None
+
+
+from kuasarr.downloads.base import AbstractDownloadSource
+
+
+class Source(AbstractDownloadSource):
+    initials = "at"
+
+    def get_download_links(self, shared_state, url, mirror, title, password=None):
+        return get_at_download_links(shared_state, url, mirror, title, password=password)

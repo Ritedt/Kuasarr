@@ -115,3 +115,18 @@ def get_he_download_links(shared_state, url, mirror, title):
         "links": links,
         "imdb_id": imdb_id,
     }
+
+
+from kuasarr.downloads.base import AbstractDownloadSource
+
+
+class Source(AbstractDownloadSource):
+    initials = "he"
+
+    def get_download_links(self, shared_state, url, mirror, title, password=None):
+        raw = get_he_download_links(shared_state, url, mirror, title)
+        if not raw:
+            return {"links": []}
+        if isinstance(raw, dict):
+            return raw
+        return {"links": raw}

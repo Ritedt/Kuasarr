@@ -221,3 +221,13 @@ def get_wx_download_links(shared_state, url, mirror, title, password=None):
     except Exception as e:
         info(f"{hostname.upper()}: Error extracting download links from {url}: {e}")
         return {"links": []}
+
+
+from kuasarr.downloads.base import AbstractDownloadSource
+
+
+class Source(AbstractDownloadSource):
+    initials = "wx"
+
+    def get_download_links(self, shared_state, url, mirror, title, password=None):
+        return get_wx_download_links(shared_state, url, mirror, title, password=password)

@@ -134,3 +134,22 @@ def he_feed(shared_state, start_time, request_from, mirror=None):
     elapsed = time.time() - start_time
     info(f"{hostname}: found {len(results)} feed items in {elapsed:.2f}s")
     return results
+
+
+from kuasarr.search.base import AbstractSearchSource
+
+
+class Source(AbstractSearchSource):
+    initials = "he"
+    supports_imdb = True
+    supports_phrase = False
+    supports_feed = True
+    supported_categories = {"movies", "tv-shows"}
+
+    def search(self, shared_state, start_time, request_from, search_string,
+               mirror=None, season=None, episode=None):
+        return he_search(shared_state, start_time, request_from, search_string,
+                         mirror=mirror, season=season, episode=episode)
+
+    def feed(self, shared_state, start_time, request_from, mirror=None):
+        return he_feed(shared_state, start_time, request_from, mirror=mirror)

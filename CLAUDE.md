@@ -89,13 +89,20 @@ docker run -d \\
 * API endpoints (`/api`, `/download/`, `/dbc/api/`) are **never** protected — Radarr/Sonarr use API key only
 * Disabled by default (backwards compatible)
 
+## Coding Standards & Agenten-Verwendung
+
+* **Immer `/coding-standards` Skill nutzen** vor jeder Implementierung — Enforces PEP 8, Pythonic idioms, und Projekt-Konventionen
+* **Immer Agenten nutzen** für Implementierungsaufgaben — Bevorzuge `Skill({skill: "..."})` oder `Agent({subagent_type: "..."})` gegenüber direkter Datei-Manipulation
+* Nutze Sub-Agenten mit spezialisierten Rollen (z.B. `everything-claude-code:python-reviewer`, `everything-claude-code:planner`)
+* Bevorzuge `/everything-claude-code:plan` für komplexe Features mit Multi-Model-Analyse
+
 ## Coding Conventions
 
 * Follow existing Python style in `kuasarr/` — no enforced linter config found, keep consistent with surrounding code
 * ENV vars: `SCREAMING\_SNAKE\_CASE`
 * INI keys: `lowercase\_with\_underscores`
 * Sensitive values (passwords, tokens, API keys) must **never** be hardcoded — always read from ENV or INI
-* Version bumps go in `version.json` only — do not hardcode version strings elsewhere
+* Version bumps: nur `Hier_Version_\u00c4ndern.txt` \u00e4ndern — CI propagiert an alle Stellen
 
 ## Important Constraints
 

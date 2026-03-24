@@ -11,6 +11,11 @@ from bottle import request, response, redirect
 from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.ui.html_templates import render_form, render_button
 from kuasarr.storage.config import Config
+from kuasarr.storage.setup.notifications import (
+    get_notification_settings_data,
+    save_notification_settings,
+    send_notification_test,
+)
 
 
 def setup_notifications_routes(app, shared_state):
@@ -223,3 +228,29 @@ def setup_notifications_routes(app, shared_state):
             return json.dumps({'success': False, 'error': 'Token/Chat ID not configured or request failed'})
         except Exception:
             return json.dumps({'success': False, 'error': 'Notification dispatch failed'})
+
+    # New REST API endpoints for notification settings
+    @app.get('/api/notifications/settings')
+    @require_api_key
+    def notifications_settings_get():
+        """Get current notification settings."""
+        result = get_notification_settings_data(shared_state)
+        return result
+
+    @app.post('/api/notifications/settings')
+    @require_api_key
+    def notifications_settings_post():
+        """Save notification settings."""
+        result = save_notification_settings(shared_state)
+        if not result.get("success"):
+            response.status = 400
+        return result
+
+    @app.post('/api/notifications/test')
+    @require_api_key
+    def notifications_test():
+        """Send a test notification to configured providers."""
+        result = send_notification_test(shared_state)
+        if not result.get("success"):
+            response.status = 400
+        return result

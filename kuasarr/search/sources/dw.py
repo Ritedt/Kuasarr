@@ -17,7 +17,7 @@ supported_mirrors = ["1fichier", "rapidgator", "ddownload", "katfile"]
 
 
 def convert_to_rss_date(date_str):
-    german_months = ["Januar", "Februar", "MÃ¤rz", "April", "Mai", "Juni",
+    german_months = ["Januar", "Februar", "März", "April", "Mai", "Juni",
                      "Juli", "August", "September", "Oktober", "November", "Dezember"]
     english_months = ["January", "February", "March", "April", "May", "June",
                       "July", "August", "September", "October", "November", "December"]

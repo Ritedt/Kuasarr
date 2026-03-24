@@ -149,8 +149,8 @@ def retrieve_and_validate_session(shared_state):
         # Try new JSON format first
         session_data = json.loads(stored)
         token = session_data.get("token")
-        created_at = session_data.get("created_at", 0)
-        
+        created_at = session_data.get("created_at") or 0
+
         # Check expiry
         if (time.time() - created_at) > SESSION_MAX_AGE_SECONDS:
             debug(f"{hostname}: Session expired, recreating...")

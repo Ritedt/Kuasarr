@@ -202,7 +202,8 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.12'\n          enable-cache: true
+          python-version: '3.12'
+          enable-cache: true
 
       - name: Install dependencies
         run: |
@@ -434,7 +435,8 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.12'\n          enable-cache: true
+          python-version: '3.12'
+          enable-cache: true
 
       - name: Install build dependencies
         run: |
@@ -488,7 +490,8 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.12'\n          enable-cache: true
+          python-version: '3.12'
+          enable-cache: true
 
       - name: Cache PyInstaller Analysis
         uses: actions/cache@v5
@@ -761,7 +764,8 @@ jobs:
           fetch-depth: 1
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.12'\n          enable-cache: true
+          python-version: '3.12'
+          enable-cache: true
 
       - name: Inject version into all version files
         run: |
@@ -804,7 +808,8 @@ jobs:
           fetch-depth: 1
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.12'\n          enable-cache: true
+          python-version: '3.12'
+          enable-cache: true
 
       - name: Inject version into all version files
         shell: bash

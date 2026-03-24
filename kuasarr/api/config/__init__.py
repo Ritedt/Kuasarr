@@ -267,3 +267,105 @@ def setup_config(app, shared_state):
                         Config(section_name).save(key, new_val.strip())
 
         return render_success("All settings saved successfully! Some changes might require a restart.", 5)
+
+    # ============================================================================
+    # Sprint H1 — Core Settings API
+    # ============================================================================
+
+    @app.get('/api/settings/core')
+    @require_api_key
+    def get_core_settings():
+        """Returns current core settings: internal_address, external_address, timezone"""
+        from bottle import response
+        import json
+        from kuasarr.storage.config import Config
+
+        config = Config('Connection')
+        internal_address = config.get('internal_address') or shared_state.values.get('internal_address', '')
+        external_address = config.get('external_address') or shared_state.values.get('external_address', '')
+        timezone = config.get('timezone') or 'Europe/Berlin'
+
+        response.content_type = 'application/json'
+        return json.dumps({
+            "internal_address": internal_address,
+            "external_address": external_address,
+            "timezone": timezone
+        })
+
+    @app.post('/api/settings/core')
+    @require_api_key
+    def save_core_settings():
+        """Saves core settings to kuasarr.ini"""
+        from bottle import response, request
+        import json
+        from urllib.parse import urlparse
+        from zoneinfo import available_timezones
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+
+        # Read POST JSON body
+        try:
+            payload = request.json or {}
+        except Exception:
+            response.status = 400
+            return json.dumps({"success": False, "error": "Invalid JSON body"})
+
+        internal_address = (payload.get('internal_address') or '').strip()
+        external_address = (payload.get('external_address') or '').strip()
+        timezone = (payload.get('timezone') or '').strip()
+
+        # Validate URL format for internal/external address
+        def _is_valid_url(url):
+            if not url:
+                return False
+            try:
+                parsed = urlparse(url)
+                return parsed.scheme in ('http', 'https') and bool(parsed.netloc)
+            except Exception:
+                return False
+
+        if not internal_address:
+            response.status = 400
+            return json.dumps({"success": False, "error": "internal_address is required"})
+
+        if not _is_valid_url(internal_address):
+            response.status = 400
+            return json.dumps({"success": False, "error": "internal_address must be a valid http/https URL"})
+
+        if external_address and not _is_valid_url(external_address):
+            response.status = 400
+            return json.dumps({"success": False, "error": "external_address must be a valid http/https URL"})
+
+        # Validate timezone against IANA timezone database
+        if timezone:
+            valid_timezones = available_timezones()
+            if timezone not in valid_timezones:
+                response.status = 400
+                return json.dumps({
+                    "success": False,
+                    "error": f"Invalid timezone: {timezone}. Must be a valid IANA timezone identifier."
+                })
+        else:
+            timezone = 'Europe/Berlin'  # Default fallback
+
+        # Save to Config
+        config = Config('Connection')
+        config.save('internal_address', internal_address)
+        config.save('external_address', external_address)
+        config.save('timezone', timezone)
+
+        # Update shared_state.values
+        shared_state.update('internal_address', internal_address)
+        shared_state.update('external_address', external_address)
+        shared_state.update('timezone', timezone)
+
+        return json.dumps({
+            "success": True,
+            "message": "Core settings saved successfully",
+            "settings": {
+                "internal_address": internal_address,
+                "external_address": external_address,
+                "timezone": timezone
+            }
+        })

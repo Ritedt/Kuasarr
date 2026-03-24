@@ -25,9 +25,11 @@
 | 1 | **Sprint A** — UI/Accessibility Fixes | v1.17.1 | — |
 | 2 | **Sprint B** — Auth Hardening | v1.18.0 | — |
 | 3 | **Sprint C** — Notifications Refactor | v1.18.1 | — |
-| 4 | **Sprint D** — Slow Mode & Timeouts | v1.19.0 | — |
-| 5 | **Sprint E** — Kategorie-System | v1.20.0 | Sprint D (constants/) |
-| 6 | **Sprint F** — WebUI Kategorien | v1.21.0 | Sprint E + Sprint B |
+| 4 | **Sprint G** — Provider Abstraction | v1.22.0 | — |
+| 5 | **Sprint D** — Slow Mode & Timeouts | v1.19.0 | — |
+| 6 | **Sprint E** — Kategorie-System | v1.20.0 | Sprint D (constants/) |
+| 7 | **Sprint F** — WebUI Kategorien | v1.21.0 | Sprint E + Sprint B |
+| 8 | **Sprint H** — Core Settings WebUI | v1.23.0 | — |
 
 ---
 
@@ -588,6 +590,211 @@ In `kuasarr/providers/ui/html_templates.py`:
 **JS-Fetch via `kuasarrApiFetch()`** (aus Sprint B).
 
 **Route:** `/categories` (kein Konflikt mit `/captcha/*`).
+
+---
+
+## Sprint G — Provider Abstraction (Prio: Hoch)
+
+**Ziel:** Quasarr v4.0.0+ Provider-Architektur portieren — zentrales State-Management, Utils, Network-Layer
+**Version:** v1.22.0
+**Quasarr-Ref:** `quasarr/providers/shared_state.py`, `utils.py`, `cloudflare.py` @ v4.3.0
+
+### G1 — Hostname Issues Tracking
+
+Neue Datei: `kuasarr/providers/hostname_issues.py`
+
+```python
+# Funktionen:
+def mark_hostname_issue(shorthand, operation, error_message)
+def clear_hostname_issue(shorthand)
+def get_hostname_issue(shorthand)
+def get_all_hostname_issues()
+def clear_all_hostname_issues()
+
+# Lazy import pattern für DB-Zugriff (vermeidet Zirkelabhängigkeiten)
+def _get_db():
+    from kuasarr.storage.database import DataBase
+    return DataBase()
+```
+
+### G2 — JDownloader Device Request Helper
+
+In `kuasarr/providers/jdownloader.py`:
+
+```python
+def run_device_request(request_name, request_fn, default=None):
+    """Execute JDownloader request with reconnect+retry."""
+    # Implementation mit TokenExpiredException, RequestTimeoutException handling
+```
+
+Re-export in `shared_state.py` für Backward Compatibility.
+
+### G3 — Utils Erweiterung
+
+In `kuasarr/providers/utils.py` ergänzen:
+
+```python
+# Payload für Download-API
+def generate_download_link(shared_state, title, url, size_mb, password, imdb_id, source_key)
+def parse_payload(payload_str)
+
+# Mirror-Normalisierung (für Sprint E)
+MIRROR_TLD_MAP = {
+    "ddl.to": "ddownload",
+    "ddownload.com": "ddownload",
+}
+def normalize_mirror_name(name: str) -> str
+
+# Title-Cleaning
+def normalize_download_title(title)  # Entfernt Mirror-Marker
+
+# Crypter-Erkennung
+def detect_crypter_type(url)  # Für Status-Check
+
+# Link-Filterung
+def filter_offline_links(links, shared_state, log_func)
+```
+
+### G4 — Network Layer Enhancement
+
+In `kuasarr/providers/network/cloudflare.py`:
+
+```python
+# Neue Funktionen:
+def flaresolverr_post(shared_state, url, data, headers, timeout, session_id)
+def flaresolverr_create_session(shared_state, session_id)
+def flaresolverr_destroy_session(shared_state, session_id)
+```
+
+Timeout-Parameter konfigurierbar machen.
+
+### G5 — Session Manager (Optional)
+
+Neue Datei: `kuasarr/providers/sessions/manager.py`
+
+```python
+# Unified session interface (zusätzlich zu bestehenden session files)
+def create_session(hostname, shared_state, credentials=None)
+def validate_session(hostname, shared_state)
+def get_or_create_session(hostname, shared_state, credentials=None)
+def invalidate_session(hostname, shared_state)
+```
+
+### G6 — Constants Module (Basis)
+
+Neue Datei: `kuasarr/constants/__init__.py` (minimal für Sprint G):
+
+```python
+# Timeouts
+DOWNLOAD_REQUEST_TIMEOUT_SECONDS = 30
+SESSION_REQUEST_TIMEOUT_SECONDS = 30
+
+# Regex Patterns
+SEASON_EP_REGEX = re.compile(r"(?i)(?:S\d{1,3}(?:E\d{1,3}(?:-\d{1,3})?)?|S\d{1,3}-\d{1,3})")
+MOVIE_REGEX = re.compile(r"^(?!.*(?:S\d{1,3}(?:E\d{1,3}(?:-\d{1,3})?)?|S\d{1,3}-\d{1,3})).*$", re.IGNORECASE)
+
+# Sprint D erweitert dies mit Kategorien, Notifications etc.
+```
+
+### Integration & Testing
+
+| Komponente | Test |
+|------------|------|
+| `parse_payload()` / `generate_download_link()` | Roundtrip-Test |
+| `normalize_mirror_name()` | Verschiedene TLDs |
+| `run_device_request()` | JDownloader Reconnect |
+| Hostname Issues | DB-Persistenz |
+
+**Was NICHT übernommen wird:**
+- `quasarr/providers/sessions/al.py` etc. (Quasarr-spezifisch)
+- SponsorsHelper-Referenzen
+- Komplexe Category-Vererbung (kommt in Sprint E)
+
+---
+
+## Sprint H — Core Settings WebUI (Prio: Mittel)
+
+**Ziel:** Interne/Externe Adressen, Zeitzone und weitere Core-Settings über WebUI konfigurierbar machen
+**Version:** v1.23.0
+
+### H1 — Core Settings API
+
+Neue API-Endpunkte in `kuasarr/api/config/__init__.py`:
+
+```python
+@app.get("/api/settings/core")
+@require_api_key
+def get_core_settings():
+    """Liefert aktuelle Core-Settings: internal_address, external_address, timezone"""
+    return {
+        "internal_address": shared_state.values.get("internal_address", ""),
+        "external_address": shared_state.values.get("external_address", ""),
+        "timezone": shared_state.values.get("timezone", "Europe/Berlin"),
+    }
+
+@app.post("/api/settings/core")
+@require_api_key
+def save_core_settings():
+    """Speichert Core-Settings in kuasarr.ini"""
+    # Validierung der Adressen (URL-Format)
+    # Zeitzone gegen Liste validieren (pytz.all_timezones)
+    # In Config speichern
+    # shared_state.values aktualisieren
+```
+
+### H2 — Core Settings WebUI
+
+Neue Seite `/core-settings` oder Integration in bestehende Settings:
+
+```python
+def render_core_settings_form(current_values):
+    return render_form(
+        header="Core Settings",
+        form=f'''
+        <div class="form-group">
+            <label>Internal Address</label>
+            <input type="url" name="internal_address" value="{current_values['internal_address']}"
+                   placeholder="http://localhost:8080" required>
+            <small>Für JDownloader Callback (muss von JD erreichbar sein)</small>
+        </div>
+        <div class="form-group">
+            <label>External Address</label>
+            <input type="url" name="external_address" value="{current_values['external_address']}"
+                   placeholder="http://kuasarr.example.com:8080">
+            <small>Für externe Links (optional)</small>
+        </div>
+        <div class="form-group">
+            <label>Timezone</label>
+            <select name="timezone">
+                {render_timezone_options(current_values['timezone'])}
+            </select>
+        </div>
+        ''',
+        active_page="/settings"
+    )
+```
+
+### H3 — Validierung & Fehlerbehandlung
+
+```python
+def validate_url(url: str, allow_empty: bool = False) -> Tuple[bool, str]:
+    """Prüft URL-Format, gibt (is_valid, error_message) zurück"""
+
+def validate_timezone(tz: str) -> bool:
+    """Prüft ob Zeitzone in ptz.all_timezones existiert"""
+```
+
+### H4 — Live-Update ohne Restart
+
+- Settings sofort in `shared_state.values` aktualisieren
+- Zeitzone via `os.environ['TZ']` + `time.tzset()` anwenden (Linux)
+- Oder: App weist auf Restart hin bei TZ-Änderung
+
+### H5 — Sicherheit
+
+- URLs nur mit http/https Schema erlauben
+- Keine localhost-Exploits (nur explizit erlaubte interne IPs)
+- Internal Address muss erreichbar sein (optionaler Connectivity-Check)
 
 ---
 

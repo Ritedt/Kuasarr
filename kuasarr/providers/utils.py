@@ -3,14 +3,20 @@
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 """
-Utility functions for string sanitization, conversion, and link status checking.
+Utility functions for string sanitization, conversion, link status checking,
+and download payload generation.
 """
 
+import base64
+import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
+from typing import Any, Dict, Optional
+from urllib.parse import urlencode
 
 from kuasarr.providers.log import debug
+from kuasarr.storage.config import Config
 
 __all__ = [
     "sanitize_title",
@@ -18,8 +24,349 @@ __all__ = [
     "convert_to_mb",
     "generate_status_url",
     "check_links_online_status",
+    "generate_download_link",
+    "parse_payload",
+    "normalize_mirror_name",
+    "normalize_download_title",
+    "detect_crypter_type",
 ]
 
+
+# =============================================================================
+# MIRROR NORMALIZATION
+# =============================================================================
+
+MIRROR_TLD_MAP = {
+    # ddownload aliases
+    "ddl.to": "ddownload",
+    "ddownload.com": "ddownload",
+    "ddl": "ddownload",
+    "ddlto": "ddownload",
+    "ucdn": "ddownload",
+    # rapidgator aliases
+    "rg": "rapidgator",
+    "rapidgator.net": "rapidgator",
+    # 1fichier aliases
+    "1fichier.com": "1fichier",
+    "alterupload": "1fichier",
+    "cjoint": "1fichier",
+    "desfichiers": "1fichier",
+    "dfichiers": "1fichier",
+    "dl4free": "1fichier",
+    "megadl": "1fichier",
+    "mesfichiers": "1fichier",
+    "pjointe": "1fichier",
+    "piecejointe": "1fichier",
+    "tenvoi": "1fichier",
+    # turbobit aliases
+    "turbobit.net": "turbobit",
+    "depositfiles": "turbobit",
+    "dlbit": "turbobit",
+    "fayloobmennik": "turbobit",
+    "filedeluxe": "turbobit",
+    "filemaster": "turbobit",
+    "flacmania": "turbobit",
+    "filhost": "turbobit",
+    "hotshare": "turbobit",
+    "ifolder": "turbobit",
+    "rapidfile": "turbobit",
+    "sibit": "turbobit",
+    "tb": "turbobit",
+    "tourbobit": "turbobit",
+    "trbbt": "turbobit",
+    "trubobit": "turbobit",
+    "turb": "turbobit",
+    "turbo": "turbobit",
+    "turbabit": "turbobit",
+    "turbobeet": "turbobit",
+    "turbobi": "turbobit",
+    "turbobbit": "turbobit",
+    "turbobif": "turbobit",
+    "turbobit5": "turbobit",
+    "turbobita": "turbobit",
+    "turbobite": "turbobit",
+    "turbobith": "turbobit",
+    "turbobitn": "turbobit",
+    "turbobitt": "turbobit",
+    "turbobiyt": "turbobit",
+    "turbobyt": "turbobit",
+    "turbobyte": "turbobit",
+    "turboot": "turbobit",
+    "turboobit": "turbobit",
+    "turobit": "turbobit",
+    "twobit": "turbobit",
+    "wayupload": "turbobit",
+    "xrfiles": "turbobit",
+    # keep2share aliases
+    "keep2share.cc": "keep2share",
+    "fboom": "keep2share",
+    "fileboom": "keep2share",
+    "k2s": "keep2share",
+    "k2share": "keep2share",
+    "keep2": "keep2share",
+    "keep2s": "keep2share",
+    "publish2": "keep2share",
+    "tezfiles": "keep2share",
+    # nitroflare aliases
+    "nitroflare.com": "nitroflare",
+    "nitro": "nitroflare",
+    # filer aliases
+    "filer.net": "filer",
+    "filernet": "filer",
+    # hitfile aliases
+    "hitfile.net": "hitfile",
+    "hil": "hitfile",
+    # clicknupload aliases
+    "clicknupload.org": "clicknupload",
+    "clickndownload": "clicknupload",
+}
+
+
+def normalize_mirror_name(name: str) -> str:
+    """
+    Normalize mirror TLD to canonical provider name.
+    
+    Args:
+        name: Mirror hostname or name (e.g., "ddl.to", "ddownload.com")
+        
+    Returns:
+        Canonical provider name (e.g., "ddownload")
+    """
+    if not name:
+        return ""
+    
+    name_lower = name.lower().strip()
+    
+    # Direct lookup in TLD map
+    if name_lower in MIRROR_TLD_MAP:
+        return MIRROR_TLD_MAP[name_lower]
+    
+    # Extract hostname if URL is provided
+    if "://" in name_lower:
+        from urllib.parse import urlparse
+        parsed = urlparse(name_lower)
+        name_lower = parsed.hostname or name_lower
+    
+    # Remove www. prefix
+    if name_lower.startswith("www."):
+        name_lower = name_lower[4:]
+    
+    # Try lookup again after cleaning
+    if name_lower in MIRROR_TLD_MAP:
+        return MIRROR_TLD_MAP[name_lower]
+    
+    # Extract root domain (e.g., "ddl.to" -> "ddl")
+    if "." in name_lower:
+        root = name_lower.split(".")[0]
+        if root in MIRROR_TLD_MAP:
+            return MIRROR_TLD_MAP[root]
+    
+    # Return cleaned name as-is if no mapping found
+    return name_lower
+
+
+# =============================================================================
+# TITLE CLEANING
+# =============================================================================
+
+def normalize_download_title(title: str) -> str:
+    """
+    Remove mirror markers like /Mirror 1/, /Vip/ from titles.
+    
+    Args:
+        title: Raw download title that may contain mirror markers
+        
+    Returns:
+        Cleaned title without mirror/vip markers
+    """
+    if not title:
+        return ""
+    
+    normalized = str(title).rstrip()
+    
+    # Remove *mirror* suffixes (case insensitive)
+    normalized = re.sub(r"\s*\*mirror\*\s*$", "", normalized, flags=re.IGNORECASE)
+    
+    # Remove /Mirror X/ patterns
+    normalized = re.sub(r"\s*/\s*Mirror\s+\d+\s*/?\s*$", "", normalized, flags=re.IGNORECASE)
+    
+    # Remove /Vip/ patterns
+    normalized = re.sub(r"\s*/\s*Vip\s*/?\s*$", "", normalized, flags=re.IGNORECASE)
+    
+    # Remove [Mirror X] patterns
+    normalized = re.sub(r"\s*\[\s*Mirror\s+\d+\s*\]\s*$", "", normalized, flags=re.IGNORECASE)
+    
+    # Remove (Mirror X) patterns
+    normalized = re.sub(r"\s*\(\s*Mirror\s+\d+\s*\)\s*$", "", normalized, flags=re.IGNORECASE)
+    
+    return normalized.rstrip()
+
+
+# =============================================================================
+# PAYLOAD FUNCTIONS
+# =============================================================================
+
+def generate_download_link(
+    shared_state,
+    title: str,
+    url: str,
+    size_mb: int,
+    password: str = "",
+    imdb_id: str = "",
+    source_key: str = ""
+) -> str:
+    """
+    Generate base64-encoded download payload for /download/ endpoint.
+    
+    The payload format is: title|url|size_mb|password|imdb_id|source_key
+    Returns format: {internal_address}/download/?payload={base64}&apikey={key}
+    
+    Args:
+        shared_state: Shared state object containing internal_address
+        title: Release title
+        url: Source URL
+        size_mb: Size in megabytes
+        password: Password for the release (optional)
+        imdb_id: IMDb ID (optional)
+        source_key: Source shorthand, e.g., 'al', 'dd' (optional)
+        
+    Returns:
+        Full download URL with encoded payload
+    """
+    # Ensure all fields are strings and handle None
+    title = str(title) if title else ""
+    url = str(url) if url else ""
+    size_mb_str = str(size_mb) if size_mb is not None else "0"
+    password = str(password) if password else ""
+    imdb_id = str(imdb_id) if imdb_id else ""
+    source_key = str(source_key) if source_key else ""
+    
+    # Build pipe-delimited payload
+    raw_payload = f"{title}|{url}|{size_mb_str}|{password}|{imdb_id}|{source_key}"
+    
+    # Base64 encode using URL-safe encoding
+    encoded_payload = base64.urlsafe_b64encode(
+        raw_payload.encode("utf-8")
+    ).decode("utf-8")
+    
+    # Build query string with API key
+    query = urlencode({
+        "payload": encoded_payload,
+        "apikey": Config("API").get("key") or "",
+    })
+    
+    internal_address = shared_state.values.get("internal_address", "")
+    return f"{internal_address}/download/?{query}"
+
+
+def parse_payload(payload_str: str) -> Optional[Dict[str, Any]]:
+    """
+    Parse base64 payload back to components.
+    
+    Handles kuasarr:// prefix, base64 decode, and JSON-like parsing.
+    Expected format: title|url|size_mb|password|imdb_id|source_key
+    
+    Args:
+        payload_str: Base64-encoded payload string (may include kuasarr:// prefix)
+        
+    Returns:
+        Dict with keys: title, url, size_mb, password, imdb_id, source_key
+        Returns None if parsing fails
+    """
+    if not payload_str:
+        return None
+    
+    try:
+        # Handle kuasarr:// prefix
+        clean_payload = payload_str
+        if clean_payload.startswith("kuasarr://"):
+            clean_payload = clean_payload[10:]  # Remove prefix
+        
+        # Handle URL-safe base64 padding
+        # Base64 strings may have padding stripped
+        padding_needed = 4 - (len(clean_payload) % 4)
+        if padding_needed != 4:
+            clean_payload += "=" * padding_needed
+        
+        # Decode base64
+        decoded_bytes = base64.urlsafe_b64decode(clean_payload)
+        decoded = decoded_bytes.decode("utf-8")
+        
+        # Split by pipe delimiter
+        parts = decoded.split("|")
+        
+        if len(parts) != 6:
+            debug(f"Invalid payload format: expected 6 fields, got {len(parts)}")
+            return None
+        
+        title, url, size_mb, password, imdb_id, source_key = parts
+        
+        return {
+            "title": normalize_download_title(title),
+            "url": url,
+            "size_mb": size_mb,
+            "password": password if password else None,
+            "imdb_id": imdb_id if imdb_id else None,
+            "source_key": source_key if source_key else None,
+        }
+        
+    except (base64.binascii.Error, UnicodeDecodeError) as e:
+        debug(f"Base64 decoding error: {e}")
+        return None
+    except Exception as e:
+        debug(f"Payload parsing error: {e}")
+        return None
+
+
+# =============================================================================
+# CRYPTER DETECTION
+# =============================================================================
+
+def detect_crypter_type(url: str) -> Optional[str]:
+    """
+    Detect crypter type for status checking (e.g., 'nk', 'fk', etc.).
+    
+    Args:
+        url: The URL to analyze
+        
+    Returns:
+        Crypter type string or None if not detected
+    """
+    if not url:
+        return None
+    
+    url_lower = url.lower()
+    
+    # hide.cx - supports status checking
+    if "hide." in url_lower:
+        return "hide"
+    
+    # tolink.to - supports status checking
+    elif "tolink." in url_lower:
+        return "tolink"
+    
+    # filecrypt - common crypter
+    elif "filecrypt." in url_lower:
+        return "filecrypt"
+    
+    # keeplinks - common crypter
+    elif "keeplinks." in url_lower:
+        return "keeplinks"
+    
+    # nkonsole / newgeneration (nk)
+    elif any(domain in url_lower for domain in ["nkonsole.", "newgeneration."]):
+        return "nk"
+    
+    # filekicker / fk (fk)
+    elif any(domain in url_lower for domain in ["filekicker.", "fk."]):
+        return "fk"
+    
+    return None
+
+
+# =============================================================================
+# EXISTING FUNCTIONS (unchanged)
+# =============================================================================
 
 def sanitize_title(title: str) -> str:
     """

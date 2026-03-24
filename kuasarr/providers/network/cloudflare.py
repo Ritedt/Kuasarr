@@ -3,10 +3,14 @@
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 import threading
-from urllib.parse import urlparse
+from typing import Dict, Optional
+from urllib.parse import urlencode, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+
+from kuasarr.constants import DOWNLOAD_REQUEST_TIMEOUT_SECONDS, SESSION_REQUEST_TIMEOUT_SECONDS
+from kuasarr.providers.log import debug, info
 
 
 def _is_valid_flaresolverr_url(url: str) -> bool:
@@ -18,8 +22,18 @@ def _is_valid_flaresolverr_url(url: str) -> bool:
         return False
 
 
+def _get_flaresolverr_url(shared_state) -> Optional[str]:
+    """Get and validate FlareSolverr URL from shared state."""
+    flaresolverr_url = shared_state.values["config"]('FlareSolverr').get('url')
+    if not flaresolverr_url:
+        return None
+    if not _is_valid_flaresolverr_url(flaresolverr_url):
+        info(f'FlareSolverr URL invalid or unsupported scheme: "{flaresolverr_url}"')
+        return None
+    return flaresolverr_url
+
+
 def _check_flaresolverr_availability(flaresolverr_url):
-    from kuasarr.providers.log import info
     if not _is_valid_flaresolverr_url(flaresolverr_url):
         info(f'FlareSolverr URL invalid or unsupported scheme: "{flaresolverr_url}"')
         return
@@ -80,17 +94,16 @@ def is_cloudflare_challenge(html: str) -> bool:
     return False
 
 
-def update_session_via_flaresolverr(info,
-                                    shared_state,
-                                    sess,
-                                    target_url: str,
-                                    timeout: int = 60):
-    flaresolverr_url = shared_state.values["config"]('FlareSolverr').get('url')
+def update_session_via_flaresolverr(
+    info,
+    shared_state,
+    sess,
+    target_url: str,
+    timeout: int = 60
+):
+    flaresolverr_url = _get_flaresolverr_url(shared_state)
     if not flaresolverr_url:
         info("Cannot proceed without FlareSolverr. Please set it up to try again!")
-        return False
-    if not _is_valid_flaresolverr_url(flaresolverr_url):
-        info(f'FlareSolverr URL invalid or unsupported scheme: "{flaresolverr_url}"')
         return False
 
     fs_payload = {
@@ -140,22 +153,40 @@ def update_session_via_flaresolverr(info,
     return {"session": sess, "user_agent": solution.get("userAgent", None)}
 
 
-def ensure_session_cf_bypassed(info, shared_state, session, url, headers):
+def ensure_session_cf_bypassed(
+    info,
+    shared_state,
+    session,
+    url,
+    headers,
+    timeout: Optional[int] = None
+):
     """
     Performs a GET and, if Cloudflare challenge or 403 is present, tries FlareSolverr.
     Returns tuple: (session, headers, response) or (None, None, None) on failure.
+    
+    Args:
+        info: Logger function
+        shared_state: Shared state object
+        session: requests.Session instance
+        url: Target URL to fetch
+        headers: Headers dict
+        timeout: Optional timeout in seconds (defaults to DOWNLOAD_REQUEST_TIMEOUT_SECONDS)
     """
+    if timeout is None:
+        timeout = DOWNLOAD_REQUEST_TIMEOUT_SECONDS
+
     try:
-        resp = session.get(url, headers=headers, timeout=30)
-        info(f"Initial GET: status={resp.status_code}, CF challenge={is_cloudflare_challenge(resp.text)}")
+        resp = session.get(url, headers=headers, timeout=timeout)
+        debug(f"Initial GET: status={resp.status_code}, CF challenge={is_cloudflare_challenge(resp.text)}")
     except requests.RequestException as e:
         info(f"Initial GET failed: {e}")
         return None, None, None
 
     # If page is protected, try FlareSolverr
     if resp.status_code == 403 or is_cloudflare_challenge(resp.text):
-        info("Encountered Cloudflare protection. Solving challenge with FlareSolverr...")
-        flaresolverr_result = update_session_via_flaresolverr(info, shared_state, session, url)
+        debug("Encountered Cloudflare protection. Solving challenge with FlareSolverr...")
+        flaresolverr_result = update_session_via_flaresolverr(info, shared_state, session, url, timeout=timeout)
         if not flaresolverr_result or flaresolverr_result.get("error"):
             error_msg = flaresolverr_result.get("error") if flaresolverr_result else "No result"
             info(f"FlareSolverr failed: {error_msg}")
@@ -171,7 +202,7 @@ def ensure_session_cf_bypassed(info, shared_state, session, url, headers):
 
         # re-fetch using the new session/headers
         try:
-            resp = session.get(url, headers=headers, timeout=30)
+            resp = session.get(url, headers=headers, timeout=timeout)
         except requests.RequestException as e:
             info(f"GET after FlareSolverr failed: {e}")
             return None, None, None
@@ -203,22 +234,39 @@ class FlareSolverrResponse:
             raise requests.HTTPError(f"{self.status_code} Error for URL: {self.url}")
 
 
-def flaresolverr_get(shared_state, url, timeout=60):
+def flaresolverr_get(
+    shared_state,
+    url: str,
+    timeout: Optional[int] = None,
+    session_id: Optional[str] = None
+) -> FlareSolverrResponse:
     """
     Core function for performing a GET request via FlareSolverr only.
     Used internally by FlareSolverrSession.get()
+    
+    Args:
+        shared_state: Shared state object
+        url: Target URL
+        timeout: Optional timeout in seconds (defaults to DOWNLOAD_REQUEST_TIMEOUT_SECONDS)
+        session_id: Optional persistent session ID
+        
+    Returns:
+        FlareSolverrResponse object
     """
-    flaresolverr_url = shared_state.values["config"]('FlareSolverr').get('url')
+    if timeout is None:
+        timeout = DOWNLOAD_REQUEST_TIMEOUT_SECONDS
+
+    flaresolverr_url = _get_flaresolverr_url(shared_state)
     if not flaresolverr_url:
         raise RuntimeError("FlareSolverr URL not configured in shared_state.")
-    if not _is_valid_flaresolverr_url(flaresolverr_url):
-        raise RuntimeError(f"FlareSolverr URL invalid or unsupported scheme: \"{flaresolverr_url}\"")
 
     payload = {
         "cmd": "request.get",
         "url": url,
         "maxTimeout": timeout * 1000
     }
+    if session_id:
+        payload["session"] = session_id
 
     try:
         resp = requests.post(
@@ -229,7 +277,7 @@ def flaresolverr_get(shared_state, url, timeout=60):
         )
         resp.raise_for_status()
     except Exception as e:
-        raise RuntimeError(f"Error communicating with FlareSolverr: {e}")
+        raise RuntimeError(f"Error communicating with FlareSolverr: {e}") from e
 
     data = resp.json()
 
@@ -255,3 +303,151 @@ def flaresolverr_get(shared_state, url, timeout=60):
         headers=fs_headers,
         text=html
     )
+
+
+def flaresolverr_post(
+    shared_state,
+    url: str,
+    data: Optional[Dict] = None,
+    headers: Optional[Dict] = None,
+    timeout: Optional[int] = None,
+    session_id: Optional[str] = None
+) -> FlareSolverrResponse:
+    """
+    Make POST request via FlareSolverr.
+    
+    Args:
+        shared_state: Shared state object
+        url: Target URL
+        data: Optional POST data (dict or string)
+        headers: Optional request headers
+        timeout: Optional timeout in seconds (defaults to DOWNLOAD_REQUEST_TIMEOUT_SECONDS)
+        session_id: Optional persistent session ID
+        
+    Returns:
+        FlareSolverrResponse object
+    """
+    if timeout is None:
+        timeout = DOWNLOAD_REQUEST_TIMEOUT_SECONDS
+
+    flaresolverr_url = _get_flaresolverr_url(shared_state)
+    if not flaresolverr_url:
+        raise RuntimeError("FlareSolverr URL not configured in shared_state.")
+
+    # Encode POST data
+    if isinstance(data, dict):
+        post_data = urlencode(data)
+    else:
+        post_data = data or ""
+
+    payload = {
+        "cmd": "request.post",
+        "url": url,
+        "postData": post_data,
+        "maxTimeout": timeout * 1000,
+    }
+    if session_id:
+        payload["session"] = session_id
+
+    if headers:
+        payload["headers"] = headers
+
+    try:
+        resp = requests.post(
+            flaresolverr_url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=timeout + 10
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        raise RuntimeError(f"Error communicating with FlareSolverr: {e}") from e
+
+    data = resp.json()
+
+    if data.get("status") != "ok":
+        raise RuntimeError(f"FlareSolverr returned error: {data.get('message')}")
+
+    solution = data.get("solution", {})
+    html = solution.get("response", "")
+    status_code = solution.get("status", 200)
+    url = solution.get("url", url)
+
+    fs_headers = {h["name"]: h["value"] for h in solution.get("headers", [])}
+
+    user_agent = solution.get("userAgent")
+    if user_agent and user_agent != shared_state.values.get("user_agent"):
+        shared_state.update("user_agent", user_agent)
+
+    return FlareSolverrResponse(
+        url=url,
+        status_code=status_code,
+        headers=fs_headers,
+        text=html
+    )
+
+
+def flaresolverr_create_session(shared_state, session_id: str) -> bool:
+    """
+    Create persistent FlareSolverr session.
+    
+    Args:
+        shared_state: Shared state object
+        session_id: Session identifier to create
+        
+    Returns:
+        True if session created successfully, False otherwise
+    """
+    flaresolverr_url = _get_flaresolverr_url(shared_state)
+    if not flaresolverr_url:
+        return False
+
+    payload = {"cmd": "sessions.create"}
+    if session_id:
+        payload["session"] = session_id
+
+    try:
+        resp = requests.post(
+            flaresolverr_url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=SESSION_REQUEST_TIMEOUT_SECONDS
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") == "ok":
+            return True
+    except Exception as e:
+        debug(f"Failed to create FlareSolverr session: {e}")
+    return False
+
+
+def flaresolverr_destroy_session(shared_state, session_id: str) -> bool:
+    """
+    Destroy FlareSolverr session.
+    
+    Args:
+        shared_state: Shared state object
+        session_id: Session identifier to destroy
+        
+    Returns:
+        True if session destroyed successfully, False otherwise
+    """
+    flaresolverr_url = _get_flaresolverr_url(shared_state)
+    if not flaresolverr_url:
+        return False
+
+    payload = {"cmd": "sessions.destroy", "session": session_id}
+
+    try:
+        resp = requests.post(
+            flaresolverr_url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=SESSION_REQUEST_TIMEOUT_SECONDS
+        )
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        debug(f"Failed to destroy FlareSolverr session: {e}")
+    return False

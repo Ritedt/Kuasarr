@@ -108,7 +108,8 @@ class Config(object):
         ],
         'Connection': [
             ("internal_address", "str", ""),
-            ("external_address", "str", "")
+            ("external_address", "str", ""),
+            ("timezone", "str", "Europe/Berlin")
         ],
         'PWA': [
             ("install_prompted", "bool", "false")  # Track if PWA install was prompted on Windows EXE

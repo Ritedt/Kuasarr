@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # Kuasarr
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
@@ -23,4 +23,5 @@ def error(string):
     info(f"ERROR: {string}")
 
 
-
+def warn(string):
+    info(f"WARNING: {string}")

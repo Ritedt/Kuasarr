@@ -19,6 +19,7 @@ from kuasarr.storage.sqlite_database import DataBase
 
 # Re-export from submodules for backward compatibility
 from kuasarr.providers.jdownloader import (
+    run_device_request,
     connect_to_jd,
     set_device,
     set_device_from_config,

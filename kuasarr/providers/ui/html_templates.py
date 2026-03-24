@@ -2,6 +2,8 @@
 # Kuasarr
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
+import html
+
 import kuasarr.providers.ui.html_images as images
 from kuasarr.providers.version import get_version
 from kuasarr.providers.auth import is_auth_enabled, is_browser_authenticated
@@ -109,6 +111,36 @@ def render_centered_html(inner_content, footer_content=""):
                     --warning-bg: #2d2a0e;
                     --warning-border: #b7791f;
                 }
+            }
+            /* Manual dark theme override via data attribute */
+            :root[data-theme="dark"] {
+                --bg-color: #121212;
+                --fg-color: #e9ecef;
+                --card-bg: #1e1e1e;
+                --card-shadow: rgba(0, 0, 0, 0.5);
+                --card-border: #4a5568;
+                --primary: #4d8fd4;
+                --primary-hover: #3a7bc8;
+                --secondary: #444444;
+                --secondary-hover: #333333;
+                --code-bg: #2d2d2d;
+                --info-border: #4a8c4a;
+                --setup-border: var(--primary);
+                --divider-color: #444;
+                --border-color: #4a5568;
+                --btn-subtle-bg: #444;
+                --btn-subtle-border: #666;
+                --text-muted: #a0aec0;
+                --link-color: #63b3ed;
+                --success-color: #68d391;
+                --success-bg: #1c4532;
+                --success-border: #276749;
+                --error-color: #fc8181;
+                --error-bg: #3d2d2d;
+                --error-border: #c53030;
+                --warning-color: #f6e05e;
+                --warning-bg: #2d2a0e;
+                --warning-border: #b7791f;
             }
             /* Info box styling */
             .info-box {
@@ -364,30 +396,26 @@ def render_centered_html(inner_content, footer_content=""):
             /* Top navigation */
             .top-nav {
                 display: flex;
-                gap: 0.25rem;
-                flex-wrap: wrap;
                 justify-content: center;
-                margin-bottom: 1.5rem;
-                padding-bottom: 1rem;
-                border-bottom: 1px solid var(--divider-color);
+                gap: 1.5rem;
+                padding: 0.75rem 0;
+                margin-bottom: 1rem;
+                border-bottom: 1px solid var(--border-color, #ddd);
             }
             .nav-link {
-                padding: 0.35rem 0.75rem;
-                border-radius: var(--border-radius);
-                font-size: 0.875rem;
-                color: var(--text-muted);
-                transition: background 0.15s, color 0.15s;
+                color: var(--text-muted, #666);
                 text-decoration: none;
+                font-weight: 500;
+                padding: 0.25rem 0.5rem;
+                border-radius: 4px;
+                transition: color 0.2s;
             }
             .nav-link:hover {
-                background: var(--btn-subtle-bg);
-                color: var(--fg-color);
-                text-decoration: none;
+                color: var(--primary);
             }
             .nav-active {
-                background: var(--btn-subtle-bg);
-                color: var(--fg-color);
-                font-weight: 600;
+                color: var(--primary);
+                border-bottom: 2px solid var(--primary);
             }
             /* footer styling */
             footer {
@@ -586,7 +614,7 @@ def render_nav(active_page=""):
         ("/notifications", "Notifications"),
     ]
     items = "".join(
-        f'<a href="{url}" class="nav-link{"  nav-active" if url == active_page else ""}">{label}</a>'
+        f'<a href="{url}" class="nav-link{" nav-active" if url == active_page else ""}">{label}</a>'
         for url, label in pages
     )
     return f'<nav class="top-nav">{items}</nav>'
@@ -595,7 +623,7 @@ def render_nav(active_page=""):
 def render_form(header, form="", script="", footer_content="", active_page=""):
     nav = render_nav(active_page)
     content = f'''
-    <h1><img src="{images.logo}" type="image/png" alt="kuasarr logo" class="logo"/>kuasarr</h1>
+    <h1><img src="{images.logo}" alt="kuasarr logo" class="logo"/>kuasarr</h1>
     {nav}
     <h2>{header}</h2>
     {form}
@@ -605,7 +633,6 @@ def render_form(header, form="", script="", footer_content="", active_page=""):
 
 
 def render_success(message, timeout=5, optional_text=""):
-    button_html = render_button("Go to Home", "primary", {"id": "nextButton"})
     script = f'''
         <script>
             let counter = {timeout};
@@ -614,29 +641,36 @@ def render_success(message, timeout=5, optional_text=""):
             const interval = setInterval(() => {{
                 counter--;
                 if (info) info.textContent = `Redirecting in ${{counter}}s...`;
-                if (counter === 0) {{
+                if (counter <= 0) {{
                     clearInterval(interval);
                     window.location.href = '/';
+                    return;
                 }}
             }}, 1000);
             btn.onclick = () => {{ clearInterval(interval); window.location.href = '/'; }};
         </script>
     '''
-    content = f'''<h1><img src="{images.logo}" type="image/png" alt="kuasarr logo" class="logo"/>kuasarr</h1>
-    <h2>{message}</h2>
-    {optional_text}
+    button_html = render_button("Go to Home", "primary", {"id": "nextButton"})
+    safe_message = html.escape(message)
+    safe_optional = html.escape(optional_text) if optional_text else ""
+    content = f"""
+    <h1><img src="{images.logo}" alt="kuasarr logo" class="logo"/>kuasarr</h1>
+    <h2>{safe_message}</h2>
+    {safe_optional}
     <p id="redirect-info" style="color:var(--text-muted);font-size:0.85rem;">Redirecting in {timeout}s...</p>
     {button_html}
     {script}
-    '''
+    """
     return render_centered_html(content)
 
 
 def render_success_no_wait(message, optional_text=""):
     button_html = render_button("Continue", "primary", {"onclick": "window.location.href='/'"})
-    content = f'''<h1><img src="{images.logo}" type="image/png" alt="kuasarr logo" class="logo"/>kuasarr</h1>
-    <h2>{message}</h2>
-    {optional_text}
+    safe_message = html.escape(message)
+    safe_optional = html.escape(optional_text) if optional_text else ""
+    content = f'''<h1><img src="{images.logo}" alt="kuasarr logo" class="logo"/>kuasarr</h1>
+    <h2>{safe_message}</h2>
+    {safe_optional}
     {button_html}
     '''
     return render_centered_html(content)
@@ -644,7 +678,8 @@ def render_success_no_wait(message, optional_text=""):
 
 def render_fail(message):
     button_html = render_button("Back", "secondary", {"onclick": "window.location.href='/'"})
-    return render_centered_html(f"""<h1><img src="{images.logo}" type="image/png" alt="kuasarr logo" class="logo"/>kuasarr</h1>
-        <h2>{message}</h2>
+    safe_message = html.escape(message)
+    return render_centered_html(f"""<h1><img src="{images.logo}" alt="kuasarr logo" class="logo"/>kuasarr</h1>
+        <h2>{safe_message}</h2>
         {button_html}
     """)

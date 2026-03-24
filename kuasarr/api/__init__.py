@@ -24,6 +24,7 @@ from kuasarr.providers.log import debug
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html, render_success_no_wait
 from kuasarr.providers.web_server import Server
 from kuasarr.storage.config import Config
+from kuasarr.storage.setup.notifications import initialize_notification_settings
 
 
 def get_api(shared_state_dict, shared_state_lock):
@@ -43,6 +44,9 @@ def get_api(shared_state_dict, shared_state_lock):
     setup_notifications_routes(app, shared_state)
     setup_search_routes(app)
     setup_packages_routes(app)
+
+    # Initialize notification settings from storage
+    initialize_notification_settings(shared_state)
 
     # Serve static files (logo, PWA assets)
     @app.get('/static/<filename:path>')

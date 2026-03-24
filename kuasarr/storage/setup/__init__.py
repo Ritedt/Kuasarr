@@ -2,6 +2,8 @@
 # Kuasarr
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
+"""Storage setup package for database initialization."""
+
 import os
 import sys
 
@@ -286,7 +288,7 @@ def hostnames_config(shared_state):
     @app.get('/')
     def hostname_form():
         message = """<p>
-          If you're having trouble setting this up, take a closer look at 
+          If you're having trouble setting this up, take a closer look at
           <a href="https://github.com/rix1337/Quasarr?tab=readme-ov-file#instructions" target="_blank" rel="noopener noreferrer">
             step one of these instructions.
           </a>
@@ -312,7 +314,7 @@ def dbc_credentials_config(shared_state):
         default_service = (captcha_cfg.get('service') or 'dbc').lower().strip()
         default_authtoken = captcha_cfg.get('dbc_authtoken') or ""
         default_twocaptcha = captcha_cfg.get('twocaptcha_api_key') or ""
-        
+
         form_html = f'''
         <p>Choose your captcha service and provide your API token.</p>
         <form action="/api/dbc_credentials" method="post" id="captchaForm">
@@ -321,7 +323,7 @@ def dbc_credentials_config(shared_state):
                 <option value="dbc" {'selected' if default_service == 'dbc' else ''}>DeathByCaptcha</option>
                 <option value="2captcha" {'selected' if default_service == '2captcha' else ''}>2Captcha (50% cheaper for CutCaptcha)</option>
             </select><br><br>
-            
+
             <div id="dbc_fields" style="display: {'block' if default_service == 'dbc' else 'none'};">
                 <label for="authtoken">DBC API Token</label>
                 <input type="text" id="authtoken" name="authtoken" placeholder="your_api_token" value="{default_authtoken}">
@@ -622,3 +624,33 @@ def jdownloader_config(shared_state):
     info("If needed register here: 'https://my.jdownloader.org/login.html#register'")
     info("Please set your credentials now, to allow Quasarr to launch!")
     return Server(app, listen='0.0.0.0', port=shared_state.values['port']).serve_temporarily()
+
+
+# Export notification setup functions
+from kuasarr.storage.setup.notifications import (
+    get_notification_settings_data,
+    initialize_notification_settings,
+    refresh_notification_settings,
+    save_notification_settings,
+    send_notification_test,
+)
+
+__all__ = [
+    # Setup functions
+    "add_static_route",
+    "connection_config",
+    "dbc_credentials_config",
+    "flaresolverr_config",
+    "hostname_credentials_config",
+    "hostname_form_html",
+    "hostnames_config",
+    "jdownloader_config",
+    "path_config",
+    "save_hostnames",
+    # Notification functions
+    "get_notification_settings_data",
+    "initialize_notification_settings",
+    "refresh_notification_settings",
+    "save_notification_settings",
+    "send_notification_test",
+]

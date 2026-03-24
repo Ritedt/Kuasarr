@@ -2,6 +2,8 @@
 # Kuasarr
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
+import html
+
 import kuasarr.providers.ui.html_images as images
 from kuasarr.providers.version import get_version
 from kuasarr.providers.auth import is_auth_enabled, is_browser_authenticated
@@ -415,16 +417,6 @@ def render_centered_html(inner_content, footer_content=""):
                 color: var(--primary);
                 border-bottom: 2px solid var(--primary);
             }
-            body.dark .top-nav {
-                border-color: var(--border-color-dark, #4a5568);
-            }
-            body.dark .nav-link {
-                color: var(--text-muted-dark, #a0aec0);
-            }
-            body.dark .nav-active {
-                color: #4d8fd4;
-                border-color: #4d8fd4;
-            }
             /* footer styling */
             footer {
                 text-align: center;
@@ -631,7 +623,7 @@ def render_nav(active_page=""):
 def render_form(header, form="", script="", footer_content="", active_page=""):
     nav = render_nav(active_page)
     content = f'''
-    <h1><img src="{images.logo}" type="image/png" alt="kuasarr logo" class="logo"/>kuasarr</h1>
+    <h1><img src="{images.logo}" alt="kuasarr logo" class="logo"/>kuasarr</h1>
     {nav}
     <h2>{header}</h2>
     {form}
@@ -652,16 +644,19 @@ def render_success(message, timeout=5, optional_text=""):
                 if (counter <= 0) {{
                     clearInterval(interval);
                     window.location.href = '/';
+                    return;
                 }}
             }}, 1000);
             btn.onclick = () => {{ clearInterval(interval); window.location.href = '/'; }};
         </script>
     '''
     button_html = render_button("Go to Home", "primary", {"id": "nextButton"})
+    safe_message = html.escape(message)
+    safe_optional = html.escape(optional_text) if optional_text else ""
     content = f"""
-    <h1><img src="{images.logo}" type="image/png" alt="kuasarr logo" class="logo"/>kuasarr</h1>
-    <h2>{message}</h2>
-    {optional_text}
+    <h1><img src="{images.logo}" alt="kuasarr logo" class="logo"/>kuasarr</h1>
+    <h2>{safe_message}</h2>
+    {safe_optional}
     <p id="redirect-info" style="color:var(--text-muted);font-size:0.85rem;">Redirecting in {timeout}s...</p>
     {button_html}
     {script}
@@ -671,9 +666,11 @@ def render_success(message, timeout=5, optional_text=""):
 
 def render_success_no_wait(message, optional_text=""):
     button_html = render_button("Continue", "primary", {"onclick": "window.location.href='/'"})
-    content = f'''<h1><img src="{images.logo}" type="image/png" alt="kuasarr logo" class="logo"/>kuasarr</h1>
-    <h2>{message}</h2>
-    {optional_text}
+    safe_message = html.escape(message)
+    safe_optional = html.escape(optional_text) if optional_text else ""
+    content = f'''<h1><img src="{images.logo}" alt="kuasarr logo" class="logo"/>kuasarr</h1>
+    <h2>{safe_message}</h2>
+    {safe_optional}
     {button_html}
     '''
     return render_centered_html(content)
@@ -681,7 +678,8 @@ def render_success_no_wait(message, optional_text=""):
 
 def render_fail(message):
     button_html = render_button("Back", "secondary", {"onclick": "window.location.href='/'"})
-    return render_centered_html(f"""<h1><img src="{images.logo}" type="image/png" alt="kuasarr logo" class="logo"/>kuasarr</h1>
-        <h2>{message}</h2>
+    safe_message = html.escape(message)
+    return render_centered_html(f"""<h1><img src="{images.logo}" alt="kuasarr logo" class="logo"/>kuasarr</h1>
+        <h2>{safe_message}</h2>
         {button_html}
     """)

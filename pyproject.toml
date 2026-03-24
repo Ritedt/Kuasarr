@@ -42,3 +42,8 @@ kuasarr = ["static/*.png", "static/*.js", "static/*.html", "static/*.webmanifest
 
 [tool.uv]
 package = true
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.0",
+]

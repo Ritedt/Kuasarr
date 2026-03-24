@@ -202,7 +202,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12'\n          enable-cache: true
 
       - name: Install dependencies
         run: |
@@ -434,7 +434,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12'\n          enable-cache: true
 
       - name: Install build dependencies
         run: |
@@ -488,7 +488,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12'\n          enable-cache: true
 
       - name: Cache PyInstaller Analysis
         uses: actions/cache@v5
@@ -508,8 +508,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv sync
-          uv pip install pyinstaller
+          uv sync --group dev
 
       - name: Patch version.json with beta version
         shell: bash
@@ -762,7 +761,7 @@ jobs:
           fetch-depth: 1
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12'\n          enable-cache: true
 
       - name: Inject version into all version files
         run: |
@@ -805,7 +804,7 @@ jobs:
           fetch-depth: 1
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12'\n          enable-cache: true
 
       - name: Inject version into all version files
         shell: bash
@@ -823,8 +822,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv sync
-          uv pip install pyinstaller
+          uv sync --group dev
       - name: Build EXE
         shell: bash
         env:
@@ -1025,9 +1023,11 @@ jobs:
 
       - name: Upload to PyPI
         if: ${{ !inputs.skip_pypi }}
+        env:
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
         run: |
           set -euo pipefail
-          uvx twine upload ./dist/*.whl -u __token__ -p ${{ secrets.PYPI_TOKEN }}
+          uvx twine upload ./dist/*.whl -u __token__
 
   # ═══════════════════════════════════════════════════════════════
   # CI SUMMARY

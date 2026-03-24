@@ -9,17 +9,20 @@ LABEL maintainer="Ritedt" \
 # Define package name
 ARG PACKAGE_NAME=kuasarr
 
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Install uv (pinned version for reproducible builds)
+COPY --from=ghcr.io/astral-sh/uv:0.11.0 /uv /usr/local/bin/uv
 
 RUN apk add --no-cache \
     python3 \
     python3-dev \
     build-base
 
-# install local package (assumes .whl is in dist/ folder during build)
+# Create venv and install local package (assumes .whl is in dist/ folder during build)
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN python3 -m venv $VIRTUAL_ENV
 COPY dist/*.whl /tmp/
-RUN uv pip install --system /tmp/*.whl && rm /tmp/*.whl && \
+RUN uv pip install /tmp/*.whl && rm /tmp/*.whl && \
     apk del build-base python3-dev
 
 # runtime defaults

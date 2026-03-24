@@ -2,6 +2,7 @@
 # Quasarr
 # Project by https://github.com/rix1337
 
+from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.ui.html_templates import render_form, render_button, render_success
 from kuasarr.storage.setup import hostname_form_html, save_hostnames, dbc_credentials_config
 
@@ -18,6 +19,7 @@ def setup_config(app, shared_state):
         return render_form("Hostnames", hostname_form_html(shared_state, message) + back_button, active_page="/hosters")
 
     @app.post("/api/hostnames")
+    @require_api_key
     def hostnames_api():
         return save_hostnames(shared_state, timeout=1, first_run=False)
 
@@ -75,6 +77,7 @@ def setup_config(app, shared_state):
         return render_form("Configure Captcha Service", form_html, js, active_page="/captcha-config")
 
     @app.post('/api/dbc_credentials')
+    @require_api_key
     def set_dbc_credentials():
         from bottle import response, redirect
         from kuasarr.storage.config import Config
@@ -229,6 +232,7 @@ def setup_config(app, shared_state):
         return render_form("Global Settings", form_html, active_page="/settings")
 
     @app.post('/api/settings')
+    @require_api_key
     def save_settings_api():
         from kuasarr.storage.config import Config
         forms = request.forms

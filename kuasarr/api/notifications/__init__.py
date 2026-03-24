@@ -8,6 +8,7 @@ import re
 
 from bottle import request, response, redirect
 
+from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.ui.html_templates import render_form, render_button
 from kuasarr.storage.config import Config
 
@@ -180,6 +181,7 @@ def setup_notifications_routes(app, shared_state):
         return render_form("Notification Settings", form_html, js, active_page="/notifications")
 
     @app.post('/api/notifications/save')
+    @require_api_key
     def notifications_save():
         cfg = Config('Notifications')
 
@@ -197,6 +199,7 @@ def setup_notifications_routes(app, shared_state):
         redirect('/notifications')
 
     @app.post('/api/notifications/test/discord')
+    @require_api_key
     def notifications_test_discord():
         response.content_type = 'application/json'
         from kuasarr.providers.notifications import send_discord_message
@@ -209,6 +212,7 @@ def setup_notifications_routes(app, shared_state):
             return json.dumps({'success': False, 'error': 'Notification dispatch failed'})
 
     @app.post('/api/notifications/test/telegram')
+    @require_api_key
     def notifications_test_telegram():
         response.content_type = 'application/json'
         from kuasarr.providers.notifications import send_telegram_message

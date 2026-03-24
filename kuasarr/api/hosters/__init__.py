@@ -7,6 +7,7 @@ import json
 from bottle import request, response
 
 from kuasarr.providers import shared_state
+from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.hosters import SUPPORTED_HOSTERS
 from kuasarr.providers.ui.html_templates import render_centered_html, render_button
 from kuasarr.storage.config import Config
@@ -177,6 +178,7 @@ def setup_hosters_routes(app):
         return render_centered_html(html)
 
     @app.get('/api/hosters')
+    @require_api_key
     def get_hosters():
         """Get all hosters with their block status."""
         response.content_type = 'application/json'
@@ -194,6 +196,7 @@ def setup_hosters_routes(app):
         return json.dumps(sorted(result, key=lambda x: x["name"]))
 
     @app.post('/api/hosters/block')
+    @require_api_key
     def block_hoster():
         """Block a specific hoster."""
         response.content_type = 'application/json'
@@ -216,6 +219,7 @@ def setup_hosters_routes(app):
             return json.dumps({"error": str(e)})
 
     @app.post('/api/hosters/unblock')
+    @require_api_key
     def unblock_hoster():
         """Unblock a specific hoster."""
         response.content_type = 'application/json'
@@ -238,6 +242,7 @@ def setup_hosters_routes(app):
             return json.dumps({"error": str(e)})
 
     @app.post('/api/hosters/block-all')
+    @require_api_key
     def block_all_hosters():
         """Block all hosters."""
         response.content_type = 'application/json'
@@ -250,6 +255,7 @@ def setup_hosters_routes(app):
             return json.dumps({"error": str(e)})
 
     @app.post('/api/hosters/unblock-all')
+    @require_api_key
     def unblock_all_hosters():
         """Unblock all hosters."""
         response.content_type = 'application/json'

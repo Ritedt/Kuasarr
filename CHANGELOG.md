@@ -2,6 +2,15 @@
 
 All notable changes to Kuasarr will be documented in this file.
 
+## [1.17.2] - 2026-03-24
+
+### Fixed
+- **Search pagination** — cap of 1000 results is now applied *after* offset/limit slicing, so paginated requests at high offsets return the correct number of results
+- **FlareSolverr startup check** — check is no longer called twice when both `ad` and `al` hostnames are configured
+- **FlareSolverr URL validation** — reject non-http(s) URL schemes before sending requests (prevents unintended network access)
+
+---
+
 ## [1.17.0] - 2026-03-23
 
 ### Added

@@ -3,13 +3,26 @@
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 import threading
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
 
+def _is_valid_flaresolverr_url(url: str) -> bool:
+    """Reject non-http(s) schemes to prevent unintended network access."""
+    try:
+        parsed = urlparse(url)
+        return parsed.scheme in ('http', 'https') and bool(parsed.netloc)
+    except Exception:
+        return False
+
+
 def _check_flaresolverr_availability(flaresolverr_url):
     from kuasarr.providers.log import info
+    if not _is_valid_flaresolverr_url(flaresolverr_url):
+        info(f'FlareSolverr URL invalid or unsupported scheme: "{flaresolverr_url}"')
+        return
     payload = {
         "cmd": "request.get",
         "url": "http://www.google.com/",
@@ -75,6 +88,9 @@ def update_session_via_flaresolverr(info,
     flaresolverr_url = shared_state.values["config"]('FlareSolverr').get('url')
     if not flaresolverr_url:
         info("Cannot proceed without FlareSolverr. Please set it up to try again!")
+        return False
+    if not _is_valid_flaresolverr_url(flaresolverr_url):
+        info(f'FlareSolverr URL invalid or unsupported scheme: "{flaresolverr_url}"')
         return False
 
     fs_payload = {
@@ -195,6 +211,8 @@ def flaresolverr_get(shared_state, url, timeout=60):
     flaresolverr_url = shared_state.values["config"]('FlareSolverr').get('url')
     if not flaresolverr_url:
         raise RuntimeError("FlareSolverr URL not configured in shared_state.")
+    if not _is_valid_flaresolverr_url(flaresolverr_url):
+        raise RuntimeError(f"FlareSolverr URL invalid or unsupported scheme: \"{flaresolverr_url}\"")
 
     payload = {
         "cmd": "request.get",

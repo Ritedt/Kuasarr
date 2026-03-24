@@ -1,5 +1,15 @@
 # Kuasarr — Claude Code Context
 
+## Repository
+
+* **Primary Repository**: `Ritedt/Kuasarr` (GitHub)
+* **Docker Registry**: `ghcr.io/ritedt/kuasarr`
+
+**Note**: The repository `weedo078/Kuasarr` has been archived and is read-only. All active development happens on `Ritedt/Kuasarr`. Ensure your git remote points to the correct repository:
+```bash
+git remote set-url origin git@github.com:Ritedt/Kuasarr.git
+```
+
 ## Project Overview
 
 Kuasarr is a Python-based fork of [quasarr](https://github.com/rix1337/quasarr) that bridges JDownloader 2 with Radarr, Sonarr, and LazyLibrarian. It emulates a Newznab indexer and SABnzbd client, scrapes DDL sites for download links, decrypts CAPTCHA-protected links, and dispatches jobs to JDownloader via My-JDownloader API. It does **not** handle NZB or torrent files.

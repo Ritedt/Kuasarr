@@ -9,7 +9,14 @@ from urllib.parse import urlencode, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from kuasarr.constants import DOWNLOAD_REQUEST_TIMEOUT_SECONDS, SESSION_REQUEST_TIMEOUT_SECONDS
+from kuasarr.constants import (
+    DOWNLOAD_REQUEST_TIMEOUT_SECONDS,
+    SESSION_REQUEST_TIMEOUT_SECONDS,
+    FLARESOLVERR_REQUEST_TIMEOUT_SECONDS,
+    FLARESOLVERR_CHECK_TIMEOUT_SECONDS,
+    get_timeout,
+    get_flaresolverr_max_timeout,
+)
 from kuasarr.providers.log import debug, info
 
 
@@ -47,7 +54,7 @@ def _check_flaresolverr_availability(flaresolverr_url):
             flaresolverr_url,
             headers={"Content-Type": "application/json"},
             json=payload,
-            timeout=35,
+            timeout=get_timeout(FLARESOLVERR_CHECK_TIMEOUT_SECONDS),
         )
         if resp.status_code == 200:
             info(f'FlareSolverr reachable at "{flaresolverr_url}"')
@@ -99,17 +106,20 @@ def update_session_via_flaresolverr(
     shared_state,
     sess,
     target_url: str,
-    timeout: int = 60
+    timeout: int = None
 ):
     flaresolverr_url = _get_flaresolverr_url(shared_state)
     if not flaresolverr_url:
         info("Cannot proceed without FlareSolverr. Please set it up to try again!")
         return False
 
+    # Apply slow mode to timeout
+    effective_timeout = get_timeout(timeout or FLARESOLVERR_REQUEST_TIMEOUT_SECONDS)
+
     fs_payload = {
         "cmd": "request.get",
         "url": target_url,
-        "maxTimeout": timeout * 1000,
+        "maxTimeout": effective_timeout * 1000,
     }
 
     # Send the JSON request to FlareSolverr
@@ -119,7 +129,7 @@ def update_session_via_flaresolverr(
             flaresolverr_url,
             headers=fs_headers,
             json=fs_payload,
-            timeout=timeout + 10
+            timeout=effective_timeout + 10
         )
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
@@ -164,20 +174,20 @@ def ensure_session_cf_bypassed(
     """
     Performs a GET and, if Cloudflare challenge or 403 is present, tries FlareSolverr.
     Returns tuple: (session, headers, response) or (None, None, None) on failure.
-    
+
     Args:
         info: Logger function
         shared_state: Shared state object
         session: requests.Session instance
         url: Target URL to fetch
         headers: Headers dict
-        timeout: Optional timeout in seconds (defaults to DOWNLOAD_REQUEST_TIMEOUT_SECONDS)
+        timeout: Optional timeout in seconds (defaults to DOWNLOAD_REQUEST_TIMEOUT_SECONDS with slow mode)
     """
-    if timeout is None:
-        timeout = DOWNLOAD_REQUEST_TIMEOUT_SECONDS
+    # Apply slow mode to timeout
+    effective_timeout = get_timeout(timeout or DOWNLOAD_REQUEST_TIMEOUT_SECONDS)
 
     try:
-        resp = session.get(url, headers=headers, timeout=timeout)
+        resp = session.get(url, headers=headers, timeout=effective_timeout)
         debug(f"Initial GET: status={resp.status_code}, CF challenge={is_cloudflare_challenge(resp.text)}")
     except requests.RequestException as e:
         info(f"Initial GET failed: {e}")
@@ -186,7 +196,7 @@ def ensure_session_cf_bypassed(
     # If page is protected, try FlareSolverr
     if resp.status_code == 403 or is_cloudflare_challenge(resp.text):
         debug("Encountered Cloudflare protection. Solving challenge with FlareSolverr...")
-        flaresolverr_result = update_session_via_flaresolverr(info, shared_state, session, url, timeout=timeout)
+        flaresolverr_result = update_session_via_flaresolverr(info, shared_state, session, url, timeout=effective_timeout)
         if not flaresolverr_result or flaresolverr_result.get("error"):
             error_msg = flaresolverr_result.get("error") if flaresolverr_result else "No result"
             info(f"FlareSolverr failed: {error_msg}")
@@ -202,7 +212,7 @@ def ensure_session_cf_bypassed(
 
         # re-fetch using the new session/headers
         try:
-            resp = session.get(url, headers=headers, timeout=timeout)
+            resp = session.get(url, headers=headers, timeout=effective_timeout)
         except requests.RequestException as e:
             info(f"GET after FlareSolverr failed: {e}")
             return None, None, None
@@ -243,18 +253,18 @@ def flaresolverr_get(
     """
     Core function for performing a GET request via FlareSolverr only.
     Used internally by FlareSolverrSession.get()
-    
+
     Args:
         shared_state: Shared state object
         url: Target URL
-        timeout: Optional timeout in seconds (defaults to DOWNLOAD_REQUEST_TIMEOUT_SECONDS)
+        timeout: Optional timeout in seconds (defaults to FLARESOLVERR_REQUEST_TIMEOUT_SECONDS with slow mode)
         session_id: Optional persistent session ID
-        
+
     Returns:
         FlareSolverrResponse object
     """
-    if timeout is None:
-        timeout = DOWNLOAD_REQUEST_TIMEOUT_SECONDS
+    # Apply slow mode to timeout
+    effective_timeout = get_timeout(timeout or FLARESOLVERR_REQUEST_TIMEOUT_SECONDS)
 
     flaresolverr_url = _get_flaresolverr_url(shared_state)
     if not flaresolverr_url:
@@ -263,7 +273,7 @@ def flaresolverr_get(
     payload = {
         "cmd": "request.get",
         "url": url,
-        "maxTimeout": timeout * 1000
+        "maxTimeout": effective_timeout * 1000
     }
     if session_id:
         payload["session"] = session_id
@@ -273,7 +283,7 @@ def flaresolverr_get(
             flaresolverr_url,
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=timeout + 10
+            timeout=effective_timeout + 10
         )
         resp.raise_for_status()
     except Exception as e:
@@ -315,20 +325,20 @@ def flaresolverr_post(
 ) -> FlareSolverrResponse:
     """
     Make POST request via FlareSolverr.
-    
+
     Args:
         shared_state: Shared state object
         url: Target URL
         data: Optional POST data (dict or string)
         headers: Optional request headers
-        timeout: Optional timeout in seconds (defaults to DOWNLOAD_REQUEST_TIMEOUT_SECONDS)
+        timeout: Optional timeout in seconds (defaults to FLARESOLVERR_REQUEST_TIMEOUT_SECONDS with slow mode)
         session_id: Optional persistent session ID
-        
+
     Returns:
         FlareSolverrResponse object
     """
-    if timeout is None:
-        timeout = DOWNLOAD_REQUEST_TIMEOUT_SECONDS
+    # Apply slow mode to timeout
+    effective_timeout = get_timeout(timeout or FLARESOLVERR_REQUEST_TIMEOUT_SECONDS)
 
     flaresolverr_url = _get_flaresolverr_url(shared_state)
     if not flaresolverr_url:
@@ -344,7 +354,7 @@ def flaresolverr_post(
         "cmd": "request.post",
         "url": url,
         "postData": post_data,
-        "maxTimeout": timeout * 1000,
+        "maxTimeout": effective_timeout * 1000,
     }
     if session_id:
         payload["session"] = session_id
@@ -357,7 +367,7 @@ def flaresolverr_post(
             flaresolverr_url,
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=timeout + 10
+            timeout=effective_timeout + 10
         )
         resp.raise_for_status()
     except Exception as e:
@@ -390,11 +400,11 @@ def flaresolverr_post(
 def flaresolverr_create_session(shared_state, session_id: str) -> bool:
     """
     Create persistent FlareSolverr session.
-    
+
     Args:
         shared_state: Shared state object
         session_id: Session identifier to create
-        
+
     Returns:
         True if session created successfully, False otherwise
     """
@@ -411,7 +421,7 @@ def flaresolverr_create_session(shared_state, session_id: str) -> bool:
             flaresolverr_url,
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=SESSION_REQUEST_TIMEOUT_SECONDS
+            timeout=get_timeout(SESSION_REQUEST_TIMEOUT_SECONDS)
         )
         resp.raise_for_status()
         data = resp.json()
@@ -425,11 +435,11 @@ def flaresolverr_create_session(shared_state, session_id: str) -> bool:
 def flaresolverr_destroy_session(shared_state, session_id: str) -> bool:
     """
     Destroy FlareSolverr session.
-    
+
     Args:
         shared_state: Shared state object
         session_id: Session identifier to destroy
-        
+
     Returns:
         True if session destroyed successfully, False otherwise
     """
@@ -444,7 +454,7 @@ def flaresolverr_destroy_session(shared_state, session_id: str) -> bool:
             flaresolverr_url,
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=SESSION_REQUEST_TIMEOUT_SECONDS
+            timeout=get_timeout(SESSION_REQUEST_TIMEOUT_SECONDS)
         )
         resp.raise_for_status()
         return True

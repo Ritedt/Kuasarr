@@ -16,6 +16,7 @@ from urllib import parse
 from kuasarr.providers.log import info, debug
 from kuasarr.storage.config import Config
 from kuasarr.storage.sqlite_database import DataBase
+from kuasarr.providers.settings_observer import notify_core_settings_changed
 
 # Re-export from submodules for backward compatibility
 from kuasarr.providers.jdownloader import (
@@ -73,6 +74,8 @@ __all__ = [
     "set_state",
     "update",
     "set_connection_info",
+    "get_core_settings",
+    "reload_core_settings_from_config",
     "set_files",
     "generate_api_key",
     "extract_valid_hostname",
@@ -140,13 +143,60 @@ def update(key, value):
         lock.release()
 
 
-def set_connection_info(internal_address, external_address, port):
+def set_connection_info(internal_address, external_address, port, timezone=None):
     """Set connection info for the web server."""
     if internal_address.count(":") < 2:
         internal_address = f"{internal_address}:{port}"
     update("internal_address", internal_address)
     update("external_address", external_address)
     update("port", port)
+    if timezone:
+        update("timezone", timezone)
+
+
+def get_core_settings():
+    """
+    Get current core settings from shared state.
+
+    Returns:
+        dict with internal_address, external_address, timezone
+    """
+    return {
+        "internal_address": values.get("internal_address", ""),
+        "external_address": values.get("external_address", ""),
+        "timezone": values.get("timezone", "Europe/Berlin"),
+        "port": values.get("port", 9999)
+    }
+
+
+def reload_core_settings_from_config():
+    """
+    Reload core settings from Config into shared state.
+    Called when settings are changed externally (e.g., via API).
+
+    Returns:
+        dict with the reloaded settings
+    """
+    config = Config('Connection')
+    internal_address = config.get('internal_address') or values.get('internal_address', '')
+    external_address = config.get('external_address') or values.get('external_address', '')
+    timezone = config.get('timezone') or 'Europe/Berlin'
+    port = values.get('port', 9999)
+
+    # Ensure internal_address includes port
+    if internal_address and ':' not in internal_address.replace('://', '').split('/')[0]:
+        internal_address = f"{internal_address}:{port}"
+
+    update("internal_address", internal_address)
+    update("external_address", external_address)
+    update("timezone", timezone)
+
+    return {
+        "internal_address": internal_address,
+        "external_address": external_address,
+        "timezone": timezone,
+        "port": port
+    }
 
 
 def set_files(config_path):

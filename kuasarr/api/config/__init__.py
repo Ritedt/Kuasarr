@@ -2,7 +2,7 @@
 # Quasarr
 # Project by https://github.com/rix1337
 
-from kuasarr.providers.auth import require_api_key
+from kuasarr.providers.auth import require_api_key, require_csrf_token, rate_limit, get_csrf_token
 from kuasarr.providers.ui.html_templates import render_form, render_button, render_success
 from kuasarr.storage.setup import hostname_form_html, save_hostnames, dbc_credentials_config
 
@@ -269,7 +269,7 @@ def setup_config(app, shared_state):
         return render_success("All settings saved successfully! Some changes might require a restart.", 5)
 
     # ============================================================================
-    # Sprint H1 — Core Settings API
+    # Sprint H1/H3 — Core Settings API with Enhanced Validation
     # ============================================================================
 
     @app.get('/api/settings/core')
@@ -294,63 +294,193 @@ def setup_config(app, shared_state):
 
     @app.post('/api/settings/core')
     @require_api_key
+    @require_csrf_token
+    @rate_limit(max_requests=5, window=60)  # Sprint H5: Rate limiting - 5 requests per minute
     def save_core_settings():
-        """Saves core settings to kuasarr.ini"""
+        """Saves core settings to kuasarr.ini with enhanced security validation (Sprint H5)"""
         from bottle import response, request
         import json
+        import re
+        import socket
         from urllib.parse import urlparse
         from zoneinfo import available_timezones
         from kuasarr.storage.config import Config
+        from kuasarr.providers.log import audit_core_settings_change, audit_security_event
 
         response.content_type = 'application/json'
+
+        # Get client IP for audit logging
+        client_ip = request.environ.get('REMOTE_ADDR', 'unknown')
 
         # Read POST JSON body
         try:
             payload = request.json or {}
         except Exception:
             response.status = 400
-            return json.dumps({"success": False, "error": "Invalid JSON body"})
+            return json.dumps({"success": False, "error": "Invalid JSON body. Please ensure you're sending valid JSON."})
 
         internal_address = (payload.get('internal_address') or '').strip()
         external_address = (payload.get('external_address') or '').strip()
         timezone = (payload.get('timezone') or '').strip()
 
-        # Validate URL format for internal/external address
-        def _is_valid_url(url):
+        errors = {}
+
+        # Sprint H5: Enhanced URL validation with security checks
+        def _is_valid_url(url, allow_empty=False, is_external=False):
+            """Validate URL with security checks for SSRF prevention."""
             if not url:
-                return False
+                return allow_empty
             try:
                 parsed = urlparse(url)
-                return parsed.scheme in ('http', 'https') and bool(parsed.netloc)
+
+                # Check scheme - only http/https allowed
+                if parsed.scheme not in ('http', 'https'):
+                    return False
+
+                # Must have a netloc (hostname)
+                if not parsed.netloc:
+                    return False
+
+                # Sprint H5: Reject URLs with userinfo (http://user:pass@host)
+                if parsed.username or parsed.password:
+                    return False
+
+                # Sprint H5: Reject file://, ftp://, etc. (already handled by scheme check)
+                # Additional check for dangerous schemes in the URL
+                dangerous_schemes = ('file', 'ftp', 'sftp', 'ssh', 'telnet', 'ldap', 'gopher')
+                if parsed.scheme in dangerous_schemes:
+                    return False
+
+                hostname = parsed.hostname
+                if not hostname:
+                    return False
+
+                # Sprint H5: Reject localhost/127.0.0.0/8 for external_address
+                if is_external:
+                    localhost_patterns = [
+                        'localhost', '127.', '0.0.0.0', '::1',
+                        '[::1]', '[0:0:0:0:0:0:0:1]'
+                    ]
+                    if any(hostname.startswith(p) or hostname == p.rstrip('.') for p in localhost_patterns):
+                        return False
+
+                    # Check for private IP ranges
+                    try:
+                        import ipaddress
+                        ip = ipaddress.ip_address(hostname)
+                        if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_multicast:
+                            return False
+                    except ValueError:
+                        # Not an IP address, that's fine
+                        pass
+
+                # Sprint H5: Prevent SSRF by validating against internal metadata services
+                blocked_hosts = [
+                    '169.254.169.254',  # AWS, Azure, GCP metadata
+                    'metadata.google.internal',
+                    'metadata.google.internal.',
+                    'instance-data',     # AWS
+                    'metadata',          # Generic
+                    'alibaba.xxx',       # Alibaba Cloud
+                ]
+                hostname_lower = hostname.lower()
+                for blocked in blocked_hosts:
+                    if blocked in hostname_lower:
+                        return False
+
+                return True
             except Exception:
                 return False
 
+        def _get_url_error_message(field_name, is_external=False):
+            base_msg = f"{field_name} must be a valid URL starting with http:// or https://"
+            if is_external:
+                base_msg += " Cannot use localhost, private IPs, or cloud metadata endpoints."
+            return base_msg
+
+        # Sprint H5: Sanitize URL inputs (prevent XSS in URL fields)
+        def _sanitize_url(url):
+            """Sanitize URL to prevent XSS."""
+            if not url:
+                return url
+            # Remove any HTML/script tags
+            url = re.sub(r'<[^>]+>', '', url)
+            # Remove null bytes
+            url = url.replace('\x00', '')
+            # Remove control characters
+            url = ''.join(char for char in url if ord(char) >= 32 or char in '\t\n\r')
+            return url.strip()
+
+        internal_address = _sanitize_url(internal_address)
+        external_address = _sanitize_url(external_address)
+
+        # Validate internal_address (required)
         if not internal_address:
-            response.status = 400
-            return json.dumps({"success": False, "error": "internal_address is required"})
+            errors['internal_address'] = "Internal Address is required. Please enter the URL Radarr/Sonarr will use to connect to Kuasarr."
+        elif not _is_valid_url(internal_address, is_external=False):
+            errors['internal_address'] = _get_url_error_message("Internal Address")
+        else:
+            # Additional check: validate URL components more thoroughly
+            try:
+                parsed = urlparse(internal_address)
+                # Check for common mistakes
+                if parsed.hostname in ['localhost', '127.0.0.1'] and not parsed.port:
+                    errors['internal_address'] = "Internal Address using localhost must include a port (e.g., http://localhost:8080)."
+            except Exception:
+                pass
 
-        if not _is_valid_url(internal_address):
-            response.status = 400
-            return json.dumps({"success": False, "error": "internal_address must be a valid http/https URL"})
-
-        if external_address and not _is_valid_url(external_address):
-            response.status = 400
-            return json.dumps({"success": False, "error": "external_address must be a valid http/https URL"})
+        # Validate external_address (optional but must be valid if provided)
+        if external_address:
+            if not _is_valid_url(external_address, allow_empty=True, is_external=True):
+                errors['external_address'] = _get_url_error_message("External Address", is_external=True) + " Leave empty if not using external access."
 
         # Validate timezone against IANA timezone database
         if timezone:
             valid_timezones = available_timezones()
             if timezone not in valid_timezones:
-                response.status = 400
-                return json.dumps({
-                    "success": False,
-                    "error": f"Invalid timezone: {timezone}. Must be a valid IANA timezone identifier."
-                })
+                errors['timezone'] = f"'{timezone}' is not a valid timezone. Please select a valid IANA timezone identifier (e.g., Europe/Berlin, America/New_York)."
         else:
-            timezone = 'Europe/Berlin'  # Default fallback
+            errors['timezone'] = "Timezone is required. Please select a valid timezone from the dropdown."
+
+        # Return all validation errors if any
+        if errors:
+            response.status = 400
+            audit_security_event('validation_failure', f"Core settings validation failed: {errors}", ip=client_ip)
+            return json.dumps({
+                "success": False,
+                "errors": errors,
+                "error": "Validation failed. Please correct the errors below."
+            })
+
+        # Get old values for audit logging
+        config = Config('Connection')
+        old_internal = config.get('internal_address') or ''
+        old_external = config.get('external_address') or ''
+        old_timezone = config.get('timezone') or 'Europe/Berlin'
+
+        # Track what changed
+        internal_changed = (old_internal != internal_address)
+        external_changed = (old_external != external_address)
+        timezone_changed = (old_timezone != timezone)
+
+        # Optional: Check if internal_address is reachable (best effort, don't fail if check errors)
+        reachability_warning = None
+        try:
+            parsed = urlparse(internal_address)
+            hostname = parsed.hostname
+            port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+            if hostname and hostname not in ['localhost', '127.0.0.1']:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2)
+                result = sock.connect_ex((hostname, port))
+                sock.close()
+                if result != 0:
+                    # Not reachable, but don't fail - just log warning in response
+                    reachability_warning = f"Warning: Could not connect to {hostname}:{port}. Ensure this address is reachable from your network."
+        except Exception:
+            pass  # Silently ignore reachability check failures
 
         # Save to Config
-        config = Config('Connection')
         config.save('internal_address', internal_address)
         config.save('external_address', external_address)
         config.save('timezone', timezone)
@@ -360,7 +490,37 @@ def setup_config(app, shared_state):
         shared_state.update('external_address', external_address)
         shared_state.update('timezone', timezone)
 
-        return json.dumps({
+        # Sprint H5: Audit logging - log settings changes
+        if internal_changed or external_changed or timezone_changed:
+            audit_core_settings_change(
+                internal_address_changed=internal_changed,
+                external_address_changed=external_changed,
+                timezone_changed=timezone_changed,
+                old_values={
+                    'internal_address': old_internal,
+                    'external_address': old_external,
+                    'timezone': old_timezone
+                },
+                new_values={
+                    'internal_address': internal_address,
+                    'external_address': external_address,
+                    'timezone': timezone
+                },
+                user=client_ip
+            )
+
+        # Notify observers of core settings change (Sprint H4: Live-Update without Restart)
+        try:
+            from kuasarr.providers.settings_observer import notify_core_settings_changed
+            notify_core_settings_changed({
+                'internal_address': internal_address,
+                'external_address': external_address,
+                'timezone': timezone
+            })
+        except ImportError:
+            pass  # settings_observer may not exist yet
+
+        response_data = {
             "success": True,
             "message": "Core settings saved successfully",
             "settings": {
@@ -368,4 +528,30 @@ def setup_config(app, shared_state):
                 "external_address": external_address,
                 "timezone": timezone
             }
-        })
+        }
+
+        if reachability_warning:
+            response_data['warning'] = reachability_warning
+
+        return json.dumps(response_data)
+
+    @app.get('/settings/core')
+    def core_settings_ui():
+        """Render the Core Settings form (Sprint H2/H5 with CSRF protection)."""
+        from kuasarr.providers.ui.html_templates import render_core_settings_form
+        from kuasarr.storage.config import Config
+
+        config = Config('Connection')
+        internal_address = config.get('internal_address') or shared_state.values.get('internal_address', '')
+        external_address = config.get('external_address') or shared_state.values.get('external_address', '')
+        timezone = config.get('timezone') or 'Europe/Berlin'
+
+        # Sprint H5: Generate CSRF token for the form
+        csrf_token = get_csrf_token()
+
+        return render_core_settings_form(
+            internal_address=internal_address,
+            external_address=external_address,
+            timezone=timezone,
+            csrf_token=csrf_token
+        )

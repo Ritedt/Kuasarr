@@ -6,6 +6,8 @@ import re
 import requests
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 
+from kuasarr.constants import HTTP_DEFAULT_TIMEOUT_SECONDS, get_timeout
+
 def normalize_url(url, base_url=None):
     """
     Normalisiert eine URL (macht relative URLs absolut, etc.)
@@ -160,7 +162,7 @@ def clean_url_params(url, keep_params=None):
     except:
         return url
 
-def get_final_url(url, session=None, timeout=10):
+def get_final_url(url, session=None, timeout=None):
     """
     Folgt Redirects und gibt die finale URL zurÃ¼ck
     

@@ -11,6 +11,7 @@ from bottle import Bottle, static_file, request, response, abort
 STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
 from kuasarr.api.arr import setup_arr_routes
 from kuasarr.api.captcha import setup_captcha_routes
+from kuasarr.api.categories import setup_categories_routes
 from kuasarr.api.config import setup_config
 from kuasarr.api.hosters import setup_hosters_routes
 from kuasarr.api.dbc import setup_dbc_routes
@@ -37,6 +38,7 @@ def get_api(shared_state_dict, shared_state_lock):
 
     setup_arr_routes(app)
     setup_captcha_routes(app)
+    setup_categories_routes(app)
     setup_config(app, shared_state)
     setup_hosters_routes(app)
     setup_statistics(app, shared_state)
@@ -192,6 +194,10 @@ def get_api(shared_state_dict, shared_state_lock):
         <div class="section">
             <h2>⚡ Quick Actions</h2>
             <div class="action-grid">
+                <button class="action-btn" onclick="location.href='/categories'">
+                    <span class="action-icon">📁</span>
+                    <span class="action-text">Categories</span>
+                </button>
                 <button class="action-btn" onclick="location.href='/hostnames'">
                     <span class="action-icon">🌍</span>
                     <span class="action-text">Update Hostnames</span>

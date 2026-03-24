@@ -8,6 +8,7 @@ import hmac
 import html
 import json
 import os
+import secrets
 import time
 from functools import wraps
 from urllib.parse import urlsplit
@@ -26,6 +27,15 @@ _AUTH_TYPE = os.environ.get("KUASARR_AUTH_TYPE", "basic").lower()
 # Cookie settings
 _COOKIE_NAME = "kuasarr_session"
 _COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 days
+
+# CSRF settings
+_CSRF_COOKIE_NAME = "kuasarr_csrf"
+_CSRF_TOKEN_LENGTH = 32
+
+# Rate limiting settings
+_RATE_LIMIT_WINDOW = 60  # seconds
+_RATE_LIMIT_MAX_REQUESTS = 10  # max requests per window
+_rate_limit_store = {}  # Simple in-memory store: {key: [(timestamp, count), ...]}
 
 # Stable secret derived from PASS (restart-safe)
 _SECRET_KEY = hashlib.sha256(_AUTH_PASS.encode("utf-8")).digest()
@@ -116,6 +126,163 @@ def _verify_session_cookie(value: str) -> bool:
     except Exception:
         _invalidate_cookie()
         return False
+
+
+# ============================================================================
+# CSRF Protection
+# ============================================================================
+
+def generate_csrf_token() -> str:
+    """Generate a new CSRF token."""
+    return secrets.token_urlsafe(_CSRF_TOKEN_LENGTH)
+
+
+def set_csrf_cookie():
+    """Set CSRF token in cookie and return the token."""
+    token = generate_csrf_token()
+    secure_flag = request.url.startswith("https://")
+    response.set_cookie(
+        _CSRF_COOKIE_NAME,
+        token,
+        max_age=_COOKIE_MAX_AGE,
+        path="/",
+        httponly=False,  # Must be accessible by JavaScript
+        secure=secure_flag,
+        samesite="Strict",
+    )
+    return token
+
+
+def get_csrf_token() -> str:
+    """Get existing CSRF token from cookie or create new one."""
+    token = request.get_cookie(_CSRF_COOKIE_NAME)
+    if not token:
+        token = set_csrf_cookie()
+    return token
+
+
+def validate_csrf_token(token: str) -> bool:
+    """Validate a CSRF token against the cookie."""
+    expected = request.get_cookie(_CSRF_COOKIE_NAME)
+    if not expected or not token:
+        return False
+    return secrets.compare_digest(expected, token)
+
+
+def require_csrf_token(func):
+    """Decorator to require valid CSRF token for POST/PUT/DELETE requests."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
+            # Check CSRF token from header or form data
+            token = request.headers.get('X-CSRF-Token') or request.forms.get('csrf_token')
+            if not token:
+                # Also check JSON body
+                try:
+                    json_data = request.json
+                    if json_data:
+                        token = json_data.get('csrf_token')
+                except Exception:
+                    pass
+
+            if not token or not validate_csrf_token(token):
+                response.status = 403
+                return json.dumps({"success": False, "error": "Invalid or missing CSRF token"})
+        return func(*args, **kwargs)
+    return wrapper
+
+
+# ============================================================================
+# Rate Limiting
+# ============================================================================
+
+def check_rate_limit(key: str, max_requests: int = None, window: int = None) -> tuple:
+    """
+    Check if request is within rate limit.
+
+    Args:
+        key: Unique identifier for the client (e.g., IP + endpoint)
+        max_requests: Maximum requests allowed in window (default: _RATE_LIMIT_MAX_REQUESTS)
+        window: Time window in seconds (default: _RATE_LIMIT_WINDOW)
+
+    Returns:
+        (allowed: bool, remaining: int, reset_time: int)
+    """
+    max_requests = max_requests or _RATE_LIMIT_MAX_REQUESTS
+    window = window or _RATE_LIMIT_WINDOW
+
+    now = time.time()
+
+    # Clean old entries
+    if key in _rate_limit_store:
+        _rate_limit_store[key] = [
+            (ts, count) for ts, count in _rate_limit_store[key]
+            if now - ts < window
+        ]
+    else:
+        _rate_limit_store[key] = []
+
+    # Count requests in current window
+    total_requests = sum(count for ts, count in _rate_limit_store[key])
+
+    if total_requests >= max_requests:
+        # Rate limit exceeded
+        oldest_ts = min(ts for ts, count in _rate_limit_store[key]) if _rate_limit_store[key] else now
+        reset_time = int(oldest_ts + window)
+        return False, 0, reset_time
+
+    # Record this request
+    _rate_limit_store[key].append((now, 1))
+    remaining = max_requests - total_requests - 1
+
+    return True, remaining, int(now + window)
+
+
+def get_rate_limit_headers(allowed: bool, remaining: int, reset_time: int) -> dict:
+    """Get rate limit headers for response."""
+    return {
+        'X-RateLimit-Limit': str(_RATE_LIMIT_MAX_REQUESTS),
+        'X-RateLimit-Remaining': str(remaining),
+        'X-RateLimit-Reset': str(reset_time),
+    }
+
+
+def rate_limit(max_requests: int = None, window: int = None, key_func=None):
+    """
+    Decorator to apply rate limiting to an endpoint.
+
+    Args:
+        max_requests: Maximum requests allowed in window
+        window: Time window in seconds
+        key_func: Function to generate rate limit key from request (default: IP + path)
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if key_func:
+                key = key_func(request)
+            else:
+                # Default: IP address + endpoint path
+                client_ip = request.environ.get('REMOTE_ADDR', 'unknown')
+                key = f"{client_ip}:{request.path}"
+
+            allowed, remaining, reset_time = check_rate_limit(key, max_requests, window)
+
+            # Set rate limit headers
+            headers = get_rate_limit_headers(allowed, remaining, reset_time)
+            for header, value in headers.items():
+                response.set_header(header, value)
+
+            if not allowed:
+                response.status = 429
+                return json.dumps({
+                    "success": False,
+                    "error": "Rate limit exceeded. Please try again later."
+                })
+
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 def check_basic_auth():

@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
-from kuasarr.providers.log import info, debug
+from kuasarr.providers.log import info, debug, error
 from kuasarr.providers.xrel_metadata import get_xrel_release_info
 from kuasarr.search.sources import get_sources as _get_registered_sources
 from kuasarr.search.sources.al import al_feed, al_search
@@ -45,7 +45,7 @@ def _detect_category_from_client(request_from: str) -> str:
 
 def _build_functions_from_registry(shared_state, imdb_id, search_phrase,
                                     request_from, allow_phrase_search,
-                                    mirror, season, episode, is_feed):
+                                    mirror, season, episode, is_feed, start_time):
     """
     Build search function list from AbstractSearchSource registry.
     Falls back to legacy maps if no registered sources found.
@@ -69,7 +69,7 @@ def _build_functions_from_registry(shared_state, imdb_id, search_phrase,
             if client_category and not source.supports_category(client_category):
                 continue
             functions.append(
-                lambda f=source: f.search(shared_state, None, request_from, imdb_id,
+                lambda f=source: f.search(shared_state, start_time, request_from, imdb_id,
                                           mirror=mirror, season=season, episode=episode)
             )
 
@@ -88,7 +88,7 @@ def _build_functions_from_registry(shared_state, imdb_id, search_phrase,
                 if not source.supports_phrase and not source.supports_imdb:
                     continue
             functions.append(
-                lambda f=source: f.search(shared_state, None, request_from, search_phrase,
+                lambda f=source: f.search(shared_state, start_time, request_from, search_phrase,
                                           mirror=mirror, season=season, episode=episode)
             )
 
@@ -99,7 +99,7 @@ def _build_functions_from_registry(shared_state, imdb_id, search_phrase,
             if not source.supports_feed:
                 continue
             functions.append(
-                lambda f=source: f.feed(shared_state, None, request_from, mirror=mirror)
+                lambda f=source: f.feed(shared_state, start_time, request_from, mirror=mirror)
             )
 
     return functions if functions else None
@@ -144,7 +144,7 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
         shared_state, imdb_id, search_phrase,
         request_from, allow_phrase_search,
         mirror, season, episode,
-        is_feed=(not imdb_id and not search_phrase)
+        is_feed=is_feed, start_time=start_time
     )
     if registry_functions is not None:
         functions = registry_functions
@@ -260,7 +260,7 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
                 result = future.result()
                 results.extend(result)
             except Exception as e:
-                info(f"An error occurred: {e}")
+                error(f"An error occurred: {e}")
 
     elapsed_time = time.time() - start_time
     info(f"Providing {len(results)} releases to {request_from} for {stype}. Time taken: {elapsed_time:.2f} seconds")

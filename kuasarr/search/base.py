@@ -29,8 +29,8 @@ class AbstractSearchSource(ABC):
     supports_imdb: bool = False
     supports_phrase: bool = False
     supports_feed: bool = True
-    supported_categories: set = set()
-    supported_mirrors: list = []
+    supported_categories: frozenset = frozenset()
+    supported_mirrors: tuple = ()
 
     def is_enabled(self, shared_state) -> bool:
         """Check whether the hostname for this source is configured."""

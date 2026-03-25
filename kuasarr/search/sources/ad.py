@@ -195,7 +195,7 @@ class Source(AbstractSearchSource):
     supports_imdb = False
     supports_phrase = True
     supports_feed = True
-    supported_categories = {"books", "audio"}
+    supported_categories = frozenset({"books", "audio"})
 
     def search(self, shared_state, start_time, request_from, search_string,
                mirror=None, season=None, episode=None):

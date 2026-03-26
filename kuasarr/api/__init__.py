@@ -9,6 +9,7 @@ from bottle import Bottle, static_file, request, response, abort
 
 # Static files directory (resolved at import time)
 STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
+WEBUI_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'webui', 'dist'))
 from kuasarr.api.arr import setup_arr_routes
 from kuasarr.api.captcha import setup_captcha_routes
 from kuasarr.api.categories import setup_categories_routes
@@ -50,10 +51,20 @@ def get_api(shared_state_dict, shared_state_lock):
     # Initialize notification settings from storage
     initialize_notification_settings(shared_state)
 
-    # Serve static files (logo, PWA assets)
+    # Serve static files (React build assets first, then legacy static)
     @app.get('/static/<filename:path>')
     def serve_static(filename):
-        # Set correct MIME types for PWA files
+        # Try React build assets first
+        webui_path = os.path.join(WEBUI_DIR, filename)
+        if os.path.exists(webui_path):
+            mimetype = None
+            if filename.endswith('.js'):
+                mimetype = 'application/javascript'
+            elif filename.endswith('.css'):
+                mimetype = 'text/css'
+            return static_file(filename, root=WEBUI_DIR, mimetype=mimetype)
+
+        # Fallback to legacy static directory (logo, PWA assets)
         mimetype = None
         if filename.endswith('.webmanifest'):
             mimetype = 'application/manifest+json'
@@ -68,6 +79,13 @@ def get_api(shared_state_dict, shared_state_lock):
 
     @app.get('/')
     def index():
+        """Serve React SPA if available, otherwise fall back to legacy HTML."""
+        # Try to serve React build first
+        webui_index = os.path.join(WEBUI_DIR, 'index.html')
+        if os.path.exists(webui_index):
+            return static_file('index.html', root=WEBUI_DIR)
+
+        # Legacy HTML fallback
         protected = shared_state.get_db("protected").retrieve_all_titles()
         api_key = Config('API').get('key')
         jd_config = Config('JDownloader')
@@ -490,5 +508,20 @@ def get_api(shared_state_dict, shared_state_lock):
             "API Key regenerated",
             f'<p>New key: <code>{new_key}</code></p><p>Update it in Radarr/Sonarr before continuing.</p>'
         )
+
+    # SPA catch-all: serve index.html for all non-API routes
+    @app.get('/<path:path>')
+    def spa_catchall(path):
+        """Serve React SPA for all non-API routes."""
+        # Don't interfere with API routes
+        if path.startswith('api/') or path.startswith('captcha') or path.startswith('download'):
+            abort(404)
+
+        webui_index = os.path.join(WEBUI_DIR, 'index.html')
+        if os.path.exists(webui_index):
+            return static_file('index.html', root=WEBUI_DIR)
+
+        # If no React build, return 404
+        abort(404)
 
     Server(app, listen='0.0.0.0', port=shared_state.values["port"]).serve_forever()

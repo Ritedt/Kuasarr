@@ -72,6 +72,39 @@ def get_api(shared_state_dict, shared_state_lock):
             mimetype = 'application/javascript'
         return static_file(filename, root=STATIC_DIR, mimetype=mimetype)
 
+    # Serve Vite build assets from /assets/ path
+    @app.get('/assets/<filename:path>')
+    def serve_assets(filename):
+        """Serve hashed assets from Vite build."""
+        mimetype = None
+        if filename.endswith('.js'):
+            mimetype = 'application/javascript'
+        elif filename.endswith('.css'):
+            mimetype = 'text/css'
+        elif filename.endswith('.svg'):
+            mimetype = 'image/svg+xml'
+        elif filename.endswith('.png'):
+            mimetype = 'image/png'
+        elif filename.endswith('.jpg') or filename.endswith('.jpeg'):
+            mimetype = 'image/jpeg'
+        return static_file(filename, root=os.path.join(WEBUI_DIR, 'assets'), mimetype=mimetype)
+
+    # Serve PWA manifest and service worker from root
+    @app.get('/manifest.webmanifest')
+    def serve_manifest():
+        """Serve PWA manifest file."""
+        return static_file('manifest.webmanifest', root=WEBUI_DIR, mimetype='application/manifest+json')
+
+    @app.get('/registerSW.js')
+    def serve_service_worker():
+        """Serve service worker registration script."""
+        return static_file('registerSW.js', root=WEBUI_DIR, mimetype='application/javascript')
+
+    @app.get('/sw.js')
+    def serve_sw():
+        """Serve service worker."""
+        return static_file('sw.js', root=WEBUI_DIR, mimetype='application/javascript')
+
     # PWA installation page
     @app.get('/pwa-install')
     def pwa_install():
@@ -515,6 +548,12 @@ def get_api(shared_state_dict, shared_state_lock):
         """Serve React SPA for all non-API routes."""
         # Don't interfere with API routes
         if path.startswith('api/') or path.startswith('captcha') or path.startswith('download'):
+            abort(404)
+        # Don't interfere with static assets
+        if path.startswith('assets/') or path.startswith('static/'):
+            abort(404)
+        # Don't interfere with PWA files
+        if path in ('manifest.webmanifest', 'registerSW.js', 'sw.js'):
             abort(404)
 
         webui_index = os.path.join(WEBUI_DIR, 'index.html')

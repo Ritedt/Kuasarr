@@ -472,63 +472,93 @@ def get_api(shared_state_dict, shared_state_lock):
         """
         return render_centered_html(info)
 
+    @app.get('/api/jdownloader/status')
+    @require_api_key
+    def jd_status():
+        response.content_type = 'application/json'
+        from kuasarr.providers.myjd_api import Jddevice
+        device = shared_state.values.get("device")
+        connected = isinstance(device, Jddevice)
+        jd_cfg = Config('JDownloader')
+        return json.dumps({'data': {
+            'connected': connected,
+            'email': jd_cfg.get('user') or '',
+            'device_name': jd_cfg.get('device') or '',
+            'total_downloads': 0,
+            'active_downloads': 0,
+            'global_speed': 0,
+            'reconnect_enabled': False,
+        }})
+
+    @app.get('/api/jdownloader/config')
+    @require_api_key
+    def jd_config_get():
+        response.content_type = 'application/json'
+        jd_cfg = Config('JDownloader')
+        return json.dumps({'data': {
+            'email': jd_cfg.get('user') or '',
+            'password': '',
+            'device_name': jd_cfg.get('device') or '',
+            'auto_reconnect': True,
+            'max_downloads': 3,
+            'max_speed': 0,
+        }})
+
     @app.post('/api/jdownloader/verify')
     @require_api_key
     def jd_verify():
-        """Verify JDownloader credentials and return list of devices."""
         response.content_type = 'application/json'
         try:
             data = json.loads(request.body.read().decode('utf-8'))
-            user = data.get('user', '').strip()
+            # Accept both 'email' (WebUI) and 'user' (legacy)
+            user = (data.get('email') or data.get('user') or '').strip()
             password = data.get('password', '').strip()
         except Exception:
-            return json.dumps({'error': 'Invalid request'})
+            return json.dumps({'data': {'valid': False}})
 
         if not user or not password:
-            return json.dumps({'error': 'Email and password required'})
+            return json.dumps({'data': {'valid': False}})
 
         from kuasarr.providers.jdownloader import get_devices
         devices = get_devices(user, password)
-        if devices is None:
-            return json.dumps({'error': 'Authentication failed or API unreachable'})
-        # devices is a list of dicts: {'name': '...', 'id': '...', 'type': 'jd'}
-        names = [d['name'] for d in devices if isinstance(d, dict) and d.get('name')]
-        return json.dumps({'devices': names})
+        return json.dumps({'data': {'valid': devices is not None}})
 
     @app.post('/api/jdownloader/save')
     @require_api_key
     def jd_save():
-        """Save JDownloader credentials and connect."""
         response.content_type = 'application/json'
         try:
             data = json.loads(request.body.read().decode('utf-8'))
-            user = data.get('user', '').strip()
+            user = (data.get('email') or data.get('user') or '').strip()
             password = data.get('password', '').strip()
-            device = data.get('device', '').strip()
+            device = (data.get('device_name') or data.get('device') or '').strip()
         except Exception:
             return json.dumps({'success': False, 'error': 'Invalid request'})
 
         if not user or not password or not device:
             return json.dumps({'success': False, 'error': 'All fields required'})
 
-        # Basic email validation
         import re
         if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', user):
             return json.dumps({'success': False, 'error': 'Invalid email format'})
 
-        # SECURITY FIX: Verify connection BEFORE saving credentials
         from kuasarr.providers.jdownloader import set_device
         ok = set_device(user, password, device)
         if not ok:
             return json.dumps({'success': False, 'error': 'Connection failed. Please verify credentials and device name.'})
 
-        # Only save to config after successful connection
         config = Config('JDownloader')
         config.save('user', user)
         config.save('password', password)
         config.save('device', device)
 
         return json.dumps({'success': True})
+
+    @app.post('/api/jdownloader/config')
+    @require_api_key
+    def jd_config_post():
+        # WebUI uses POST /api/jdownloader/config to save settings
+        return jd_save()
 
     @app.get('/regenerate-api-key')
     def regenerate_api_key():

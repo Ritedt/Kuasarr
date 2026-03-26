@@ -15,7 +15,13 @@ from kuasarr.storage.setup.notifications import (
     get_notification_settings_data,
     save_notification_settings,
     send_notification_test,
+    refresh_notification_settings,
+    _notification_toggle_key,
+    NOTIFICATION_TYPES,
+    NOTIFICATION_SETTINGS_TABLE,
 )
+from kuasarr.storage.sqlite_database import DataBase
+from kuasarr.constants import NOTIFICATION_PROVIDERS
 
 
 def setup_notifications_routes(app, shared_state):
@@ -228,6 +234,89 @@ def setup_notifications_routes(app, shared_state):
             return json.dumps({'success': False, 'error': 'Token/Chat ID not configured or request failed'})
         except Exception:
             return json.dumps({'success': False, 'error': 'Notification dispatch failed'})
+
+    @app.get('/api/notifications')
+    @require_api_key
+    def get_notifications_api():
+        """Return notification settings in the frontend-compatible format."""
+        response.content_type = 'application/json'
+        raw = get_notification_settings_data(shared_state).get('settings', {})
+        configs = []
+        if raw.get('discord_webhook'):
+            toggles = raw.get('toggles', {}).get('discord', {})
+            configs.append({
+                'provider': 'discord',
+                'enabled': True,
+                'settings': {'webhook_url': raw['discord_webhook']},
+                'events': [e for e, v in toggles.items() if v],
+            })
+        if raw.get('telegram_bot_token'):
+            toggles = raw.get('toggles', {}).get('telegram', {})
+            configs.append({
+                'provider': 'telegram',
+                'enabled': True,
+                'settings': {
+                    'bot_token': raw['telegram_bot_token'],
+                    'chat_id': raw.get('telegram_chat_id', ''),
+                },
+                'events': [e for e, v in toggles.items() if v],
+            })
+        return json.dumps({'data': {
+            'global_enabled': bool(configs),
+            'configs': configs,
+        }})
+
+    @app.post('/api/notifications')
+    @require_api_key
+    def save_notifications_api():
+        """Save notification settings from the frontend format."""
+        response.content_type = 'application/json'
+        try:
+            data = json.loads(request.body.read().decode('utf-8'))
+        except Exception:
+            response.status = 400
+            return json.dumps({'error': 'Invalid JSON'})
+
+        configs = data.get('configs', [])
+        # Build flat structure expected by the storage layer
+        settings = {
+            'discord_webhook': '',
+            'telegram_bot_token': '',
+            'telegram_chat_id': '',
+            'toggles': {'discord': {}, 'telegram': {}},
+            'silent': {'discord': {}, 'telegram': {}},
+        }
+        for cfg in configs:
+            provider = cfg.get('provider', '')
+            cfg_settings = cfg.get('settings', {})
+            events = cfg.get('events', [])
+            if provider == 'discord':
+                settings['discord_webhook'] = cfg_settings.get('webhook_url', '')
+                settings['toggles']['discord'] = {e: True for e in events}
+            elif provider == 'telegram':
+                settings['telegram_bot_token'] = cfg_settings.get('bot_token', '')
+                settings['telegram_chat_id'] = cfg_settings.get('chat_id', '')
+                settings['toggles']['telegram'] = {e: True for e in events}
+
+        # Save credentials via Config and persist toggles via storage layer
+        notification_cfg = Config('Notifications')
+        notification_cfg.save('discord_webhook', settings['discord_webhook'])
+        notification_cfg.save('telegram_token', settings['telegram_bot_token'])
+        notification_cfg.save('telegram_chat_id', settings['telegram_chat_id'])
+
+        notification_settings_db = DataBase(NOTIFICATION_SETTINGS_TABLE)
+        for provider in NOTIFICATION_PROVIDERS:
+            provider_toggles = settings['toggles'].get(provider, {})
+            for notification_type in NOTIFICATION_TYPES:
+                enabled_key = _notification_toggle_key(provider, notification_type)
+                if notification_type.value in provider_toggles:
+                    val = provider_toggles[notification_type.value]
+                    notification_settings_db.update_store(
+                        enabled_key, 'true' if val else 'false'
+                    )
+
+        refresh_notification_settings(shared_state)
+        return json.dumps({'data': None})
 
     # New REST API endpoints for notification settings
     @app.get('/api/notifications/settings')

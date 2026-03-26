@@ -2,8 +2,6 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Shield,
-  ShieldAlert,
-  ShieldCheck,
   Globe,
   AlertCircle,
   RefreshCw,
@@ -184,8 +182,6 @@ export default function HostersPage() {
   );
 
   const blockedCount = hosters.filter((h) => h.blocked).length;
-  const onlineCount = hosters.filter((h) => h.status === 'online' && !h.blocked).length;
-  const offlineCount = hosters.filter((h) => h.status === 'offline' && !h.blocked).length;
 
   return (
     <Layout jdConnected={jdConnected}>
@@ -218,32 +214,6 @@ export default function HostersPage() {
                 <div>
                   <p className="text-2xl font-bold text-text-primary">{hosters.length}</p>
                   <p className="text-text-secondary text-sm">Total</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-kuasarr-success/10 rounded-lg">
-                  <ShieldCheck className="h-5 w-5 text-kuasarr-success" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-text-primary">{onlineCount}</p>
-                  <p className="text-text-secondary text-sm">Online</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-kuasarr-error/10 rounded-lg">
-                  <ShieldAlert className="h-5 w-5 text-kuasarr-error" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-text-primary">{offlineCount}</p>
-                  <p className="text-text-secondary text-sm">Offline</p>
                 </div>
               </div>
             </CardContent>

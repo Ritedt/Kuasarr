@@ -13,6 +13,7 @@ from bottle import request, response
 from kuasarr.providers import shared_state
 from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.ui.html_templates import render_centered_html, render_button, render_nav
+from kuasarr.providers.ui.spa import try_serve_spa
 from kuasarr.storage.config import Config
 
 
@@ -22,6 +23,9 @@ def setup_categories_routes(app):
     @app.get('/categories')
     def categories_page():
         """Render the category management UI."""
+        spa = try_serve_spa()
+        if spa is not None:
+            return spa
         return _render_categories_page()
 
     @app.get('/api/categories')

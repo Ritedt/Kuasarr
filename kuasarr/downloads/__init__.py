@@ -171,7 +171,6 @@ def handle_by(shared_state, title, password, package_id, imdb_id, url, mirror, s
             # Protected link [url, hostname] (from filecrypt)
             protected_links.append(link)
     
-    # If we have direct links, download them immediately
     if direct_links:
         info(f"BY: Found {len(direct_links)} direct download links (hide.cx)")
         send_discord_message(shared_state, title=title, case="unprotected", imdb_id=imdb_id, source=url)
@@ -189,7 +188,6 @@ def handle_by(shared_state, title, password, package_id, imdb_id, url, mirror, s
             fail(title, package_id, shared_state,
                  reason=f'Failed to add {len(direct_links)} direct links for "{title}" to linkgrabber')
     
-    # If we have protected links (filecrypt), queue them for CAPTCHA
     if protected_links:
         info(f"BY: Found {len(protected_links)} protected links (filecrypt) - CAPTCHA required")
         send_discord_message(shared_state, title=title, case="captcha", imdb_id=imdb_id, source=url)
@@ -203,7 +201,6 @@ def handle_by(shared_state, title, password, package_id, imdb_id, url, mirror, s
         shared_state.values["database"]("protected").update_store(package_id, blob)
         return {"success": True, "title": title}
     
-    # No valid links found
     fail(title, package_id, shared_state,
          reason=f'No valid links found for "{title}" on BY - "{url}"')
     return {"success": False, "title": title}
@@ -365,7 +362,6 @@ def handle_dl(shared_state, title, password, package_id, imdb_id, url, mirror, s
             info("DL: Failed to decrypt hide.cx links; leaving them protected (CAPTCHA queue)")
             captcha_links.extend([l for l in hide_links if l not in captcha_links])
 
-    # If we have direct hoster links (including decrypted hide.cx), send to JDownloader
     if direct_links:
         info(f"DL: Sending {len(direct_links)} link(s) to JDownloader")
         send_discord_message(shared_state, title=title, case="unprotected", imdb_id=imdb_id, source=url)
@@ -383,7 +379,6 @@ def handle_dl(shared_state, title, password, package_id, imdb_id, url, mirror, s
             fail(title, package_id, shared_state,
                  reason=f'Failed to add {len(direct_links)} links for "{title}" to linkgrabber')
     
-    # If we have container links (filecrypt/keeplinks - need CAPTCHA), queue them
     if captcha_links:
         info(f"DL: Found {len(captcha_links)} container link(s) - CAPTCHA required (DBC will solve)")
         send_discord_message(shared_state, title=title, case="captcha", imdb_id=imdb_id, source=url)
@@ -397,7 +392,6 @@ def handle_dl(shared_state, title, password, package_id, imdb_id, url, mirror, s
         shared_state.values["database"]("protected").update_store(package_id, blob)
         return {"success": True, "title": title}
     
-    # No valid links found
     fail(title, package_id, shared_state,
          reason=f'No valid links found for "{title}" on DL - "{url}"')
     return {"success": False, "title": title}
@@ -405,33 +399,13 @@ def handle_dl(shared_state, title, password, package_id, imdb_id, url, mirror, s
 
 def download(shared_state, request_from, title, url, mirror, size_mb, password, imdb_id=None,
              destination_folder=None, preferred_category=None, manual_job_id=None):
-    """
-    Main download function that handles routing to appropriate source handlers.
-
-    Args:
-        shared_state: Application shared state
-        request_from: Source application (radarr, sonarr, lazylibrarian)
-        title: Release title
-        url: Download URL
-        mirror: Mirror site identifier
-        size_mb: Size in megabytes
-        password: Archive password
-        imdb_id: IMDB identifier
-        destination_folder: Optional explicit destination folder
-        preferred_category: Optional preferred category ID
-        manual_job_id: Optional manual job ID for tracking
-
-    Returns:
-        dict with success status, package_id, and title
-    """
-    # Detect category using the category system
+    """Route download to appropriate source handler."""
     category = match_release_to_category(
         release_name=title,
         source=request_from,
         preferred_category=preferred_category
     )
 
-    # Fallback to basic detection if category system returns None
     if not category:
         if "lazylibrarian" in request_from.lower():
             category = "docs"
@@ -443,14 +417,12 @@ def download(shared_state, request_from, title, url, mirror, size_mb, password, 
     package_hash = hashlib.sha256(f"{title}|{url}".encode("utf-8")).hexdigest()[:16]
     package_id = f"kuasarr_{category}_{package_hash}"
 
-    # Append manual job ID if provided
     if manual_job_id:
         package_id = f"{package_id}_{manual_job_id}"
 
     if imdb_id is not None and imdb_id.lower() == "none":
         imdb_id = None
 
-    # Determine destination folder using category system if not explicitly provided
     if destination_folder is None:
         destination_folder = get_destination_folder(
             category_id=category,

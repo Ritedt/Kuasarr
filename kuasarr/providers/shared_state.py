@@ -173,12 +173,7 @@ def set_connection_info(internal_address, external_address, port, timezone=None)
 
 
 def get_core_settings():
-    """
-    Get current core settings from shared state.
-
-    Returns:
-        dict with internal_address, external_address, timezone
-    """
+    """Get current core settings from shared state."""
     return {
         "internal_address": values.get("internal_address", ""),
         "external_address": values.get("external_address", ""),
@@ -188,13 +183,7 @@ def get_core_settings():
 
 
 def reload_core_settings_from_config():
-    """
-    Reload core settings from Config into shared state.
-    Called when settings are changed externally (e.g., via API).
-
-    Returns:
-        dict with the reloaded settings
-    """
+    """Reload core settings from Config into shared state."""
     config = Config('Connection')
     internal_address = config.get('internal_address') or values.get('internal_address', '')
     external_address = config.get('external_address') or values.get('external_address', '')

@@ -57,16 +57,7 @@ KUASARR_TO_ALL_NEWZNAB: dict[str, list[int]] = {
 
 
 def newznab_to_kuasarr(numeric_id: int) -> Optional[str]:
-    """
-    Übersetzt eine Newznab Numeric Category ID in eine Kuasarr String-ID.
-    Nutzt Base-Category-Fallback: 2045 → 2000 → "movies"
-
-    Args:
-        numeric_id: Newznab Numeric Category ID
-
-    Returns:
-        Kuasarr String-ID oder None für unbekannte IDs
-    """
+    """Übersetzt eine Newznab Numeric Category ID in eine Kuasarr String-ID."""
     if numeric_id in NEWZNAB_TO_KUASARR:
         return NEWZNAB_TO_KUASARR[numeric_id]
 
@@ -76,42 +67,17 @@ def newznab_to_kuasarr(numeric_id: int) -> Optional[str]:
 
 
 def kuasarr_to_newznab(string_id: str) -> int:
-    """
-    Übersetzt eine Kuasarr String-ID in die primäre Newznab Numeric Category ID.
-
-    Args:
-        string_id: Kuasarr String-ID (z.B. "movies", "tv-shows")
-
-    Returns:
-        Primäre Newznab Numeric Category ID, oder 0 für unbekannte IDs
-    """
+    """Übersetzt eine Kuasarr String-ID in die primäre Newznab Numeric Category ID."""
     return KUASARR_TO_NEWZNAB.get(string_id, 0)
 
 
 def kuasarr_to_all_newznab(string_id: str) -> list[int]:
-    """
-    Gibt alle Newznab Numeric Category IDs für eine Kuasarr String-ID zurück.
-
-    Args:
-        string_id: Kuasarr String-ID (z.B. "movies")
-
-    Returns:
-        Liste aller zugehörigen Newznab IDs, oder leere Liste
-    """
+    """Gibt alle Newznab Numeric Category IDs für eine Kuasarr String-ID zurück."""
     return KUASARR_TO_ALL_NEWZNAB.get(string_id, [])
 
 
 def normalize_newznab_ids(cat_param: str) -> list[int]:
-    """
-    Parst einen kommaseparierten Newznab-Kategorien-String aus Query-Params.
-    Filtert unbekannte und ungültige IDs heraus.
-
-    Args:
-        cat_param: z.B. "2000,2040,2045" oder "5000"
-
-    Returns:
-        Liste von gültigen Newznab Numeric IDs
-    """
+    """Parst einen kommaseparierten Newznab-Kategorien-String aus Query-Params."""
     if not cat_param:
         return []
 
@@ -131,15 +97,7 @@ def normalize_newznab_ids(cat_param: str) -> list[int]:
 
 
 def newznab_ids_to_kuasarr_categories(newznab_ids: list[int]) -> list[str]:
-    """
-    Übersetzt eine Liste von Newznab IDs in eindeutige Kuasarr String-IDs.
-
-    Args:
-        newznab_ids: Liste von Newznab Numeric IDs
-
-    Returns:
-        Deduplizierte Liste von Kuasarr String-IDs
-    """
+    """Übersetzt eine Liste von Newznab IDs in eindeutige Kuasarr String-IDs."""
     seen = set()
     result = []
     for nid in newznab_ids:

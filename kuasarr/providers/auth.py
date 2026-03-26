@@ -197,17 +197,7 @@ def require_csrf_token(func):
 # ============================================================================
 
 def check_rate_limit(key: str, max_requests: int = None, window: int = None) -> tuple:
-    """
-    Check if request is within rate limit.
-
-    Args:
-        key: Unique identifier for the client (e.g., IP + endpoint)
-        max_requests: Maximum requests allowed in window (default: _RATE_LIMIT_MAX_REQUESTS)
-        window: Time window in seconds (default: _RATE_LIMIT_WINDOW)
-
-    Returns:
-        (allowed: bool, remaining: int, reset_time: int)
-    """
+    """Check if request is within rate limit."""
     max_requests = max_requests or _RATE_LIMIT_MAX_REQUESTS
     window = window or _RATE_LIMIT_WINDOW
 
@@ -255,14 +245,7 @@ def get_rate_limit_headers(allowed: bool, remaining: int, reset_time: int) -> di
 
 
 def rate_limit(max_requests: int = None, window: int = None, key_func=None):
-    """
-    Decorator to apply rate limiting to an endpoint.
-
-    Args:
-        max_requests: Maximum requests allowed in window
-        window: Time window in seconds
-        key_func: Function to generate rate limit key from request (default: IP + path)
-    """
+    """Decorator to apply rate limiting to an endpoint."""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -504,12 +487,7 @@ def add_auth_routes(app):
 
 
 def add_auth_hook(app, whitelist=None):
-    """Install the Kuasarr authentication policy on a Bottle app.
-
-    Args:
-        app: Bottle application
-        whitelist: List of path prefixes or suffixes to keep public
-    """
+    """Install the Kuasarr authentication policy on a Bottle app."""
     if whitelist is None:
         whitelist = []
 

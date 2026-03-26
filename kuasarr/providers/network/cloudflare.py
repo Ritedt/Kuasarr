@@ -171,18 +171,7 @@ def ensure_session_cf_bypassed(
     headers,
     timeout: Optional[int] = None
 ):
-    """
-    Performs a GET and, if Cloudflare challenge or 403 is present, tries FlareSolverr.
-    Returns tuple: (session, headers, response) or (None, None, None) on failure.
-
-    Args:
-        info: Logger function
-        shared_state: Shared state object
-        session: requests.Session instance
-        url: Target URL to fetch
-        headers: Headers dict
-        timeout: Optional timeout in seconds (defaults to DOWNLOAD_REQUEST_TIMEOUT_SECONDS with slow mode)
-    """
+    """Performs a GET and, if Cloudflare challenge or 403 is present, tries FlareSolverr."""
     # Apply slow mode to timeout
     effective_timeout = get_timeout(timeout or DOWNLOAD_REQUEST_TIMEOUT_SECONDS)
 
@@ -250,19 +239,7 @@ def flaresolverr_get(
     timeout: Optional[int] = None,
     session_id: Optional[str] = None
 ) -> FlareSolverrResponse:
-    """
-    Core function for performing a GET request via FlareSolverr only.
-    Used internally by FlareSolverrSession.get()
-
-    Args:
-        shared_state: Shared state object
-        url: Target URL
-        timeout: Optional timeout in seconds (defaults to FLARESOLVERR_REQUEST_TIMEOUT_SECONDS with slow mode)
-        session_id: Optional persistent session ID
-
-    Returns:
-        FlareSolverrResponse object
-    """
+    """Core function for performing a GET request via FlareSolverr only."""
     # Apply slow mode to timeout
     effective_timeout = get_timeout(timeout or FLARESOLVERR_REQUEST_TIMEOUT_SECONDS)
 
@@ -323,20 +300,7 @@ def flaresolverr_post(
     timeout: Optional[int] = None,
     session_id: Optional[str] = None
 ) -> FlareSolverrResponse:
-    """
-    Make POST request via FlareSolverr.
-
-    Args:
-        shared_state: Shared state object
-        url: Target URL
-        data: Optional POST data (dict or string)
-        headers: Optional request headers
-        timeout: Optional timeout in seconds (defaults to FLARESOLVERR_REQUEST_TIMEOUT_SECONDS with slow mode)
-        session_id: Optional persistent session ID
-
-    Returns:
-        FlareSolverrResponse object
-    """
+    """Make POST request via FlareSolverr."""
     # Apply slow mode to timeout
     effective_timeout = get_timeout(timeout or FLARESOLVERR_REQUEST_TIMEOUT_SECONDS)
 
@@ -398,16 +362,7 @@ def flaresolverr_post(
 
 
 def flaresolverr_create_session(shared_state, session_id: str) -> bool:
-    """
-    Create persistent FlareSolverr session.
-
-    Args:
-        shared_state: Shared state object
-        session_id: Session identifier to create
-
-    Returns:
-        True if session created successfully, False otherwise
-    """
+    """Create persistent FlareSolverr session."""
     flaresolverr_url = _get_flaresolverr_url(shared_state)
     if not flaresolverr_url:
         return False
@@ -433,16 +388,7 @@ def flaresolverr_create_session(shared_state, session_id: str) -> bool:
 
 
 def flaresolverr_destroy_session(shared_state, session_id: str) -> bool:
-    """
-    Destroy FlareSolverr session.
-
-    Args:
-        shared_state: Shared state object
-        session_id: Session identifier to destroy
-
-    Returns:
-        True if session destroyed successfully, False otherwise
-    """
+    """Destroy FlareSolverr session."""
     flaresolverr_url = _get_flaresolverr_url(shared_state)
     if not flaresolverr_url:
         return False

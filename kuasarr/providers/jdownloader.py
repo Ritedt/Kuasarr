@@ -172,14 +172,7 @@ def get_device():
 
 
 def run_device_request(request_name, request_fn, default=None):
-    """
-    Execute a JDownloader request with graceful reconnect+retry.
-
-    Args:
-        request_name: Human-readable operation label for logs
-        request_fn: Callable accepting a connected device
-        default: Value returned if both attempts fail
-    """
+    """Execute a JDownloader request with graceful reconnect+retry."""
     try:
         return request_fn(get_device())
     except (TokenExpiredException, RequestTimeoutException, MYJDException) as e:

@@ -37,15 +37,9 @@ class AbstractSearchSource(ABC):
         return bool(shared_state.values["config"]("Hostnames").get(self.initials))
 
     def supports_category(self, category_id: str) -> bool:
-        """
-        Check if this source supports a given Kuasarr category ID.
+        """Check if this source supports a given Kuasarr category ID.
+
         An empty supported_categories set means all categories are supported.
-
-        Args:
-            category_id: Kuasarr string category ID (e.g. "movies", "tv-shows")
-
-        Returns:
-            True if the source supports this category
         """
         if not self.supported_categories:
             return True
@@ -55,36 +49,11 @@ class AbstractSearchSource(ABC):
     def search(self, shared_state, start_time, request_from: str,
                search_string: str, mirror=None,
                season=None, episode=None) -> list:
-        """
-        Search for releases matching the given search string.
-
-        Args:
-            shared_state: Application shared state
-            start_time: Search start time (for timing logs)
-            request_from: Requesting client identifier (e.g. "Radarr/6.0")
-            search_string: IMDb ID (tt1234567) or free-text phrase
-            mirror: Optional mirror name to filter results
-            season: Optional season number (TV searches)
-            episode: Optional episode number (TV searches)
-
-        Returns:
-            List of release dicts
-        """
+        """Search for releases matching the given search string."""
         ...
 
     @abstractmethod
     def feed(self, shared_state, start_time, request_from: str,
              mirror=None) -> list:
-        """
-        Fetch the latest releases feed from this source.
-
-        Args:
-            shared_state: Application shared state
-            start_time: Search start time (for timing logs)
-            request_from: Requesting client identifier
-            mirror: Optional mirror name to filter results
-
-        Returns:
-            List of release dicts
-        """
+        """Fetch the latest releases feed from this source."""
         ...

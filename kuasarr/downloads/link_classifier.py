@@ -42,15 +42,7 @@ def _get_url(link) -> str:
 
 
 def detect_link_type(link) -> str:
-    """
-    Detect the type of a single link.
-
-    Args:
-        link: Link item (str URL or [url, mirror_name] list)
-
-    Returns:
-        "auto_decrypt", "protected", or "direct"
-    """
+    """Detect the type of a single link."""
     url = _get_url(link).lower()
 
     for pattern in AUTO_DECRYPT_PATTERNS:
@@ -65,19 +57,7 @@ def detect_link_type(link) -> str:
 
 
 def classify_links(links: list) -> dict:
-    """
-    Classify a list of links into direct/auto_decrypt/protected categories.
-
-    Compatible with Kuasarr's internal link format:
-    - str: plain URL
-    - [url, mirror_name]: URL with mirror identifier
-
-    Args:
-        links: List of link items
-
-    Returns:
-        Dict with keys "direct", "auto_decrypt", "protected" — each a list
-    """
+    """Classify a list of links into direct/auto_decrypt/protected categories."""
     result: dict = {"direct": [], "auto_decrypt": [], "protected": []}
 
     for link in links:
@@ -91,20 +71,7 @@ def process_classified_links(
     shared_state,
     classified: dict,
 ) -> dict:
-    """
-    Process classified links with priority: direct → auto_decrypt → protected.
-
-    Attempts auto-decryption of hide.cx links; on failure, moves them to protected.
-
-    Args:
-        shared_state: Application shared state
-        classified: Dict from classify_links()
-
-    Returns:
-        Dict with keys:
-          "direct": list of direct hoster URLs (str)
-          "protected": list of protected link items
-    """
+    """Process classified links with priority: direct → auto_decrypt → protected."""
     from kuasarr.downloads.linkcrypters.hide import decrypt_links_if_hide
 
     direct_links = list(classified.get("direct", []))
@@ -137,15 +104,7 @@ def process_classified_links(
 
 
 def filter_404_links(links: list) -> list:
-    """
-    Filter out links that point to 404 error pages.
-
-    Args:
-        links: List of link items
-
-    Returns:
-        Filtered list without 404 links
-    """
+    """Filter out links that point to 404 error pages."""
     filtered = []
     for link in links:
         url = _get_url(link)

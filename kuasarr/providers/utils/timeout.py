@@ -31,16 +31,7 @@ from kuasarr.constants import (
 
 
 def get_requests_timeout(timeout_type: str = "default") -> int:
-    """Get appropriate timeout for requests based on type.
-
-    Args:
-        timeout_type: Type of request timeout needed.
-            Options: "default", "extended", "download", "session",
-                     "search", "feed", "captcha", "flaresolverr", "myjd"
-
-    Returns:
-        Timeout in seconds with slow mode applied
-    """
+    """Get appropriate timeout for requests based on type."""
     timeout_map = {
         "default": get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
         "extended": get_timeout(HTTP_EXTENDED_TIMEOUT_SECONDS),
@@ -56,14 +47,7 @@ def get_requests_timeout(timeout_type: str = "default") -> int:
 
 
 def apply_slow_mode_to_dict(timeout_dict: dict) -> dict:
-    """Apply slow mode multiplier to all timeout values in a dictionary.
-
-    Args:
-        timeout_dict: Dictionary containing timeout values
-
-    Returns:
-        Dictionary with slow mode multiplier applied to all values
-    """
+    """Apply slow mode multiplier to all timeout values in a dictionary."""
     if not is_slow_mode_enabled():
         return timeout_dict
 
@@ -71,29 +55,13 @@ def apply_slow_mode_to_dict(timeout_dict: dict) -> dict:
 
 
 def get_flaresolverr_max_timeout(timeout: Optional[int] = None) -> int:
-    """Get FlareSolverr maxTimeout value in milliseconds.
-
-    FlareSolverr expects maxTimeout in milliseconds, not seconds.
-    This helper converts seconds to milliseconds and applies slow mode.
-
-    Args:
-        timeout: Timeout in seconds (optional, defaults to FLARESOLVERR_REQUEST_TIMEOUT_SECONDS)
-
-    Returns:
-        Timeout in milliseconds
-    """
+    """Get FlareSolverr maxTimeout value in milliseconds."""
     base_timeout = timeout or FLARESOLVERR_REQUEST_TIMEOUT_SECONDS
     return get_timeout(base_timeout) * 1000
 
 
 class TimeoutContext:
-    """Context manager for temporarily adjusting timeouts.
-
-    Example:
-        with TimeoutContext("download", custom_base=60):
-            # Within this block, timeouts use the custom base
-            response = session.get(url, timeout=get_download_timeout())
-    """
+    """Context manager for temporarily adjusting timeouts."""
 
     def __init__(self, timeout_type: str = "default", custom_base: Optional[int] = None):
         self.timeout_type = timeout_type
@@ -117,14 +85,7 @@ class TimeoutContext:
 
 
 def format_timeout_for_display(timeout_seconds: int) -> str:
-    """Format timeout value for display in UI.
-
-    Args:
-        timeout_seconds: Timeout in seconds
-
-    Returns:
-        Human-readable timeout string
-    """
+    """Format timeout value for display in UI."""
     if timeout_seconds < 60:
         return f"{timeout_seconds}s"
     elif timeout_seconds < 3600:
@@ -142,11 +103,7 @@ def format_timeout_for_display(timeout_seconds: int) -> str:
 
 
 def get_timeout_summary() -> dict:
-    """Get a summary of all timeout values for debugging/monitoring.
-
-    Returns:
-        Dictionary with all timeout values and slow mode status
-    """
+    """Get a summary of all timeout values for debugging/monitoring."""
     return {
         "slow_mode_enabled": is_slow_mode_enabled(),
         "slow_mode_multiplier": 3 if is_slow_mode_enabled() else 1,

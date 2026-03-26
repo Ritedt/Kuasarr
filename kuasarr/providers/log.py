@@ -46,14 +46,7 @@ def _is_sensitive_field(field_name: str) -> bool:
 
 
 def audit_settings_change(section: str, changes: dict, user: str = None):
-    """
-    Log a settings change for audit purposes.
-
-    Args:
-        section: The configuration section being modified (e.g., 'Connection')
-        changes: Dictionary of field names to (old_value, new_value) tuples
-        user: Optional username or identifier of who made the change
-    """
+    """Log a settings change for audit purposes."""
     user_str = f" by user '{user}'" if user else ""
     info(f"AUDIT: Settings changed in section '{section}'{user_str}")
 
@@ -70,17 +63,7 @@ def audit_settings_change(section: str, changes: dict, user: str = None):
 
 def audit_core_settings_change(internal_address_changed: bool, external_address_changed: bool,
                                 timezone_changed: bool, old_values: dict, new_values: dict, user: str = None):
-    """
-    Specialized audit log for core settings changes.
-
-    Args:
-        internal_address_changed: Whether internal_address was modified
-        external_address_changed: Whether external_address was modified
-        timezone_changed: Whether timezone was modified
-        old_values: Dictionary of old values
-        new_values: Dictionary of new values
-        user: Optional username or identifier
-    """
+    """Specialized audit log for core settings changes."""
     user_str = f" by user '{user}'" if user else ""
     info(f"AUDIT: Core settings modified{user_str}")
 
@@ -95,15 +78,7 @@ def audit_core_settings_change(internal_address_changed: bool, external_address_
 
 
 def audit_security_event(event_type: str, details: str, user: str = None, ip: str = None):
-    """
-    Log a security-related event.
-
-    Args:
-        event_type: Type of security event (e.g., 'csrf_failure', 'rate_limit', 'auth_failure')
-        details: Description of the event
-        user: Optional username or identifier
-        ip: Optional client IP address
-    """
+    """Log a security-related event."""
     user_str = f" user='{user}'" if user else ""
     ip_str = f" ip={ip}" if ip else ""
     info(f"AUDIT SECURITY [{event_type}]:{user_str}{ip_str} - {details}")

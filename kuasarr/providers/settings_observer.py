@@ -20,66 +20,31 @@ _global_observers: List[Callable[[str, any], None]] = []
 
 
 def register_observer(setting_name: str, callback: Callable[[str, any], None]) -> None:
-    """
-    Register a callback to be called when a specific setting changes.
-
-    Args:
-        setting_name: The name of the setting to watch (e.g., 'internal_address')
-        callback: Function to call when the setting changes.
-                  Signature: callback(setting_name, new_value) -> None
-
-    Example:
-        def on_address_change(name, value):
-            print(f"Address changed to: {value}")
-        register_observer('internal_address', on_address_change)
-    """
+    """Register a callback to be called when a specific setting changes."""
     if setting_name not in _observers:
         _observers[setting_name] = []
     _observers[setting_name].append(callback)
 
 
 def unregister_observer(setting_name: str, callback: Callable[[str, any], None]) -> None:
-    """
-    Unregister a previously registered callback.
-
-    Args:
-        setting_name: The setting name the callback was registered for
-        callback: The callback function to remove
-    """
+    """Unregister a previously registered callback."""
     if setting_name in _observers and callback in _observers[setting_name]:
         _observers[setting_name].remove(callback)
 
 
 def register_global_observer(callback: Callable[[str, any], None]) -> None:
-    """
-    Register a callback to be called when ANY setting changes.
-
-    Args:
-        callback: Function to call on any settings change.
-                  Signature: callback(setting_name, new_value) -> None
-    """
+    """Register a callback to be called when ANY setting changes."""
     _global_observers.append(callback)
 
 
 def unregister_global_observer(callback: Callable[[str, any], None]) -> None:
-    """
-    Unregister a previously registered global observer.
-
-    Args:
-        callback: The callback function to remove
-    """
+    """Unregister a previously registered global observer."""
     if callback in _global_observers:
         _global_observers.remove(callback)
 
 
 def notify_setting_changed(setting_name: str, new_value: any) -> None:
-    """
-    Notify all registered observers that a setting has changed.
-
-    Args:
-        setting_name: The name of the setting that changed
-        new_value: The new value of the setting
-    """
+    """Notify all registered observers that a setting has changed."""
     # Notify specific observers for this setting
     if setting_name in _observers:
         for callback in _observers[setting_name][:]:
@@ -98,23 +63,13 @@ def notify_setting_changed(setting_name: str, new_value: any) -> None:
 
 
 def notify_core_settings_changed(settings: Dict[str, any]) -> None:
-    """
-    Notify observers that multiple core settings have changed.
-
-    Args:
-        settings: Dictionary of setting_name -> new_value
-    """
+    """Notify observers that multiple core settings have changed."""
     for setting_name, new_value in settings.items():
         notify_setting_changed(setting_name, new_value)
 
 
 def get_registered_observers() -> Dict[str, int]:
-    """
-    Get a count of registered observers per setting (for debugging).
-
-    Returns:
-        Dictionary mapping setting names to observer counts
-    """
+    """Get a count of registered observers per setting (for debugging)."""
     return {
         **{name: len(callbacks) for name, callbacks in _observers.items()},
         "__global__": len(_global_observers)
@@ -132,15 +87,7 @@ def clear_all_observers() -> None:
 # =============================================================================
 
 def on_setting_change(setting_name: str):
-    """
-    Decorator to register a function as an observer for a specific setting.
-
-    Example:
-        @on_setting_change('timezone')
-        def update_timezone(name, value):
-            # Update timezone in your component
-            pass
-    """
+    """Decorator to register a function as an observer for a specific setting."""
     def decorator(func: Callable[[str, any], None]) -> Callable[[str, any], None]:
         register_observer(setting_name, func)
 
@@ -152,14 +99,7 @@ def on_setting_change(setting_name: str):
 
 
 def on_any_setting_change(func: Callable[[str, any], None]) -> Callable[[str, any], None]:
-    """
-    Decorator to register a function as a global observer for all settings changes.
-
-    Example:
-        @on_any_setting_change
-        def log_all_changes(name, value):
-            print(f"Setting {name} changed to {value}")
-    """
+    """Decorator to register a function as a global observer for all settings changes."""
     register_global_observer(func)
 
     @wraps(func)

@@ -75,7 +75,6 @@ def get_api(shared_state_dict, shared_state_lock):
     # Serve Vite build assets from /assets/ path
     @app.get('/assets/<filename:path>')
     def serve_assets(filename):
-        """Serve hashed assets from Vite build."""
         mimetype = None
         if filename.endswith('.js'):
             mimetype = 'application/javascript'
@@ -92,17 +91,14 @@ def get_api(shared_state_dict, shared_state_lock):
     # Serve PWA manifest and service worker from root
     @app.get('/manifest.webmanifest')
     def serve_manifest():
-        """Serve PWA manifest file."""
         return static_file('manifest.webmanifest', root=WEBUI_DIR, mimetype='application/manifest+json')
 
     @app.get('/registerSW.js')
     def serve_service_worker():
-        """Serve service worker registration script."""
         return static_file('registerSW.js', root=WEBUI_DIR, mimetype='application/javascript')
 
     @app.get('/sw.js')
     def serve_sw():
-        """Serve service worker."""
         return static_file('sw.js', root=WEBUI_DIR, mimetype='application/javascript')
 
     # PWA installation page

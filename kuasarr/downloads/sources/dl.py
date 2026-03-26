@@ -284,13 +284,7 @@ def build_filecrypt_status_map(soup):
 
 
 def extract_links_and_password_from_post(post_content, host):
-    """
-    Extract download links and password from a forum post.
-    Returns:
-        direct_links: list of href strings
-        protected_links: list of [href, identifier, status_url]
-        password: str
-    """
+    """Extract download links and password from a forum post."""
     direct_links = []
     protected_links = []
     soup = BeautifulSoup(post_content, 'html.parser')

@@ -239,15 +239,7 @@ def reset_category_manager() -> None:
 
 
 def get_category_from_release_name(release_name: str) -> Optional[str]:
-    """
-    Detect category from release name using pattern matching.
-
-    Args:
-        release_name: The release name to analyze
-
-    Returns:
-        Category ID or None if no match found
-    """
+    """Detect category from release name using pattern matching."""
     import re
 
     if not release_name:
@@ -266,16 +258,7 @@ def get_category_from_release_name(release_name: str) -> Optional[str]:
 
 def get_destination_folder(category_id: Optional[str] = None,
                           release_name: Optional[str] = None) -> str:
-    """
-    Get the destination folder for a download.
-
-    Args:
-        category_id: Optional explicit category ID
-        release_name: Optional release name for auto-detection
-
-    Returns:
-        Destination folder path for JDownloader
-    """
+    """Get the destination folder for a download."""
     manager = get_category_manager()
 
     # If no category specified, try to detect from release name
@@ -290,12 +273,7 @@ def get_destination_folder(category_id: Optional[str] = None,
 
 
 def get_category_config_from_ini() -> Dict[str, Any]:
-    """
-    Read category configuration from kuasarr.ini Config.
-
-    Returns:
-        Dictionary of category settings from config file
-    """
+    """Read category configuration from kuasarr.ini Config."""
     config = Config('Categories')
     categories = {}
 

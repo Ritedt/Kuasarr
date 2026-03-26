@@ -123,15 +123,7 @@ MIRROR_TLD_MAP = {
 
 
 def normalize_mirror_name(name: str) -> str:
-    """
-    Normalize mirror TLD to canonical provider name.
-    
-    Args:
-        name: Mirror hostname or name (e.g., "ddl.to", "ddownload.com")
-        
-    Returns:
-        Canonical provider name (e.g., "ddownload")
-    """
+    """Normalize mirror TLD to canonical provider name."""
     if not name:
         return ""
     
@@ -170,15 +162,7 @@ def normalize_mirror_name(name: str) -> str:
 # =============================================================================
 
 def normalize_download_title(title: str) -> str:
-    """
-    Remove mirror markers like /Mirror 1/, /Vip/ from titles.
-    
-    Args:
-        title: Raw download title that may contain mirror markers
-        
-    Returns:
-        Cleaned title without mirror/vip markers
-    """
+    """Remove mirror markers like /Mirror 1/, /Vip/ from titles."""
     if not title:
         return ""
     
@@ -215,24 +199,7 @@ def generate_download_link(
     imdb_id: str = "",
     source_key: str = ""
 ) -> str:
-    """
-    Generate base64-encoded download payload for /download/ endpoint.
-    
-    The payload format is: title|url|size_mb|password|imdb_id|source_key
-    Returns format: {internal_address}/download/?payload={base64}&apikey={key}
-    
-    Args:
-        shared_state: Shared state object containing internal_address
-        title: Release title
-        url: Source URL
-        size_mb: Size in megabytes
-        password: Password for the release (optional)
-        imdb_id: IMDb ID (optional)
-        source_key: Source shorthand, e.g., 'al', 'dd' (optional)
-        
-    Returns:
-        Full download URL with encoded payload
-    """
+    """Generate base64-encoded download payload for /download/ endpoint."""
     # Ensure all fields are strings and handle None
     title = str(title) if title else ""
     url = str(url) if url else ""
@@ -260,19 +227,7 @@ def generate_download_link(
 
 
 def parse_payload(payload_str: str) -> Optional[Dict[str, Any]]:
-    """
-    Parse base64 payload back to components.
-    
-    Handles kuasarr:// prefix, base64 decode, and JSON-like parsing.
-    Expected format: title|url|size_mb|password|imdb_id|source_key
-    
-    Args:
-        payload_str: Base64-encoded payload string (may include kuasarr:// prefix)
-        
-    Returns:
-        Dict with keys: title, url, size_mb, password, imdb_id, source_key
-        Returns None if parsing fails
-    """
+    """Parse base64 payload back to components."""
     if not payload_str:
         return None
     
@@ -323,15 +278,7 @@ def parse_payload(payload_str: str) -> Optional[Dict[str, Any]]:
 # =============================================================================
 
 def detect_crypter_type(url: str) -> Optional[str]:
-    """
-    Detect crypter type for status checking (e.g., 'nk', 'fk', etc.).
-    
-    Args:
-        url: The URL to analyze
-        
-    Returns:
-        Crypter type string or None if not detected
-    """
+    """Detect crypter type for status checking (e.g., 'nk', 'fk', etc.)."""
     if not url:
         return None
     
@@ -446,15 +393,7 @@ def sanitize_string(s: str) -> str:
 
 
 def convert_to_mb(item: dict) -> int:
-    """
-    Convert size from various units to megabytes.
-    
-    Args:
-        item: Dict with 'size' and 'sizeunit' keys
-        
-    Returns:
-        Size in megabytes as integer
-    """
+    """Convert size from various units to megabytes."""
     size = float(item['size'])
     unit = item['sizeunit'].upper()
 
@@ -542,17 +481,7 @@ def _fetch_status_image(status_url):
 
 
 def check_links_online_status(links_with_status, shared_state=None):
-    """
-    Check online status for links that have status URLs.
-    Returns list of links that are online (or have no status URL to check).
-
-    Args:
-        links_with_status: list of [href, identifier, status_url] where status_url can be None
-        shared_state: optional, not used currently but kept for API compatibility
-    
-    Returns:
-        List of [href, identifier] for online links
-    """
+    """Check online status for links that have status URLs."""
     links_to_check = [(i, link) for i, link in enumerate(links_with_status) if len(link) > 2 and link[2]]
 
     if not links_to_check:

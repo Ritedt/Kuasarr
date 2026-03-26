@@ -64,16 +64,7 @@ def create_session(
     shared_state,
     credentials: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
-    """Create a new session for given hostname, return session_id.
-
-    Args:
-        hostname: The hostname for which to create the session
-        shared_state: The shared state object containing database access
-        credentials: Optional credentials dict to associate with the session
-
-    Returns:
-        The new session_id if created successfully, None otherwise
-    """
+    """Create a new session for given hostname."""
     if not hostname:
         debug("Session manager: Cannot create session without hostname")
         return None
@@ -108,16 +99,7 @@ def validate_session(
     shared_state,
     session_id: str
 ) -> bool:
-    """Validate existing session, return True if valid/not expired.
-
-    Args:
-        hostname: The hostname the session belongs to
-        shared_state: The shared state object containing database access
-        session_id: The session ID to validate
-
-    Returns:
-        True if session exists and is not expired, False otherwise
-    """
+    """Validate existing session, return True if valid/not expired."""
     if not hostname or not session_id:
         return False
 
@@ -151,19 +133,7 @@ def get_or_create_session(
     shared_state,
     credentials: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
-    """Get valid session or create new one.
-
-    This function attempts to find an existing valid session for the hostname.
-    If none exists or credentials have changed, a new session is created.
-
-    Args:
-        hostname: The hostname for the session
-        shared_state: The shared state object containing database access
-        credentials: Optional credentials to check for changes
-
-    Returns:
-        A valid session_id (existing or new), None if creation failed
-    """
+    """Get valid session or create new one."""
     if not hostname:
         debug("Session manager: Cannot get/create session without hostname")
         return None
@@ -204,16 +174,7 @@ def invalidate_session(
     shared_state,
     session_id: str
 ) -> bool:
-    """Mark session as invalid (e.g., after auth failure).
-
-    Args:
-        hostname: The hostname the session belongs to
-        shared_state: The shared state object containing database access
-        session_id: The session ID to invalidate
-
-    Returns:
-        True if session was found and deleted, False otherwise
-    """
+    """Mark session as invalid (e.g., after auth failure)."""
     if not hostname or not session_id:
         return False
 
@@ -237,15 +198,7 @@ def cleanup_expired_sessions(
     shared_state,
     max_age_hours: int = DEFAULT_SESSION_MAX_AGE_HOURS
 ) -> int:
-    """Clean up expired sessions, return count cleaned.
-
-    Args:
-        shared_state: The shared state object containing database access
-        max_age_hours: Maximum age in hours before a session is considered expired
-
-    Returns:
-        Number of sessions cleaned up
-    """
+    """Clean up expired sessions, return count cleaned."""
     db = _get_db(shared_state)
     cutoff_time = time.time() - (max_age_hours * 60 * 60)
     cleaned_count = 0
@@ -296,16 +249,7 @@ def get_session_metadata(
     shared_state,
     session_id: str
 ) -> Optional[Dict[str, Any]]:
-    """Get metadata for a session.
-
-    Args:
-        hostname: The hostname the session belongs to
-        shared_state: The shared state object containing database access
-        session_id: The session ID
-
-    Returns:
-        Session metadata dict if found, None otherwise
-    """
+    """Get metadata for a session."""
     if not hostname or not session_id:
         return None
 
@@ -332,17 +276,7 @@ def update_session_metadata(
     session_id: str,
     metadata: Dict[str, Any]
 ) -> bool:
-    """Update metadata for a session.
-
-    Args:
-        hostname: The hostname the session belongs to
-        shared_state: The shared state object containing database access
-        session_id: The session ID
-        metadata: New metadata dict (merges with existing)
-
-    Returns:
-        True if updated successfully, False otherwise
-    """
+    """Update metadata for a session."""
     if not hostname or not session_id:
         return False
 

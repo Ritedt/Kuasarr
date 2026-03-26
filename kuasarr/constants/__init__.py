@@ -78,17 +78,7 @@ def _load_slow_mode_from_config() -> bool:
 
 
 def get_timeout(base_timeout: int) -> int:
-    """Get timeout value with slow mode multiplier applied.
-
-    When slow mode is enabled (via KUASARR_SLOW_MODE env var or config),
-    all timeouts are multiplied by TIMEOUT_SLOW_MODE_MULTIPLIER (3x).
-
-    Args:
-        base_timeout: Base timeout in seconds
-
-    Returns:
-        Timeout in seconds (base * multiplier if slow mode enabled)
-    """
+    """Get timeout value with slow mode multiplier applied."""
     # Check config if not already enabled via env var
     _load_slow_mode_from_config()
 

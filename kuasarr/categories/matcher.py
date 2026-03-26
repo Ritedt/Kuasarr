@@ -214,15 +214,7 @@ SOURCE_CATEGORY_MAP = {
 
 
 def detect_category_from_release_name(release_name: str) -> Optional[str]:
-    """
-    Detect category from release name using pattern matching.
-
-    Args:
-        release_name: The release name to analyze
-
-    Returns:
-        Category ID or None if no confident match
-    """
+    """Detect category from release name using pattern matching."""
     if not release_name:
         return None
 
@@ -255,15 +247,7 @@ def detect_category_from_release_name(release_name: str) -> Optional[str]:
 
 
 def detect_category_from_filename(filename: str) -> Optional[str]:
-    """
-    Detect category from a filename using extension mapping.
-
-    Args:
-        filename: The filename to analyze
-
-    Returns:
-        Category ID or None if extension not recognized
-    """
+    """Detect category from a filename using extension mapping."""
     if not filename:
         return None
 
@@ -282,16 +266,7 @@ def detect_category_from_filename(filename: str) -> Optional[str]:
 
 
 def detect_category_from_extensions(extensions: List[str]) -> Optional[str]:
-    """
-    Detect category from a list of file extensions.
-    Returns the most common category among the extensions.
-
-    Args:
-        extensions: List of file extensions (with or without dots)
-
-    Returns:
-        Category ID or None if no match
-    """
+    """Detect category from a list of file extensions."""
     if not extensions:
         return None
 
@@ -317,24 +292,7 @@ def detect_category(source: Optional[str] = None,
                    release_name: Optional[str] = None,
                    filename: Optional[str] = None,
                    extensions: Optional[List[str]] = None) -> Optional[str]:
-    """
-    Detect category using multiple detection methods.
-
-    Priority order:
-    1. Source application (Radarr/Sonarr/etc)
-    2. Release name pattern matching
-    3. Filename extension
-    4. List of extensions
-
-    Args:
-        source: Source application name (radarr, sonarr, etc.)
-        release_name: Release name to analyze
-        filename: Single filename to check
-        extensions: List of file extensions
-
-    Returns:
-        Category ID or None if no match
-    """
+    """Detect category using multiple detection methods."""
     # 1. Check source application
     if source:
         source_lower = source.lower()
@@ -365,15 +323,7 @@ def detect_category(source: Optional[str] = None,
 
 
 def get_category_confidence(release_name: str) -> Tuple[Optional[str], float]:
-    """
-    Detect category and return confidence score.
-
-    Args:
-        release_name: The release name to analyze
-
-    Returns:
-        Tuple of (category_id, confidence_score) where confidence is 0.0-1.0
-    """
+    """Detect category and return confidence score."""
     if not release_name:
         return None, 0.0
 
@@ -414,17 +364,7 @@ def get_category_confidence(release_name: str) -> Tuple[Optional[str], float]:
 
 
 def suggest_category_patterns(category_id: str, sample_release_names: List[str]) -> List[str]:
-    """
-    Analyze sample release names and suggest patterns for a category.
-    Useful for building category detection rules.
-
-    Args:
-        category_id: The category to analyze for
-        sample_release_names: List of known release names for this category
-
-    Returns:
-        List of suggested regex patterns
-    """
+    """Analyze sample release names and suggest patterns for a category."""
     if not sample_release_names:
         return []
 
@@ -449,17 +389,7 @@ def suggest_category_patterns(category_id: str, sample_release_names: List[str])
 
 
 def validate_category_assignment(category_id: str, release_name: str) -> bool:
-    """
-    Validate if a category assignment makes sense for a release name.
-    Checks for obvious mismatches.
-
-    Args:
-        category_id: The assigned category
-        release_name: The release name to validate
-
-    Returns:
-        True if assignment seems valid, False if mismatch detected
-    """
+    """Validate if a category assignment makes sense for a release name."""
     if not category_id or not release_name:
         return True  # Can't validate without data
 
@@ -491,15 +421,7 @@ def validate_category_assignment(category_id: str, release_name: str) -> bool:
 
 
 def get_all_extensions_for_category(category_id: str) -> List[str]:
-    """
-    Get all file extensions associated with a category.
-
-    Args:
-        category_id: The category to get extensions for
-
-    Returns:
-        List of file extensions (with dots)
-    """
+    """Get all file extensions associated with a category."""
     extensions = []
     for ext, cat in EXTENSION_CATEGORIES.items():
         if cat == category_id:
@@ -520,18 +442,7 @@ def get_all_extensions_for_category(category_id: str) -> List[str]:
 def match_release_to_category(release_name: str,
                               source: Optional[str] = None,
                               preferred_category: Optional[str] = None) -> Optional[str]:
-    """
-    Main entry point for matching a release to a category.
-    Considers all available information and returns the best match.
-
-    Args:
-        release_name: The release name
-        source: Source application (optional)
-        preferred_category: User-preferred category (optional)
-
-    Returns:
-        Category ID or None
-    """
+    """Main entry point for matching a release to a category."""
     # Use preferred category if provided and valid
     if preferred_category:
         manager = get_category_manager()

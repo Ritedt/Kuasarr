@@ -37,13 +37,7 @@ def get_source_module_names() -> list:
 
 
 def get_sources() -> dict:
-    """
-    Auto-discover and instantiate all registered AbstractSearchSource classes.
-
-    Returns:
-        Dict mapping source initials to AbstractSearchSource instances.
-        Sources without a Source class are silently skipped.
-    """
+    """Auto-discover and instantiate all registered AbstractSearchSource classes."""
     if not _sources:
         with _sources_lock:
             if not _sources:

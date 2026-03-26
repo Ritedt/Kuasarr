@@ -144,14 +144,6 @@ def extract_season_number_from_title(page_title, release_type, release_title="")
     Priority is given to standard patterns like S01/E01 or R2 in the optional release title.
     If no match is found, it attempts to extract based on keywords like "Season"/"Staffel"
     or trailing numbers/roman numerals in the page title.
-
-    Args:
-        page_title (str): The title of the page, used as a fallback.
-        release_type (str): The type of release (e.g., 'series').
-        release_title (Optional, str): The title of the release.
-
-    Returns:
-        int: The extracted or inferred season number. Defaults to 1 if not found.
     """
 
     season_num = None

@@ -23,12 +23,7 @@ XXX_REGEX = re.compile(r"\.xxx\.", re.I)
 
 
 def convert_to_rss_date(iso_date_str):
-    """
-    Convert ISO format datetime to RSS date format.
-    DL date format: '2025-12-15T20:43:06+0100'
-    Returns: 'Sun, 15 Dec 2025 20:43:06 +0100'
-    Falls back to current time if conversion fails.
-    """
+    """Convert ISO format datetime to RSS date format."""
     if not iso_date_str:
         return datetime.now().strftime("%a, %d %b %Y %H:%M:%S +0000")
 

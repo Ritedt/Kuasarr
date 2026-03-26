@@ -10,25 +10,13 @@ from kuasarr.providers.log import info, debug
 
 
 def get_keeplinks_links(shared_state, captcha_token, title, url, password=None, mirror=None):
-    """
-    Decrypt Keeplinks.org container links.
-    
+    """Decrypt Keeplinks.org container links.
+
     Flow:
     1. GET the keeplinks URL
     2. POST to proceed past the first page (showpageval=1)
     3. Solve the image CAPTCHA and POST the solution
     4. Extract the download links from the response
-    
-    Args:
-        shared_state: Shared application state
-        captcha_token: The solved CAPTCHA text (from DBC image CAPTCHA)
-        title: Release title
-        url: Keeplinks URL (e.g., https://www.keeplinks.org/p16/65380314ae40e)
-        password: Optional password (not commonly used on keeplinks)
-        mirror: Optional mirror preference
-        
-    Returns:
-        dict with 'status' and 'links' on success, or False on failure
     """
     info(f"Attempting to decrypt Keeplinks: {url}")
     

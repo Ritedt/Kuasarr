@@ -54,14 +54,7 @@ class StatsHelper:
         db.update_store(key, str(current + count))
 
     def increment_package_with_links(self, links):
-        """Increment package downloaded and links processed for one package, or failed download if no links
-
-        Args:
-            links: Can be:
-                - list/array: counts the length
-                - int: uses the value directly  
-                - None/False/empty: treats as failed download
-        """
+        """Increment package downloaded and links processed for one package, or failed download if no links"""
         # Handle different input types
         if links is None or links is False:
             link_count = 0

@@ -50,9 +50,6 @@ def get_wx_download_links(shared_state, url, mirror, title, password=None):
     Finds the best mirror (M1, M2, M3...) by checking online status.
     Returns all online links from the first complete mirror, or the best partial mirror.
     Prefers hide.cx links over other crypters (filecrypt, etc.) when online counts are equal.
-
-    Returns:
-        dict with 'links', 'password', and 'title'
     """
     host = shared_state.values["config"]("Hostnames").get(hostname)
     if not host:

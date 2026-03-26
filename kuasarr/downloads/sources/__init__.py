@@ -31,12 +31,7 @@ def get_source_module_names() -> list:
 
 
 def get_sources() -> dict:
-    """
-    Auto-discover and instantiate all registered AbstractDownloadSource classes.
-
-    Returns:
-        Dict mapping source initials to AbstractDownloadSource instances.
-    """
+    """Auto-discover and instantiate all registered AbstractDownloadSource classes."""
     if not _sources:
         for module_name in get_source_module_names():
             try:

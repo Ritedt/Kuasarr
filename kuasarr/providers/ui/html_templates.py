@@ -1297,16 +1297,7 @@ def render_core_settings_form(internal_address="", external_address="", timezone
 
 
 def render_category_selector(selected_category: str = "", id_prefix: str = "", required: bool = False) -> str:
-    """Render a category dropdown selector.
-
-    Args:
-        selected_category: The currently selected category ID
-        id_prefix: Prefix for element IDs to avoid conflicts
-        required: Whether the field is required
-
-    Returns:
-        HTML string for the category selector
-    """
+    """Render a category dropdown selector."""
     from kuasarr.providers import shared_state
 
     required_attr = ' required' if required else ''
@@ -1347,11 +1338,7 @@ def render_category_selector(selected_category: str = "", id_prefix: str = "", r
 
 
 def get_categories_for_selector() -> list:
-    """Get categories formatted for selector use.
-
-    Returns:
-        List of dicts with 'id', 'name', 'download_path' keys
-    """
+    """Get categories formatted for selector use."""
     from kuasarr.providers import shared_state
 
     try:

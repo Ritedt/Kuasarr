@@ -20,20 +20,7 @@ def _get_db():
 
 
 def mark_hostname_issue(shorthand: str, operation: str, error_message: Optional[str]) -> None:
-    """
-    Record a hostname issue in the database.
-
-    Args:
-        shorthand: The hostname shorthand/identifier (e.g., 'example_com')
-        operation: The operation that failed (e.g., 'search', 'download', 'parse')
-        error_message: The error message or exception string
-
-    Edge cases handled:
-        - None shorthand: silently returns without recording
-        - Empty operation: defaults to 'unknown'
-        - None error_message: stored as empty string
-        - Error message truncated to 500 chars to prevent DB bloat
-    """
+    """Record a hostname issue in the database."""
     if shorthand is None:
         return
 
@@ -53,19 +40,7 @@ def mark_hostname_issue(shorthand: str, operation: str, error_message: Optional[
 
 
 def clear_hostname_issue(shorthand: str) -> bool:
-    """
-    Clear a specific hostname issue from the database.
-
-    Args:
-        shorthand: The hostname shorthand/identifier to clear
-
-    Returns:
-        True if an entry was deleted, False otherwise
-
-    Edge cases handled:
-        - None or empty shorthand: returns False
-        - Non-existent key: returns False (no error raised)
-    """
+    """Clear a specific hostname issue from the database."""
     if shorthand is None:
         return False
 
@@ -85,20 +60,7 @@ def clear_hostname_issue(shorthand: str) -> bool:
 
 
 def get_hostname_issue(shorthand: str) -> Optional[Dict[str, Any]]:
-    """
-    Retrieve a specific hostname issue from the database.
-
-    Args:
-        shorthand: The hostname shorthand/identifier to look up
-
-    Returns:
-        Dict with 'operation', 'error', 'timestamp' keys, or None if not found
-
-    Edge cases handled:
-        - None or empty shorthand: returns None
-        - Corrupted JSON data: returns None (logs no error, graceful degradation)
-        - Non-existent key: returns None
-    """
+    """Retrieve a specific hostname issue from the database."""
     if shorthand is None:
         return None
 
@@ -119,17 +81,7 @@ def get_hostname_issue(shorthand: str) -> Optional[Dict[str, Any]]:
 
 
 def get_all_hostname_issues() -> Dict[str, Dict[str, Any]]:
-    """
-    Retrieve all hostname issues from the database.
-
-    Returns:
-        Dict mapping shorthand -> issue data dict
-        Empty dict if no issues exist
-
-    Edge cases handled:
-        - Empty database: returns empty dict
-        - Corrupted JSON entries: skipped (not included in results)
-    """
+    """Retrieve all hostname issues from the database."""
     db = _get_db()
     all_data = db.retrieve_all_titles()
 
@@ -146,16 +98,7 @@ def get_all_hostname_issues() -> Dict[str, Dict[str, Any]]:
 
 
 def clear_all_hostname_issues() -> int:
-    """
-    Clear all hostname issues from the database.
-
-    Returns:
-        Number of entries deleted
-
-    Edge cases handled:
-        - Empty database: returns 0
-        - Database errors: returns 0 (graceful degradation)
-    """
+    """Clear all hostname issues from the database."""
     db = _get_db()
     all_data = db.retrieve_all_titles()
 

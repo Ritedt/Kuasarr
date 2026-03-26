@@ -24,6 +24,7 @@ from kuasarr.providers import shared_state
 from kuasarr.providers.auth import add_auth_hook, add_auth_routes, require_api_key
 from kuasarr.providers.log import debug
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html, render_success_no_wait
+from kuasarr.providers.ui.spa import try_serve_spa
 from kuasarr.providers.web_server import Server
 from kuasarr.storage.config import Config
 from kuasarr.storage.setup.notifications import initialize_notification_settings
@@ -108,11 +109,9 @@ def get_api(shared_state_dict, shared_state_lock):
 
     @app.get('/')
     def index():
-        """Serve React SPA if available, otherwise fall back to legacy HTML."""
-        # Try to serve React build first
-        webui_index = os.path.join(WEBUI_DIR, 'index.html')
-        if os.path.exists(webui_index):
-            return static_file('index.html', root=WEBUI_DIR)
+        spa = try_serve_spa()
+        if spa is not None:
+            return spa
 
         # Legacy HTML fallback
         protected = shared_state.get_db("protected").retrieve_all_titles()
@@ -582,9 +581,9 @@ def get_api(shared_state_dict, shared_state_lock):
         if path in ('manifest.webmanifest', 'registerSW.js', 'sw.js'):
             abort(404)
 
-        webui_index = os.path.join(WEBUI_DIR, 'index.html')
-        if os.path.exists(webui_index):
-            return static_file('index.html', root=WEBUI_DIR)
+        spa = try_serve_spa()
+        if spa is not None:
+            return spa
 
         # If no React build, return 404
         abort(404)

@@ -400,7 +400,7 @@ jobs:
         run: |
           set -euo pipefail
           cd kuasarr/webui
-          npm ci
+          npm ci --legacy-peer-deps
 
       - name: Build WebUI
         run: |

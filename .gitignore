@@ -48,4 +48,5 @@ tmp-config/
 README_PYPI.md
 
 # Claude Code
-.claude/
+.claude/*
+!.claude/launch.json

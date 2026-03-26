@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Kuasarr Backend",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["Kuasarr.py"],
+      "port": 9999
+    },
+    {
+      "name": "WebUI Dev Server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "kuasarr/webui"],
+      "port": 5173
+    }
+  ]
+}

@@ -15,7 +15,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.0 /uv /usr/local/bin/uv
 RUN apk add --no-cache \
     python3 \
     python3-dev \
-    build-base
+    build-base \
+    tzdata
 
 # Create venv and install local package (assumes .whl is in dist/ folder during build)
 ENV VIRTUAL_ENV=/opt/venv

@@ -312,7 +312,6 @@ def setup_config(app, shared_state):
         import re
         import socket
         from urllib.parse import urlparse
-        from zoneinfo import available_timezones
         from kuasarr.storage.config import Config
         from kuasarr.providers.log import audit_core_settings_change, audit_security_event
 
@@ -443,10 +442,13 @@ def setup_config(app, shared_state):
             if not _is_valid_url(external_address, allow_empty=True, is_external=True):
                 errors['external_address'] = _get_url_error_message("External Address", is_external=True) + " Leave empty if not using external access."
 
-        # Validate timezone against IANA timezone database
+        # Validate timezone — available_timezones() returns empty on Windows without tzdata,
+        # so we validate by attempting to instantiate ZoneInfo directly instead.
         if timezone:
-            valid_timezones = available_timezones()
-            if timezone not in valid_timezones:
+            try:
+                from zoneinfo import ZoneInfo
+                ZoneInfo(timezone)
+            except Exception:
                 errors['timezone'] = f"'{timezone}' is not a valid timezone. Please select a valid IANA timezone identifier (e.g., Europe/Berlin, America/New_York)."
         else:
             errors['timezone'] = "Timezone is required. Please select a valid timezone from the dropdown."

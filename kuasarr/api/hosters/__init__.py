@@ -10,6 +10,7 @@ from kuasarr.providers import shared_state
 from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.hosters import SUPPORTED_HOSTERS
 from kuasarr.providers.ui.html_templates import render_centered_html, render_button
+from kuasarr.providers.ui.spa import try_serve_spa
 from kuasarr.storage.config import Config
 
 
@@ -19,6 +20,9 @@ def setup_hosters_routes(app):
     @app.get('/hosters')
     def hosters_page():
         """Render the hoster blocking UI."""
+        spa = try_serve_spa()
+        if spa is not None:
+            return spa
         blocked = _get_blocked_list()
         
         hoster_cards = ""

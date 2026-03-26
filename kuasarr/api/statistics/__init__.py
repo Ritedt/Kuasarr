@@ -8,12 +8,16 @@ import kuasarr.providers.ui.html_images as images
 from bottle import response
 from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html
+from kuasarr.providers.ui.spa import try_serve_spa
 from kuasarr.providers.statistics import StatsHelper
 
 
 def setup_statistics(app, shared_state):
     @app.get('/statistics')
     def statistics():
+        spa = try_serve_spa()
+        if spa is not None:
+            return spa
         stats_helper = StatsHelper(shared_state)
         stats = stats_helper.get_stats()
 

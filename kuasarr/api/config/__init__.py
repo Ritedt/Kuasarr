@@ -4,6 +4,7 @@
 
 from kuasarr.providers.auth import require_api_key, require_csrf_token, rate_limit, get_csrf_token
 from kuasarr.providers.ui.html_templates import render_form, render_button, render_success
+from kuasarr.providers.ui.spa import try_serve_spa
 from kuasarr.storage.setup import hostname_form_html, save_hostnames, dbc_credentials_config
 
 
@@ -105,6 +106,9 @@ def setup_config(app, shared_state):
 
     @app.get('/settings')
     def settings_ui():
+        spa = try_serve_spa()
+        if spa is not None:
+            return spa
         from kuasarr.storage.config import Config
         sections_html = []
         

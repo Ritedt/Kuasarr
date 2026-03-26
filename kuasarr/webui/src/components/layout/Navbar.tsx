@@ -52,27 +52,6 @@ export function Navbar({ jdConnected = false }: NavbarProps) {
             </span>
           </Link>
 
-          {/* Desktop Navigation */}
-          <div className="hidden lg:flex items-center gap-1">
-            {navLinks.map((link) => {
-              const isActive = location.pathname === link.href
-              return (
-                <Link
-                  key={link.href}
-                  to={link.href}
-                  className={cn(
-                    'px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200',
-                    isActive
-                      ? 'bg-kuasarr-primary/20 text-kuasarr-primary-light'
-                      : 'text-text-secondary hover:text-text-primary hover:bg-bg-tertiary'
-                  )}
-                >
-                  {link.label}
-                </Link>
-              )
-            })}
-          </div>
-
           {/* Right Section: JD Status + Mobile Menu */}
           <div className="flex items-center gap-4">
             {/* JDownloader Connection Status */}

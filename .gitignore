@@ -46,3 +46,6 @@ helper/
 tmp-config/
 
 README_PYPI.md
+
+# Claude Code
+.claude/

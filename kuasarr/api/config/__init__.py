@@ -154,7 +154,16 @@ def setup_config(app, shared_state):
                     </div>
                 ''')
 
+        core_settings_card = f'''
+            <div class="settings-card settings-card--link">
+                <h3>Connection</h3>
+                <p style="margin:0 0 1rem;color:#666;">Internal &amp; external address, timezone and live-update settings.</p>
+                {render_button("Configure Connection Settings", "primary", {"onclick": "location.href='/settings/core'"})}
+            </div>
+        '''
+
         form_html = f'''
+        {core_settings_card}
         <form action="/api/settings" method="post" id="settingsForm">
             {"".join(sections_html)}
             <div class="actions">

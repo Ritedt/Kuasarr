@@ -764,6 +764,7 @@ def render_core_settings_form(internal_address="", external_address="", timezone
                     Saving...
                 </span>
             </button>
+            <button type="button" class="btn-secondary" onclick="location.href='/settings'">Back</button>
             <div id="form-feedback" class="form-feedback" role="status" aria-live="polite"></div>
         </div>
     </form>

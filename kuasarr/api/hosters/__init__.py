@@ -189,11 +189,11 @@ def setup_hosters_routes(app):
             result.append({
                 "id": hoster_id,
                 "name": hoster_info["name"],
-                "domain": hoster_info["domain"],
+                "url": hoster_info["domain"],
                 "blocked": hoster_id in blocked
             })
         
-        return json.dumps(sorted(result, key=lambda x: x["name"]))
+        return json.dumps({"data": sorted(result, key=lambda x: x["name"])})
 
     @app.post('/api/hosters/block')
     @require_api_key

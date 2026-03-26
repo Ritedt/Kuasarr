@@ -25,11 +25,14 @@ import type {
 const API_BASE = '/api';
 
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
+  const apiKey = window.KUASARR_API_KEY || '';
   const response = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(apiKey ? { 'X-Api-Key': apiKey } : {}),
+      ...((options?.headers as Record<string, string>) || {}),
     },
-    ...options,
   });
 
   if (!response.ok) {
@@ -103,15 +106,37 @@ export async function unblockAllHosters(): Promise<void> {
 }
 
 // Packages API
+// Backend returns {connected: bool, queue: [...], history: [...]} — not the standard {data: [...]} wrapper.
+interface PackagesRawResponse {
+  connected: boolean;
+  queue: Package[];
+  history: Package[];
+}
+
 export async function getPackages(status?: string): Promise<Package[]> {
   const endpoint = status ? `/packages?status=${encodeURIComponent(status)}` : '/packages';
-  const response = await fetchApi<Package[]>(endpoint);
-  return response.data || [];
+  const raw = await fetch(`${API_BASE}${endpoint}`, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(window.KUASARR_API_KEY ? { 'X-Api-Key': window.KUASARR_API_KEY } : {}),
+    },
+  });
+  if (!raw.ok) {
+    const error = await raw.json().catch(() => ({ error: { message: 'Unknown error' } }));
+    throw new Error((error as { error?: { message?: string } }).error?.message || `HTTP ${raw.status}`);
+  }
+  const data = (await raw.json()) as PackagesRawResponse;
+  const queue = data.queue || [];
+  const history = data.history || [];
+  if (!status) return [...queue, ...history];
+  return [...queue, ...history].filter((p) => p.status === status);
 }
 
 export async function getPackageById(packageId: string): Promise<Package | null> {
-  const response = await fetchApi<Package>(`/packages/${packageId}`);
-  return response.data || null;
+  // No dedicated GET /api/packages/<id> endpoint exists on the backend.
+  // Fetch all packages and find by id as a fallback.
+  const all = await getPackages();
+  return all.find((p) => p.id === packageId) ?? null;
 }
 
 export async function pausePackage(packageId: string): Promise<void> {

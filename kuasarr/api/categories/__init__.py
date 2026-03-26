@@ -30,7 +30,7 @@ def setup_categories_routes(app):
         """Get all categories as JSON."""
         response.content_type = 'application/json'
         categories = _get_all_categories()
-        return json.dumps({"success": True, "categories": categories})
+        return json.dumps({"data": categories})
 
     @app.get('/api/categories/<category_id>')
     @require_api_key
@@ -39,9 +39,9 @@ def setup_categories_routes(app):
         response.content_type = 'application/json'
         category = _get_category(category_id)
         if category:
-            return json.dumps({"success": True, "category": category})
+            return json.dumps({"data": category})
         response.status = 404
-        return json.dumps({"success": False, "error": "Category not found"})
+        return json.dumps({"error": "Category not found"})
 
     @app.post('/api/categories')
     @require_api_key
@@ -77,7 +77,7 @@ def setup_categories_routes(app):
 
             if errors:
                 response.status = 400
-                return json.dumps({"success": False, "errors": errors})
+                return json.dumps({"errors": errors})
 
             # Generate ID from name
             category_id = _generate_category_id(name)
@@ -94,11 +94,11 @@ def setup_categories_routes(app):
             }
 
             _save_category(category_id, category)
-            return json.dumps({"success": True, "category": category})
+            return json.dumps({"data": category})
 
         except Exception as e:
             response.status = 500
-            return json.dumps({"success": False, "error": str(e)})
+            return json.dumps({"error": str(e)})
 
     @app.post('/api/categories/<category_id>')
     @require_api_key
@@ -109,7 +109,7 @@ def setup_categories_routes(app):
             existing = _get_category(category_id)
             if not existing:
                 response.status = 404
-                return json.dumps({"success": False, "error": "Category not found"})
+                return json.dumps({"error": "Category not found"})
 
             data = request.json or {}
             name = data.get('name', '').strip()
@@ -139,7 +139,7 @@ def setup_categories_routes(app):
 
             if errors:
                 response.status = 400
-                return json.dumps({"success": False, "errors": errors})
+                return json.dumps({"errors": errors})
 
             # Validate file patterns
             validated_patterns = _validate_patterns(file_patterns)
@@ -153,11 +153,11 @@ def setup_categories_routes(app):
             }
 
             _save_category(category_id, category)
-            return json.dumps({"success": True, "category": category})
+            return json.dumps({"data": category})
 
         except Exception as e:
             response.status = 500
-            return json.dumps({"success": False, "error": str(e)})
+            return json.dumps({"error": str(e)})
 
     @app.delete('/api/categories/<category_id>')
     @require_api_key
@@ -168,14 +168,14 @@ def setup_categories_routes(app):
             existing = _get_category(category_id)
             if not existing:
                 response.status = 404
-                return json.dumps({"success": False, "error": "Category not found"})
+                return json.dumps({"error": "Category not found"})
 
             _delete_category(category_id)
-            return json.dumps({"success": True})
+            return json.dumps({})
 
         except Exception as e:
             response.status = 500
-            return json.dumps({"success": False, "error": str(e)})
+            return json.dumps({"error": str(e)})
 
 
 def _generate_category_id(name: str) -> str:

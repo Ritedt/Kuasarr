@@ -110,13 +110,23 @@ def get_api(shared_state_dict, shared_state_lock):
     def pwa_install():
         return static_file('pwa-install.html', root=STATIC_DIR)
 
+    def _inject_api_key(html, api_key):
+        """Inject API key into HTML before </head>."""
+        script_tag = f'<script>window.KUASARR_API_KEY="{api_key}";</script>'
+        return html.replace('</head>', script_tag + '</head>', 1)
+
     @app.get('/')
     def index():
         """Serve React SPA if available, otherwise fall back to legacy HTML."""
         # Try to serve React build first
         webui_index = os.path.join(WEBUI_DIR, 'index.html')
         if os.path.exists(webui_index):
-            return static_file('index.html', root=WEBUI_DIR)
+            api_key = Config('API').get('key') or ''
+            with open(webui_index, 'r', encoding='utf-8') as f:
+                html = f.read()
+            html = _inject_api_key(html, api_key)
+            response.content_type = 'text/html; charset=UTF-8'
+            return html
 
         # Legacy HTML fallback
         protected = shared_state.get_db("protected").retrieve_all_titles()
@@ -483,7 +493,7 @@ def get_api(shared_state_dict, shared_state_lock):
         response.content_type = 'application/json'
         try:
             data = json.loads(request.body.read().decode('utf-8'))
-            user = data.get('user', '').strip()
+            user = (data.get('email') or data.get('user') or '').strip()
             password = data.get('password', '').strip()
         except Exception:
             return json.dumps({'error': 'Invalid request'})
@@ -534,6 +544,73 @@ def get_api(shared_state_dict, shared_state_lock):
 
         return json.dumps({'success': True})
 
+    @app.get('/api/jdownloader/status')
+    @require_api_key
+    def jd_status_get():
+        """Return current JDownloader connection status."""
+        response.content_type = 'application/json'
+        device = shared_state.values.get("device")
+        from kuasarr.providers.myjd_api import Jddevice
+        connected = isinstance(device, Jddevice)
+        config = Config('JDownloader')
+        return json.dumps({'data': {
+            'connected': connected,
+            'email': config.get('user') or '',
+            'device_name': config.get('device') or '',
+            'total_downloads': 0,
+            'active_downloads': 0,
+            'global_speed': 0,
+            'reconnect_enabled': False,
+        }})
+
+    @app.get('/api/jdownloader/config')
+    @require_api_key
+    def jd_config_get():
+        """Return current JDownloader configuration."""
+        response.content_type = 'application/json'
+        config = Config('JDownloader')
+        user = config.get('user') or ''
+        device = config.get('device') or ''
+        return json.dumps({'data': {
+            'email': user,
+            'device_name': device,
+            'configured': bool(user and device),
+        }})
+
+    @app.post('/api/jdownloader/config')
+    @require_api_key
+    def jd_config_post():
+        """Save JDownloader config (alias for /api/jdownloader/save).
+
+        Accepts frontend field names: {email, password, device_name}.
+        """
+        response.content_type = 'application/json'
+        try:
+            data = json.loads(request.body.read().decode('utf-8'))
+            user = (data.get('email') or data.get('user') or '').strip()
+            password = data.get('password', '').strip()
+            device = (data.get('device_name') or data.get('device') or '').strip()
+        except Exception:
+            return json.dumps({'success': False, 'error': 'Invalid request'})
+
+        if not user or not password or not device:
+            return json.dumps({'success': False, 'error': 'All fields required'})
+
+        import re
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', user):
+            return json.dumps({'success': False, 'error': 'Invalid email format'})
+
+        from kuasarr.providers.jdownloader import set_device
+        ok = set_device(user, password, device)
+        if not ok:
+            return json.dumps({'success': False, 'error': 'Connection failed.'})
+
+        config = Config('JDownloader')
+        config.save('user', user)
+        config.save('password', password)
+        config.save('device', device)
+        return json.dumps({'success': True, 'data': None})
+
     @app.get('/regenerate-api-key')
     def regenerate_api_key():
         new_key = shared_state.generate_api_key()
@@ -558,7 +635,12 @@ def get_api(shared_state_dict, shared_state_lock):
 
         webui_index = os.path.join(WEBUI_DIR, 'index.html')
         if os.path.exists(webui_index):
-            return static_file('index.html', root=WEBUI_DIR)
+            api_key = Config('API').get('key') or ''
+            with open(webui_index, 'r', encoding='utf-8') as f:
+                html = f.read()
+            html = _inject_api_key(html, api_key)
+            response.content_type = 'text/html; charset=UTF-8'
+            return html
 
         # If no React build, return 404
         abort(404)

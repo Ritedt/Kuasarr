@@ -2,7 +2,11 @@
 # Kuasarr
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
+import json
+
 import kuasarr.providers.ui.html_images as images
+from bottle import response
+from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html
 from kuasarr.providers.statistics import StatsHelper
 
@@ -195,5 +199,22 @@ def setup_statistics(app, shared_state):
 
         return render_centered_html(stats_html)
 
-
-
+    @app.get('/api/statistics')
+    @require_api_key
+    def get_statistics_api():
+        """Return statistics as JSON."""
+        response.content_type = 'application/json'
+        stats_helper = StatsHelper(shared_state)
+        stats = stats_helper.get_stats()
+        return json.dumps({'data': {
+            'total_packages': stats.get('total_download_attempts', 0),
+            'completed_packages': stats.get('packages_downloaded', 0),
+            'failed_packages': stats.get('failed_downloads', 0),
+            'total_downloaded': 0,
+            'average_speed': 0,
+            'uptime_seconds': 0,
+            'api_calls_today': 0,
+            'captchas_solved_today': stats.get('total_captcha_decryptions', 0),
+            'hoster_status': [],
+            'daily_stats': [],
+        }})

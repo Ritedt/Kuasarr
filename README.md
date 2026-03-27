@@ -44,13 +44,25 @@ docker run -d \
 
 ## What is Kuasarr?
 
+Kuasarr automates the entire DDL workflow – from search to download. No manual CAPTCHA solving required.
+
 | Feature | Description |
 |---------|-------------|
 | 🎨 **Modern UI** | Intuitive dark-theme web interface – complete configuration without CLI |
 | 🔍 **Indexer** | Searches DDL sites for releases |
-| 🔓 **CAPTCHA** | Automatic decryption via DeathByCaptcha or 2Captcha |
+| 🤖 **Auto-CAPTCHA** | Automatic solving via [DeathByCaptcha](https://deathbycaptcha.com/?refid=1237432788a) or [2Captcha](https://2captcha.com/auth/register/?from=26376359) – no manual interaction needed |
 | 📥 **Download** | Sends links directly to JDownloader |
 | 🎯 **Tracking** | Radarr/Sonarr automatically detect completed downloads |
+
+### Required External Services
+
+| Service | Cost | Purpose |
+|---------|------|---------|
+| **[FlareSolverr](https://github.com/FlareSolverr/FlareSolverr)** | Free | Bypasses Cloudflare protection |
+| **[DeathByCaptcha](https://deathbycaptcha.com/?refid=1237432788a)** or **[2Captcha](https://2captcha.com/auth/register/?from=26376359)** | Paid | Solves CAPTCHAs automatically |
+| **[JDownloader 2](https://jdownloader.org)** | Free | Downloads the actual files |
+
+> **Important**: DeathByCaptcha and 2Captcha are **paid services** (approx. $2-4 per 1000 CAPTCHAs). You need an active account with one of them for Kuasarr to work.
 
 ---
 
@@ -77,8 +89,8 @@ Configurable via WebUI or environment variables:
 
 | Variable | Service |
 |----------|---------|
-| `DBC_AUTHTOKEN` | [DeathByCaptcha](https://deathbycaptcha.com) |
-| `TWOCAPTCHA_API_KEY` | [2Captcha](https://2captcha.com) |
+| `DBC_AUTHTOKEN` | [DeathByCaptcha](https://deathbycaptcha.com/?refid=1237432788a) |
+| `TWOCAPTCHA_API_KEY` | [2Captcha](https://2captcha.com/auth/register/?from=26376359) |
 
 </details>
 
@@ -95,7 +107,7 @@ docker run -d \
   ghcr.io/ritedt/kuasarr:latest
 ```
 
-API endpoints (`/api/*`, `/download/*`) remain unprotected for *arr integration.
+API endpoints (`/api/*`, `/download/*`) are secured via API key for *arr integration – no additional authentication required.
 
 </details>
 

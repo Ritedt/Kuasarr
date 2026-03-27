@@ -23,13 +23,18 @@ import type {
 } from '../types';
 
 const API_BASE = '/api';
+const _API_KEY = typeof window !== 'undefined' ? window.KUASARR_API_KEY : undefined;
 
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(_API_KEY ? { 'X-API-Key': _API_KEY } : {}),
+    ...(options?.headers as Record<string, string> | undefined),
+  };
+
   const response = await fetch(`${API_BASE}${endpoint}`, {
-    headers: {
-      'Content-Type': 'application/json',
-    },
     ...options,
+    headers,
   });
 
   if (!response.ok) {

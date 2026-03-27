@@ -10,6 +10,7 @@ Categories define download paths and file type patterns for organizing downloads
 """
 
 import json
+import threading
 from typing import Dict, List, Optional, Any
 
 from kuasarr.storage.sqlite_database import DataBase
@@ -97,16 +98,16 @@ CATEGORY_PATTERNS = {
 class CategoryManager:
     """Manages download categories for Kuasarr."""
 
+    _init_lock = threading.Lock()
+
     def __init__(self, db: Optional[DataBase] = None):
         """Initialize category manager with optional database instance."""
-        self._db = db
+        self._db = db if db is not None else DataBase("categories")
         self._categories: Dict[str, Dict[str, Any]] = {}
         self._load_categories()
 
     def _get_db(self) -> DataBase:
         """Get database instance for categories table."""
-        if self._db is None:
-            return DataBase("categories")
         return self._db
 
     def _load_categories(self) -> None:
@@ -122,8 +123,19 @@ class CategoryManager:
                     debug(f"Failed to decode category: {key}")
                     continue
         else:
-            # Initialize with defaults
-            self._initialize_defaults()
+            # Use class-level lock to prevent concurrent default initialization
+            with CategoryManager._init_lock:
+                # Re-check inside the lock (another thread may have written defaults)
+                stored = db.retrieve_all_titles()
+                if not stored:
+                    self._initialize_defaults()
+                else:
+                    for key, value in stored:
+                        try:
+                            self._categories[key] = json.loads(value)
+                        except json.JSONDecodeError:
+                            debug(f"Failed to decode category: {key}")
+                            continue
 
     def _initialize_defaults(self) -> None:
         """Initialize database with default categories."""

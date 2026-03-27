@@ -10,7 +10,8 @@ from typing import Optional
 from bottle import request, response
 
 from kuasarr.providers import shared_state
-from kuasarr.providers.auth import require_api_key
+from kuasarr.providers.auth import require_api_key, require_csrf_token
+from kuasarr.providers.log import error as log_error
 
 
 def setup_categories_routes(app):
@@ -37,6 +38,7 @@ def setup_categories_routes(app):
 
     @app.post('/api/categories')
     @require_api_key
+    @require_csrf_token
     def create_category_api():
         """Create a new category."""
         response.content_type = 'application/json'
@@ -76,11 +78,13 @@ def setup_categories_routes(app):
             return json.dumps({"data": category})
 
         except Exception as e:
+            log_error(f"create_category failed: {e}")
             response.status = 500
-            return json.dumps({"error": {"message": str(e)}})
+            return json.dumps({"error": {"message": "Internal server error"}})
 
     @app.post('/api/categories/<category_id>')
     @require_api_key
+    @require_csrf_token
     def update_category_api(category_id: str):
         """Update an existing category."""
         response.content_type = 'application/json'
@@ -124,11 +128,13 @@ def setup_categories_routes(app):
             return json.dumps({"data": category})
 
         except Exception as e:
+            log_error(f"update_category failed: {e}")
             response.status = 500
-            return json.dumps({"success": False, "error": str(e)})
+            return json.dumps({"success": False, "error": "Internal server error"})
 
     @app.delete('/api/categories/<category_id>')
     @require_api_key
+    @require_csrf_token
     def delete_category_api(category_id: str):
         """Delete a category."""
         response.content_type = 'application/json'
@@ -142,8 +148,9 @@ def setup_categories_routes(app):
             return json.dumps({"success": True})
 
         except Exception as e:
+            log_error(f"delete_category failed: {e}")
             response.status = 500
-            return json.dumps({"success": False, "error": str(e)})
+            return json.dumps({"success": False, "error": "Internal server error"})
 
 
 def _generate_category_id(name: str) -> str:

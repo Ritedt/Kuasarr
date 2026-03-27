@@ -17,14 +17,18 @@ RUN apk add --no-cache \
     python3-dev \
     build-base \
     linux-headers \
-    tzdata
+    tzdata \
+    py3-numpy \
+    py3-opencv
 
-# Create venv and install local package (assumes .whl is in dist/ folder during build)
+# Create venv with system packages (for py3-opencv) and install local package
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN python3 -m venv $VIRTUAL_ENV
+RUN python3 -m venv $VIRTUAL_ENV --system-site-packages
 COPY dist/*.whl /tmp/
-RUN uv pip install /tmp/*.whl && rm /tmp/*.whl && \
+# Install the wheel without deps, then install deps except opencv-python (using system py3-opencv)
+RUN uv pip install /tmp/*.whl --no-deps && rm /tmp/*.whl && \
+    uv pip install beautifulsoup4 bottle deathbycaptcha-official dukpy numpy pillow pycryptodomex requests urllib3 && \
     apk del build-base python3-dev
 
 # runtime defaults

@@ -8,7 +8,7 @@ import re
 
 from bottle import request, response, redirect
 
-from kuasarr.providers.auth import require_api_key
+from kuasarr.providers.auth import require_api_key, require_csrf_token
 from kuasarr.providers.ui.html_templates import render_form, render_button
 from kuasarr.storage.config import Config
 from kuasarr.storage.setup.notifications import (
@@ -268,6 +268,7 @@ def setup_notifications_routes(app, shared_state):
 
     @app.post('/api/notifications')
     @require_api_key
+    @require_csrf_token
     def save_notifications_api():
         """Save notification settings from the frontend format."""
         response.content_type = 'application/json'

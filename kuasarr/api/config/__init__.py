@@ -386,18 +386,26 @@ def setup_config(app, shared_state):
                         # Not an IP address, that's fine
                         pass
 
-                # Sprint H5: Prevent SSRF by validating against internal metadata services
-                blocked_hosts = [
-                    '169.254.169.254',  # AWS, Azure, GCP metadata
-                    'metadata.google.internal',
-                    'metadata.google.internal.',
-                    'instance-data',     # AWS
-                    'metadata',          # Generic
-                    'alibaba.xxx',       # Alibaba Cloud
-                ]
-                hostname_lower = hostname.lower()
-                for blocked in blocked_hosts:
-                    if blocked in hostname_lower:
+                # Resolve hostname to IP(s) and re-check every resolved address.
+                # This closes DNS-rebinding and nip.io-style bypasses.
+                import ipaddress as _ipaddress
+                try:
+                    addrinfos = socket.getaddrinfo(hostname, None)
+                    for addrinfo in addrinfos:
+                        addr_str = addrinfo[4][0]
+                        # Strip IPv6 scope-id if present
+                        addr_str = addr_str.split('%')[0]
+                        try:
+                            resolved = _ipaddress.ip_address(addr_str)
+                        except ValueError:
+                            return False
+                        if resolved.is_loopback or resolved.is_link_local or resolved.is_reserved or resolved.is_multicast:
+                            return False
+                        if resolved.is_private:
+                            return False
+                except (socket.gaierror, OSError):
+                    # Cannot resolve → treat as invalid for external, allow for internal
+                    if is_external:
                         return False
 
                 return True

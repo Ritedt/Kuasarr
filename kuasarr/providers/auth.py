@@ -9,6 +9,7 @@ import html
 import json
 import os
 import secrets
+import threading
 import time
 from functools import wraps
 from urllib.parse import urlsplit
@@ -36,6 +37,7 @@ _CSRF_TOKEN_LENGTH = 32
 _RATE_LIMIT_WINDOW = 60  # seconds
 _RATE_LIMIT_MAX_REQUESTS = 10  # max requests per window
 _rate_limit_store = {}  # Simple in-memory store: {key: [(timestamp, count), ...]}
+_rate_limit_lock = threading.Lock()
 
 # Stable secret derived from PASS (restart-safe)
 _SECRET_KEY = hashlib.sha256(_AUTH_PASS.encode("utf-8")).digest()
@@ -197,40 +199,43 @@ def require_csrf_token(func):
 # ============================================================================
 
 def check_rate_limit(key: str, max_requests: int = None, window: int = None) -> tuple:
-    """Check if request is within rate limit."""
+    """Check if request is within rate limit. Thread-safe."""
     max_requests = max_requests or _RATE_LIMIT_MAX_REQUESTS
     window = window or _RATE_LIMIT_WINDOW
 
     now = time.time()
 
-    # Clean old entries for this key
-    if key in _rate_limit_store:
-        _rate_limit_store[key] = [
-            (ts, count) for ts, count in _rate_limit_store[key]
-            if now - ts < window
+    with _rate_limit_lock:
+        # Clean old entries for this key
+        if key in _rate_limit_store:
+            _rate_limit_store[key] = [
+                (ts, count) for ts, count in _rate_limit_store[key]
+                if now - ts < window
+            ]
+            if not _rate_limit_store[key]:
+                del _rate_limit_store[key]
+        if key not in _rate_limit_store:
+            _rate_limit_store[key] = []
+
+        # Evict all keys whose entries have all expired (not just already-empty ones)
+        stale_keys = [
+            k for k, v in _rate_limit_store.items()
+            if k != key and all(now - ts >= window for ts, _ in v)
         ]
-        if not _rate_limit_store[key]:
-            del _rate_limit_store[key]
-    if key not in _rate_limit_store:
-        _rate_limit_store[key] = []
+        for k in stale_keys:
+            del _rate_limit_store[k]
 
-    # Evict stale keys (empty lists) to prevent unbounded growth
-    stale_keys = [k for k, v in _rate_limit_store.items() if k != key and not v]
-    for k in stale_keys:
-        del _rate_limit_store[k]
+        # Count requests in current window
+        total_requests = sum(count for ts, count in _rate_limit_store[key])
 
-    # Count requests in current window
-    total_requests = sum(count for ts, count in _rate_limit_store[key])
+        if total_requests >= max_requests:
+            oldest_ts = min(ts for ts, count in _rate_limit_store[key]) if _rate_limit_store[key] else now
+            reset_time = int(oldest_ts + window)
+            return False, 0, reset_time
 
-    if total_requests >= max_requests:
-        # Rate limit exceeded
-        oldest_ts = min(ts for ts, count in _rate_limit_store[key]) if _rate_limit_store[key] else now
-        reset_time = int(oldest_ts + window)
-        return False, 0, reset_time
-
-    # Record this request
-    _rate_limit_store[key].append((now, 1))
-    remaining = max_requests - total_requests - 1
+        # Record this request
+        _rate_limit_store[key].append((now, 1))
+        remaining = max_requests - total_requests - 1
 
     return True, remaining, int(now + window)
 

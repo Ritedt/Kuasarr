@@ -12,6 +12,8 @@ enabling live updates without requiring a restart.
 from typing import Callable, Dict, List, Optional, Set
 from functools import wraps
 
+from kuasarr.providers.log import error as log_error
+
 # Registry of observers: setting_name -> list of callback functions
 _observers: Dict[str, List[Callable[[str, any], None]]] = {}
 
@@ -51,15 +53,14 @@ def notify_setting_changed(setting_name: str, new_value: any) -> None:
             try:
                 callback(setting_name, new_value)
             except Exception as e:
-                # Log but don't let observer errors break the flow
-                print(f"Error in settings observer for {setting_name}: {e}")
+                log_error(f"Error in settings observer for {setting_name}: {e}")
 
     # Notify global observers
     for callback in _global_observers[:]:
         try:
             callback(setting_name, new_value)
         except Exception as e:
-            print(f"Error in global settings observer: {e}")
+            log_error(f"Error in global settings observer: {e}")
 
 
 def notify_core_settings_changed(settings: Dict[str, any]) -> None:

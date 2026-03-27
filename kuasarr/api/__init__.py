@@ -474,6 +474,18 @@ def get_api(shared_state_dict, shared_state_lock):
         """
         return render_centered_html(info)
 
+    @app.get('/api/key')
+    def get_api_key():
+        """Return the API key for authenticated browser sessions.
+
+        This endpoint is protected by browser auth (session cookie or Basic Auth).
+        The React SPA calls it on startup to obtain the key without it being
+        embedded in the HTML source.
+        """
+        response.content_type = 'application/json'
+        api_key = Config('API').get('key') or ''
+        return json.dumps({'data': {'key': api_key}})
+
     @app.get('/api/statistics')
     @require_api_key
     def get_statistics():

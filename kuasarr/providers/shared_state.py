@@ -190,9 +190,13 @@ def reload_core_settings_from_config():
     timezone = config.get('timezone') or 'Europe/Berlin'
     port = values.get('port', 9999)
 
-    # Ensure internal_address includes port
-    if internal_address and ':' not in internal_address.replace('://', '').split('/')[0]:
-        internal_address = f"{internal_address}:{port}"
+    # Ensure internal_address includes port (use urlparse to handle IPv6 safely)
+    if internal_address:
+        _parsed = parse.urlparse(internal_address)
+        if _parsed.port is None:
+            # Inject port into netloc, preserving IPv6 brackets
+            _netloc_with_port = f"{_parsed.hostname}:{port}" if ':' not in (_parsed.hostname or '') else f"[{_parsed.hostname}]:{port}"
+            internal_address = parse.urlunparse(_parsed._replace(netloc=_netloc_with_port))
 
     update("internal_address", internal_address)
     update("external_address", external_address)

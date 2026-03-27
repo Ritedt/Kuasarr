@@ -99,6 +99,12 @@ docker run -d \\
 * API endpoints (`/api`, `/download/`, `/dbc/api/`) are **never** protected — Radarr/Sonarr use API key only
 * Disabled by default (backwards compatible)
 
+## Agent Guidelines
+
+See `AGENTS.md` for the full set of repository guidelines for AI agents — including Documentation First rules, product boundaries, change discipline, security rules, and terminology.
+
+The developer documentation index is at `docs/README.md`.
+
 ## Coding Standards & Agenten-Verwendung
 
 * **Immer `/coding-standards` Skill nutzen** vor jeder Implementierung — Enforces PEP 8, Pythonic idioms, und Projekt-Konventionen

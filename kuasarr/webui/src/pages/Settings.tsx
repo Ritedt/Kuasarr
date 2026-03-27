@@ -310,6 +310,7 @@ export default function SettingsPage() {
                         value={formData.password}
                         onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                         error={formErrors.password}
+                        autoComplete="current-password"
                         leftIcon={<Lock className="h-4 w-4" />}
                         rightIcon={
                           <button

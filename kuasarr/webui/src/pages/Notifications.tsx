@@ -26,25 +26,21 @@ import { Spinner } from '../components/ui/Spinner';
 import { Modal } from '../components/ui/Modal';
 import { Toggle } from '../components/ui/Toggle';
 import { useUIStore } from '../stores/uiStore';
-import type { NotificationProvider, NotificationConfig, NotificationEvent, NotificationSettings } from '../types';
+import {
+  getNotificationSettings,
+  saveNotificationSettings,
+  testNotification as testNotificationApi,
+} from '../lib/api';
+import type { NotificationProvider, NotificationConfig, NotificationEvent } from '../types';
 
-// Mock API functions - these would be implemented in lib/api.ts
-const getNotificationSettings = async (): Promise<NotificationSettings> => {
-  // This is a mock - replace with actual API call
-  return {
-    global_enabled: true,
-    configs: [],
-  };
-};
-
-const saveNotificationSettings = async (settings: NotificationSettings): Promise<void> => {
-  // This is a mock - replace with actual API call
-  console.log('Saving settings:', settings);
-};
-
-const testNotification = async (provider: NotificationProvider, settings: Record<string, string | number | boolean>): Promise<void> => {
-  // This is a mock - replace with actual API call
-  console.log('Testing notification:', provider, settings);
+const testNotification = async (
+  provider: NotificationProvider,
+  settings: Record<string, string | number | boolean>
+): Promise<void> => {
+  const result = await testNotificationApi({ provider, settings });
+  if (!result.success) {
+    throw new Error(result.message || 'Test failed');
+  }
 };
 
 const providerIcons: Record<NotificationProvider, React.ElementType> = {

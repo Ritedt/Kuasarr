@@ -4,6 +4,9 @@
 
 import json
 import os
+import time as _time
+
+_APP_START = _time.time()
 
 from bottle import Bottle, static_file, request, response, abort
 
@@ -470,6 +473,23 @@ def get_api(shared_state_dict, shared_state_lock):
         </script>
         """
         return render_centered_html(info)
+
+    @app.get('/api/statistics')
+    @require_api_key
+    def get_statistics():
+        response.content_type = 'application/json'
+        return json.dumps({'data': {
+            'total_packages': 0,
+            'completed_packages': 0,
+            'failed_packages': 0,
+            'total_downloaded': 0,
+            'average_speed': 0,
+            'uptime_seconds': int(_time.time() - _APP_START),
+            'api_calls_today': 0,
+            'captchas_solved_today': 0,
+            'hoster_status': [],
+            'daily_stats': [],
+        }})
 
     @app.get('/api/jdownloader/status')
     @require_api_key

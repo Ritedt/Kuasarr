@@ -12,11 +12,11 @@
 
 </div>
 
-Kuasarr emuliert einen **Newznab Indexer** und **SABnzbd Client**, um JDownloader in dein *arr-Setup zu integrieren. Keine NZBs, keine Torrents – reines Direct Download.
+Kuasarr emulates a **Newznab Indexer** and **SABnzbd Client** to integrate JDownloader into your *arr stack. No NZBs, no torrents – pure direct download.
 
 ---
 
-![Dashboard](docs/images/dashboard.png)
+![Dashboard](docs/images/dashboard.jpeg)
 
 ---
 
@@ -30,33 +30,33 @@ docker run -d \
   ghcr.io/ritedt/kuasarr:latest
 ```
 
-**Öffne `http://localhost:9999`** und folge dem Setup-Assistenten im WebUI. Keine Config-Dateien editieren nötig – alles geht über die Oberfläche.
+**Open `http://localhost:9999`** and follow the setup wizard in the WebUI. No config file editing required – everything is done through the interface.
 
-### Optional: Umgebungsvariablen
+### Optional: Environment Variables
 
-| Variable | Beschreibung |
+| Variable | Description |
 |----------|-------------|
-| `TZ` | Zeitzone (z.B. `Europe/Berlin`) |
-| `INTERNAL_ADDRESS` | Lokale URL (für interne API-Aufrufe) |
-| `EXTERNAL_ADDRESS` | Externe URL (für Downloads) |
+| `TZ` | Timezone (e.g. `Europe/Berlin`) |
+| `INTERNAL_ADDRESS` | Local URL (for internal API calls) |
+| `EXTERNAL_ADDRESS` | External URL (for downloads) |
 
 ---
 
-## Was macht Kuasarr?
+## What is Kuasarr?
 
-| Feature | Beschreibung |
+| Feature | Description |
 |---------|-------------|
-| 🎨 **Modernes UI** | Intuitives Dark-Theme Webinterface – komplette Konfiguration ohne CLI |
-| 🔍 **Indexer** | Durchsucht DDL-Seiten nach Releases |
-| 🔓 **CAPTCHA** | Automatische Entschlüsselung via DeathByCaptcha oder 2Captcha |
-| 📥 **Download** | Sendet Links direkt an JDownloader |
-| 🎯 **Tracking** | Radarr/Sonarr erkennen fertige Downloads automatisch |
+| 🎨 **Modern UI** | Intuitive dark-theme web interface – complete configuration without CLI |
+| 🔍 **Indexer** | Searches DDL sites for releases |
+| 🔓 **CAPTCHA** | Automatic decryption via DeathByCaptcha or 2Captcha |
+| 📥 **Download** | Sends links directly to JDownloader |
+| 🎯 **Tracking** | Radarr/Sonarr automatically detect completed downloads |
 
 ---
 
-## Setup-Guides
+## Setup Guides
 
-Die Konfiguration der externen Tools ist ausgelagert:
+Configuration of external tools is outsourced to dedicated guides:
 
 | Tool | Guide |
 |------|-------|
@@ -68,12 +68,12 @@ Die Konfiguration der externen Tools ist ausgelagert:
 
 ---
 
-## Erweiterte Konfiguration
+## Advanced Configuration
 
 <details>
-<summary>CAPTCHA-Services</summary>
+<summary>CAPTCHA Services</summary>
 
-Konfigurierbar über das WebUI oder Umgebungsvariablen:
+Configurable via WebUI or environment variables:
 
 | Variable | Service |
 |----------|---------|
@@ -83,7 +83,7 @@ Konfigurierbar über das WebUI oder Umgebungsvariablen:
 </details>
 
 <details>
-<summary>WebUI-Authentifizierung (optional)</summary>
+<summary>WebUI Authentication (optional)</summary>
 
 ```bash
 docker run -d \
@@ -95,35 +95,35 @@ docker run -d \
   ghcr.io/ritedt/kuasarr:latest
 ```
 
-API-Endpunkte (`/api/*`, `/download/*`) bleiben ungeschützt für *arr-Integration.
+API endpoints (`/api/*`, `/download/*`) remain unprotected for *arr integration.
 
 </details>
 
 <details>
-<summary>PWA installieren</summary>
+<summary>Install as PWA</summary>
 
-Kuasarr kann als Progressive Web App installiert werden:
+Kuasarr can be installed as a Progressive Web App:
 
-- **Chrome/Edge**: Adressleiste → Install-Icon
-- **Android**: Chrome-Menü → "Zum Startbildschirm hinzufügen"
-- **iOS**: Safari → Teilen → "Zum Home-Bildschirm"
+- **Chrome/Edge**: Address bar → Install icon
+- **Android**: Chrome menu → "Add to Home screen"
+- **iOS**: Safari → Share → "Add to Home Screen"
 
-Erfordert HTTPS für volle Funktionalität.
+Requires HTTPS for full functionality.
 
 </details>
 
 ---
 
-## Unterstützte Quellen
+## Supported Sources
 
-- Nox.to (mit Login)
-- Serienjunkies / Dokujunkies (mit Login)
-- Filecrypt (mit Circle-Captcha Solver)
-- Weitere über benutzerdefinierte Hostnames
+- NX (with login)
+- SJ / DJ (with login)
+- Filecrypt (with Circle-Captcha solver)
+- More via custom hostnames
 
 ---
 
-## Architektur
+## Architecture
 
 ```
 ┌─────────┐     ┌─────────┐     ┌─────────┐
@@ -147,6 +147,6 @@ Erfordert HTTPS für volle Funktionalität.
 
 ---
 
-## Lizenz
+## License
 
-MIT License – Fork von [rix1337/quasarr](https://github.com/rix1337/quasarr)
+MIT License – Fork of [rix1337/quasarr](https://github.com/rix1337/quasarr)

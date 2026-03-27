@@ -1,61 +1,61 @@
 # LazyLibrarian Setup
 
-> **Status**: Experimentelle Unterstützung. Metadata-Probleme oder fehlende Covers müssen in LazyLibrarian gelöst werden.
+> **Status**: Experimental support. Metadata issues or missing covers must be resolved in LazyLibrarian.
 
 ## Indexer (Newznab)
 
-1. LazyLibrarian öffnen → **Config** → **Providers**
-2. Scrolle zu **Newznab Providers**
-3. Füge hinzu:
+1. Open LazyLibrarian → **Config** → **Providers**
+2. Scroll to **Newznab Providers**
+3. Add:
 
-| Feld | Wert |
-|------|------|
+| Field | Value |
+|-------|-------|
 | **Provider Name** | Kuasarr |
 | **Newznab URL** | `http://kuasarr:9999` |
-| **Newznab API** | Siehe Kuasarr WebUI → Einstellungen → API |
+| **Newznab API** | See Kuasarr WebUI → Settings → API |
 
-4. Klicke **Test**, dann **Add**
+4. Click **Test**, then **Add**
 
 ## Download Client (SABnzbd+)
 
 1. LazyLibrarian → **Config** → **Downloaders**
-2. Scrolle zu **SABnzbd+**
-3. Konfiguriere:
+2. Scroll to **SABnzbd+**
+3. Configure:
 
-| Feld | Wert |
-|------|------|
+| Field | Value |
+|-------|-------|
 | **SABnzbd Host** | `kuasarr` |
 | **SABnzbd Port** | `9999` |
-| **SABnzbd API Key** | Siehe Kuasarr WebUI |
+| **SABnzbd API Key** | See Kuasarr WebUI |
 | **SABnzbd Category** | `docs` |
 
-> **Wichtig**: Verwende `docs` als Kategorie, um Konflikte mit Radarr/Sonarr zu vermeiden.
+> **Important**: Use `docs` as category to avoid conflicts with Radarr/Sonarr.
 
-## Import-Einstellungen
+## Import Settings
 
 1. **Config** → **Processing**
-2. Aktiviere **Enable OpenLibrary api for book/author information**
-3. Setze **Primary Information Source** auf `OpenLibrary`
-4. Unter **Import languages** füge hinzu:
-   - `, Unknown` (immer)
-   - `, de, ger, de-DE` (für deutsche Bücher)
+2. Enable **Enable OpenLibrary api for book/author information**
+3. Set **Primary Information Source** to `OpenLibrary`
+4. Under **Import languages** add:
+   - `, Unknown` (always)
+   - `, de, ger, de-DE` (for German books)
 
-## Processing-Einstellungen
+## Processing Settings
 
 1. **Config** → **Processing** → **Folders**
-2. Füge den Kuasarr-Downloadpfad hinzu:
-   - Typischerweise `/downloads/Kuasarr/` oder `/output/Kuasarr/`
-3. Dies ist notwendig, damit LazyLibrarian fertige Downloads erkennt
+2. Add the Kuasarr download path:
+   - Typically `/downloads/Kuasarr/` or `/output/Kuasarr/`
+3. This is required for LazyLibrarian to detect completed downloads
 
-## Einschränkungen
+## Limitations
 
-- **Keine Metadata-Unterstützung**: Fehlende Covers oder Autoren-Infos müssen manuell korrigiert werden
-- **Bessere Alternative**: [Readarr](https://readarr.com) (wenn stabil) oder manuelles Downloaden
+- **No metadata support**: Missing covers or author info must be corrected manually
+- **Better alternative**: [Readarr](https://readarr.com) (when stable) or manual downloading
 
-## Fehlersuche
+## Troubleshooting
 
-| Problem | Lösung |
-|---------|--------|
-| "No results found" | Prüfe, ob die Hostnames Bücher/EBooks enthalten |
-| Downloads nicht erkannt | Download-Pfad in Processing-Einstellungen prüfen |
-| Import schlägt fehl | Sprache auf `Unknown` setzen |
+| Problem | Solution |
+|---------|----------|
+| "No results found" | Check if hostnames contain books/EBooks |
+| Downloads not recognized | Check download path in Processing settings |
+| Import fails | Set language to `Unknown` |

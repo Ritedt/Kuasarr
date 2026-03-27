@@ -1,77 +1,77 @@
 # Sonarr Setup
 
-Richte Kuasarr als **Newznab Indexer** und **SABnzbd Download Client** ein.
+Configure Kuasarr as **Newznab Indexer** and **SABnzbd Download Client**.
 
-> **Wichtig**: Kuasarr unterstützt nur **Standard**-Serientypen. Anime/Absolute Ordering wird nicht unterstützt.
+> **Important**: Kuasarr only supports **Standard** series types. Anime/Absolute ordering is not supported.
 
 ## Indexer (Newznab)
 
-1. Sonarr öffnen → **Einstellungen** → **Indexer**
-2. Klicke **+** → **Newznab**
-3. Trage folgende Werte ein:
+1. Open Sonarr → **Settings** → **Indexers**
+2. Click **+** → **Newznab**
+3. Enter the following values:
 
-| Feld | Wert |
-|------|------|
+| Field | Value |
+|-------|-------|
 | **Name** | Kuasarr |
-| **URL** | `http://kuasarr:9999` (oder deine Kuasarr-URL) |
-| **API Key** | Siehe Kuasarr WebUI → Einstellungen → API |
-| **Kategorien** | `5000,5020,5030,5040,5050` |
+| **URL** | `http://kuasarr:9999` (or your Kuasarr URL) |
+| **API Key** | See Kuasarr WebUI → Settings → API |
+| **Categories** | `5000,5020,5030,5040,5050` |
 
-4. Klicke **Test**, dann **Speichern**
+4. Click **Test**, then **Save**
 
 ## Download Client (SABnzbd)
 
-1. Sonarr öffnen → **Einstellungen** → **Download Client**
-2. Klicke **+** → **SABnzbd**
-3. Trage folgende Werte ein:
+1. Open Sonarr → **Settings** → **Download Clients**
+2. Click **+** → **SABnzbd**
+3. Enter the following values:
 
-| Feld | Wert |
-|------|------|
+| Field | Value |
+|-------|-------|
 | **Name** | Kuasarr |
-| **Host** | `kuasarr` (oder IP) |
+| **Host** | `kuasarr` (or IP) |
 | **Port** | `9999` |
-| **API Key** | Siehe Kuasarr WebUI → Einstellungen → API |
-| **Kategorie** | `tv` |
+| **API Key** | See Kuasarr WebUI → Settings → API |
+| **Category** | `tv` |
 
-4. Klicke **Test**, dann **Speichern**
+4. Click **Test**, then **Save**
 
-## Serientyp ändern (wichtig!)
+## Change Series Type (important!)
 
-Für bestehende Serien:
+For existing series:
 
-1. Serie öffnen → **Bearbeiten**
-2. Ändere **Serientyp** zu **Standard**
-3. Speichern
+1. Open series → **Edit**
+2. Change **Series Type** to **Standard**
+3. Save
 
-Für neue Serien:
+For new series:
 
-1. Serie hinzufügen → **Einstellungen** (Zahnrad)
-2. Wähle **Serientyp: Standard**
-3. Füge Serie hinzu
+1. Add series → **Settings** (gear icon)
+2. Select **Series Type: Standard**
+3. Add series
 
-> **Warum?** Kuasarr findet keine Releases für Serien mit "Anime"-Typ, da diese absolute Episodennummern verwenden.
+> **Why?** Kuasarr will not find releases for series with "Anime" type as they use absolute episode numbers.
 
-## Sprache & Qualität
+## Language & Quality
 
-### Sprache
+### Language
 
-1. **Einstellungen** → **Profile** → **Sprache**
-2. Bevorzugte Sprache: `German` oder `English`
+1. **Settings** → **Profiles** → **Languages**
+2. Preferred language: `German` or `English`
 
-### Qualität
+### Quality
 
-Empfohlenes Quality Profile für TV:
+Recommended quality profile for TV:
 
-- HDTV-1080p (bevorzugt für schnelle Verfügbarkeit)
+- HDTV-1080p (preferred for quick availability)
 - WEBDL-1080p
 - Bluray-1080p
 
-## Release-Titel-Muster
+## Release Title Patterns
 
-DDL-Quellen verwenden oft deutsche Titel. Aktiviere in **Einstellungen** → **Indexer** → **Kuasarr**:
+DDL sources often use German titles. Enable in **Settings** → **Indexers** → **Kuasarr**:
 
-- **Übersetzte Titel verwenden**: Aktiviert
+- **Use translated titles**: Enabled
 
 ## Remote Path Mapping
 
-Siehe [Radarr Setup](radarr.md) – gleiche Konfiguration, verwende `tv` als Kategorie.
+See [Radarr Setup](radarr.md) – same configuration, use `tv` as category.

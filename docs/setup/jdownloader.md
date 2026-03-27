@@ -1,10 +1,10 @@
 # JDownloader 2 Setup
 
-Kuasarr benötigt einen mit **My-JDownloader** verbundenen JDownloader 2.
+Kuasarr requires a **My-JDownloader** connected JDownloader 2.
 
 ## Installation
 
-### Docker (empfohlen)
+### Docker (recommended)
 
 ```bash
 docker run -d \
@@ -17,29 +17,29 @@ docker run -d \
 
 ### Desktop
 
-[Lade JDownloader 2 herunter](https://jdownloader.org/download/index) und installiere es.
+[Download JDownloader 2](https://jdownloader.org/download/index) and install it.
 
-## My-JDownloader verbinden
+## Connect My-JDownloader
 
-1. Öffne JDownloader 2
-2. Gehe zu **Einstellungen** → **My.JDownloader.org**
-3. Aktiviere **My-JDownloader-Verbindung aktivieren**
-4. Notiere dir E-Mail und Passwort
+1. Open JDownloader 2
+2. Go to **Settings** → **My.JDownloader.org**
+3. Enable **My-JDownloader connection enabled**
+4. Note your email and password
 
-## Kuasarr-Konfiguration
+## Kuasarr Configuration
 
-1. Öffne das Kuasarr WebUI
-2. Gehe zu **Einstellungen** → **JDownloader**
-3. Trage deine My-JDownloader Credentials ein:
-   - **E-Mail**: Deine My-JDownloader E-Mail
-   - **Passwort**: Dein My-JDownloader Passwort
-   - **Gerätename**: Optional (z.B. `kuasarr`)
+1. Open the Kuasarr WebUI
+2. Go to **Settings** → **JDownloader**
+3. Enter your My-JDownloader credentials:
+   - **Email**: Your My-JDownloader email
+   - **Password**: Your My-JDownloader password
+   - **Device name**: Optional (e.g. `kuasarr`)
 
-## Download-Pfade (wichtig!)
+## Download Paths (important!)
 
-Radarr/Sonarr müssen auf denselben physischen Pfad zugreifen können wie JDownloader.
+Radarr/Sonarr must be able to access the same physical path as JDownloader.
 
-### Beispiel-Setup
+### Example Setup
 
 ```yaml
 # JDownloader
@@ -50,18 +50,18 @@ volumes:
 volumes:
   - /mnt/data/downloads:/downloads
 
-# Kuasarr (kein Download-Volume nötig)
+# Kuasarr (no download volume needed)
 ```
 
-In Kuasarr: **Download-Pfad** = `/output/Kuasarr/` (JDownloader-Perspektive)
-In Radarr: **Remote-Pfad** = `/downloads/Kuasarr/` (Radarr-Perspektive)
+In Kuasarr: **Download Path** = `/output/Kuasarr/` (JDownloader perspective)
+In Radarr: **Remote Path** = `/downloads/Kuasarr/` (Radarr perspective)
 
-> **Tipp**: Richte in JDownloader einen separaten Download-Ordner für Kuasarr ein, um Konflikte mit manuellen Downloads zu vermeiden.
+> **Tip**: Set up a separate download folder for Kuasarr in JDownloader to avoid conflicts with manual downloads.
 
-## Fehlersuche
+## Troubleshooting
 
-| Problem | Lösung |
-|---------|--------|
-| "Device not found" | Prüfe My-JDownloader Verbindung in JDownloader |
-| "Download not found" | Pfade müssen für Radarr/Sonarr und JDownloader identisch sein |
-| Downloads bleiben stehen | Prüfe JDownloader-Bandwidth-Limit und Captcha-Einstellungen |
+| Problem | Solution |
+|---------|----------|
+| "Device not found" | Check My-JDownloader connection in JDownloader |
+| "Download not found" | Paths must be identical for Radarr/Sonarr and JDownloader |
+| Downloads stuck | Check JDownloader bandwidth limit and captcha settings |

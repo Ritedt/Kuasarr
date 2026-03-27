@@ -1,6 +1,6 @@
 # FlareSolverr Setup
 
-[FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) umgeht Cloudflare-Schutz für DDL-Seiten.
+[FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) bypasses Cloudflare protection for DDL sites.
 
 ## Installation
 
@@ -12,13 +12,13 @@ docker run -d \
   ghcr.io/flaresolverr/flaresolverr:latest
 ```
 
-## Kuasarr-Konfiguration
+## Kuasarr Configuration
 
-1. Öffne das Kuasarr WebUI
-2. Gehe zu **Einstellungen** → **FlareSolverr**
-3. Trage die URL ein: `http://dein-server:8191/v1`
+1. Open the Kuasarr WebUI
+2. Go to **Settings** → **FlareSolverr**
+3. Enter the URL: `http://your-server:8191/v1`
 
-> **Wichtig**: Die URL muss den `/v1` Pfad enthalten!
+> **Important**: The URL must include the `/v1` path!
 
 ## Docker Compose
 
@@ -33,10 +33,10 @@ services:
       - TZ=Europe/Berlin
 ```
 
-## Fehlersuche
+## Troubleshooting
 
-| Problem | Lösung |
-|---------|--------|
-| "FlareSolverr not reachable" | Prüfe, ob der Container läuft: `docker ps` |
-| Timeout | Erhöhe das Timeout in Kuasarr-Einstellungen |
-| Cloudflare loop | FlareSolverr aktualisieren: `docker pull ghcr.io/flaresolverr/flaresolverr:latest` |
+| Problem | Solution |
+|---------|----------|
+| "FlareSolverr not reachable" | Check if container is running: `docker ps` |
+| Timeout | Increase timeout in Kuasarr settings |
+| Cloudflare loop | Update FlareSolverr: `docker pull ghcr.io/flaresolverr/flaresolverr:latest` |

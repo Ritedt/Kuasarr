@@ -1,63 +1,63 @@
 # Radarr Setup
 
-Richte Kuasarr als **Newznab Indexer** und **SABnzbd Download Client** ein.
+Configure Kuasarr as **Newznab Indexer** and **SABnzbd Download Client**.
 
 ## Indexer (Newznab)
 
-1. Radarr öffnen → **Einstellungen** → **Indexer**
-2. Klicke **+** → **Newznab**
-3. Trage folgende Werte ein:
+1. Open Radarr → **Settings** → **Indexers**
+2. Click **+** → **Newznab**
+3. Enter the following values:
 
-| Feld | Wert |
-|------|------|
+| Field | Value |
+|-------|-------|
 | **Name** | Kuasarr |
-| **URL** | `http://kuasarr:9999` (oder deine Kuasarr-URL) |
-| **API Key** | Siehe Kuasarr WebUI → Einstellungen → API |
-| **Kategorien** | `2000,2010,2020,2030,2040,2045,2050,2060` |
+| **URL** | `http://kuasarr:9999` (or your Kuasarr URL) |
+| **API Key** | See Kuasarr WebUI → Settings → API |
+| **Categories** | `2000,2010,2020,2030,2040,2045,2050,2060` |
 
-4. Klicke **Test**, dann **Speichern**
+4. Click **Test**, then **Save**
 
 ## Download Client (SABnzbd)
 
-1. Radarr öffnen → **Einstellungen** → **Download Client**
-2. Klicke **+** → **SABnzbd**
-3. Trage folgende Werte ein:
+1. Open Radarr → **Settings** → **Download Clients**
+2. Click **+** → **SABnzbd**
+3. Enter the following values:
 
-| Feld | Wert |
-|------|------|
+| Field | Value |
+|-------|-------|
 | **Name** | Kuasarr |
-| **Host** | `kuasarr` (oder IP) |
+| **Host** | `kuasarr` (or IP) |
 | **Port** | `9999` |
-| **API Key** | Siehe Kuasarr WebUI → Einstellungen → API |
-| **Kategorie** | `movies` |
+| **API Key** | See Kuasarr WebUI → Settings → API |
+| **Category** | `movies` |
 
-4. Klicke **Test**, dann **Speichern**
+4. Click **Test**, then **Save**
 
-## Remote Path Mapping (falls nötig)
+## Remote Path Mapping (if needed)
 
-Falls Radarr und JDownloader unterschiedliche Pfade zum selben Verzeichnis haben:
+If Radarr and JDownloader have different paths to the same directory:
 
-1. **Einstellungen** → **Download Client** → **Remote Path Mappings**
-2. Füge hinzu:
+1. **Settings** → **Download Clients** → **Remote Path Mappings**
+2. Add:
    - **Host** | `kuasarr`
-   - **Remote-Pfad** | `/output/Kuasarr/` (JDownloader-Pfad)
-   - **Lokaler Pfad** | `/downloads/Kuasarr/` (Radarr-Pfad)
+   - **Remote Path** | `/output/Kuasarr/` (JDownloader path)
+   - **Local Path** | `/downloads/Kuasarr/` (Radarr path)
 
 ## Quality Profiles
 
-Kuasarr liefert meist 1080p-Releases. Empfohlenes Quality Profile:
+Kuasarr mostly delivers 1080p releases. Recommended quality profile:
 
-1. **Einstellungen** → **Profile** → **Qualität**
-2. Erstelle ein Profil mit bevorzugter Reihenfolge:
+1. **Settings** → **Profiles** → **Quality**
+2. Create a profile with preferred order:
    - Bluray-1080p
    - WEBDL-1080p
    - HDTV-1080p
 
-> **Hinweis**: 4K/Dolby Vision werden von den meisten DDL-Quellen nicht unterstützt.
+> **Note**: 4K/Dolby Vision are not supported by most DDL sources.
 
-## Indexer-Einschränkungen
+## Indexer Restrictions
 
-In Radarr kannst du Releases nach Dateigröße filtern:
+In Radarr you can filter releases by file size:
 
-- **Minimale Größe**: 500 MB (verhindert Fake-Releases)
-- **Maximale Größe**: 25 GB (optional, für langsame Verbindungen)
+- **Minimum size**: 500 MB (prevents fake releases)
+- **Maximum size**: 25 GB (optional, for slow connections)

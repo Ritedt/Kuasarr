@@ -19,7 +19,7 @@ def generate_deterministic_package_id(title: str, url: str, category: str) -> st
     The same (title, url, category) combination always produces the same ID,
     allowing clients to reliably blocklist erroneous releases.
     """
-    hash_input = f"{title}|{url}"
+    hash_input = f"{title}|{url}|{category}"
     digest = hashlib.sha256(hash_input.encode("utf-8")).hexdigest()[:16]
     return f"kuasarr_{category}_{digest}"
 

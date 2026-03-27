@@ -23,12 +23,33 @@ import type {
 } from '../types';
 
 const API_BASE = '/api';
-const _API_KEY = typeof window !== 'undefined' ? window.KUASARR_API_KEY : undefined;
+
+// API key is fetched from /api/key after browser authentication.
+// It is never embedded in the HTML source.
+let _resolvedApiKey: string | undefined;
+let _keyFetchPromise: Promise<string | undefined> | null = null;
+
+async function _fetchApiKey(): Promise<string | undefined> {
+  if (_resolvedApiKey !== undefined) return _resolvedApiKey;
+  if (_keyFetchPromise) return _keyFetchPromise;
+  _keyFetchPromise = fetch('/api/key', { credentials: 'include' })
+    .then((res) => res.ok ? res.json() : null)
+    .then((data) => {
+      _resolvedApiKey = data?.data?.key || '';
+      return _resolvedApiKey;
+    })
+    .catch(() => {
+      _resolvedApiKey = '';
+      return _resolvedApiKey;
+    });
+  return _keyFetchPromise;
+}
 
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
+  const apiKey = await _fetchApiKey();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(_API_KEY ? { 'X-API-Key': _API_KEY } : {}),
+    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     ...(options?.headers as Record<string, string> | undefined),
   };
 

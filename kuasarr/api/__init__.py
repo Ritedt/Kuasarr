@@ -4,6 +4,9 @@
 
 import json
 import os
+import time as _time
+
+_APP_START = _time.time()
 
 from bottle import Bottle, static_file, request, response, abort
 
@@ -471,6 +474,23 @@ def get_api(shared_state_dict, shared_state_lock):
         """
         return render_centered_html(info)
 
+    @app.get('/api/statistics')
+    @require_api_key
+    def get_statistics():
+        response.content_type = 'application/json'
+        return json.dumps({'data': {
+            'total_packages': 0,
+            'completed_packages': 0,
+            'failed_packages': 0,
+            'total_downloaded': 0,
+            'average_speed': 0,
+            'uptime_seconds': int(_time.time() - _APP_START),
+            'api_calls_today': 0,
+            'captchas_solved_today': 0,
+            'hoster_status': [],
+            'daily_stats': [],
+        }})
+
     @app.get('/api/jdownloader/status')
     @require_api_key
     def jd_status():
@@ -577,9 +597,21 @@ def get_api(shared_state_dict, shared_state_lock):
         # Don't interfere with static assets
         if path.startswith('assets/') or path.startswith('static/'):
             abort(404)
-        # Don't interfere with PWA files
-        if path in ('manifest.webmanifest', 'registerSW.js', 'sw.js'):
-            abort(404)
+
+        # Serve any existing file from the webui dist root with the correct MIME type
+        # (handles workbox-*.js, favicon.svg, icons.svg, registerSW.js, sw.js, etc.)
+        candidate = os.path.join(WEBUI_DIR, path)
+        if os.path.isfile(candidate) and path == os.path.basename(path):
+            mimetype = None
+            if path.endswith('.js'):
+                mimetype = 'application/javascript'
+            elif path.endswith('.css'):
+                mimetype = 'text/css'
+            elif path.endswith('.svg'):
+                mimetype = 'image/svg+xml'
+            elif path.endswith('.webmanifest'):
+                mimetype = 'application/manifest+json'
+            return static_file(path, root=WEBUI_DIR, mimetype=mimetype)
 
         spa = try_serve_spa()
         if spa is not None:

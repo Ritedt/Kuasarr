@@ -25,6 +25,7 @@ from kuasarr.downloads.sources.mb import get_mb_download_links
 from kuasarr.downloads.sources.nk import get_nk_download_links
 from kuasarr.downloads.sources.nx import get_nx_download_links
 from kuasarr.downloads.sources.dl import get_dl_download_links
+from kuasarr.downloads.sources.sj import get_sj_download_links, get_dj_download_links
 from kuasarr.downloads.sources.sf import get_sf_download_links, resolve_sf_redirect
 from kuasarr.downloads.sources.sl import get_sl_download_links
 from kuasarr.downloads.sources.wd import get_wd_download_links
@@ -448,6 +449,8 @@ def download(shared_state, request_from, title, url, mirror, size_mb, password, 
         'SF': config.get("sf"),
         'RM': config.get("rm"),
         'SL': config.get("sl"),
+        'SJ': config.get("sj"),
+        'DJ': config.get("dj"),
         'WD': config.get("wd"),
         'WX': config.get("wx")
     }
@@ -562,6 +565,24 @@ def download(shared_state, request_from, title, url, mirror, size_mb, password, 
             "package_id": package_id,
             **handle_rm(shared_state, title, password, package_id, imdb_id, url, mirror, size_mb,
                         destination_folder=destination_folder)
+        }
+
+    if flags['SJ'] and flags['SJ'].lower() in url.lower():
+        return {
+            "package_id": package_id,
+            **handle_unprotected(
+                shared_state, title, password, package_id, imdb_id, url, mirror=mirror, size_mb=size_mb,
+                func=get_sj_download_links, label='SJ', destination_folder=destination_folder,
+            )
+        }
+
+    if flags['DJ'] and flags['DJ'].lower() in url.lower():
+        return {
+            "package_id": package_id,
+            **handle_unprotected(
+                shared_state, title, password, package_id, imdb_id, url, mirror=mirror, size_mb=size_mb,
+                func=get_dj_download_links, label='DJ', destination_folder=destination_folder,
+            )
         }
 
     if flags['SF'] and flags['SF'].lower() in url.lower():

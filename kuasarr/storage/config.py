@@ -83,6 +83,16 @@ class Config(object):
             ("user", "secret", ""),
             ("password", "secret", "")
         ],
+        'SJ': [
+            ("user", "secret", ""),
+            ("password", "secret", ""),
+            ("preferred_hoster", "str", "")
+        ],
+        'DJ': [
+            ("user", "secret", ""),
+            ("password", "secret", ""),
+            ("preferred_hoster", "str", "")
+        ],
         'Sonarr': [
             ("url", "str", ""),
             ("api_key", "secret", "")

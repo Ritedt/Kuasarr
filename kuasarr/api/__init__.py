@@ -577,9 +577,21 @@ def get_api(shared_state_dict, shared_state_lock):
         # Don't interfere with static assets
         if path.startswith('assets/') or path.startswith('static/'):
             abort(404)
-        # Don't interfere with PWA files
-        if path in ('manifest.webmanifest', 'registerSW.js', 'sw.js'):
-            abort(404)
+
+        # Serve any existing file from the webui dist root with the correct MIME type
+        # (handles workbox-*.js, favicon.svg, icons.svg, registerSW.js, sw.js, etc.)
+        candidate = os.path.join(WEBUI_DIR, path)
+        if os.path.isfile(candidate) and path == os.path.basename(path):
+            mimetype = None
+            if path.endswith('.js'):
+                mimetype = 'application/javascript'
+            elif path.endswith('.css'):
+                mimetype = 'text/css'
+            elif path.endswith('.svg'):
+                mimetype = 'image/svg+xml'
+            elif path.endswith('.webmanifest'):
+                mimetype = 'application/manifest+json'
+            return static_file(path, root=WEBUI_DIR, mimetype=mimetype)
 
         spa = try_serve_spa()
         if spa is not None:

@@ -16,6 +16,7 @@ RUN apk add --no-cache \
     python3 \
     python3-dev \
     build-base \
+    linux-headers \
     tzdata
 
 # Create venv and install local package (assumes .whl is in dist/ folder during build)

@@ -498,7 +498,7 @@ jobs:
           fetch-depth: 1
 
       - name: Download WebUI artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: webui-dist
           path: kuasarr/webui/dist
@@ -559,7 +559,7 @@ jobs:
           fetch-depth: 1
 
       - name: Download WebUI artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: webui-dist
           path: kuasarr/webui/dist
@@ -628,7 +628,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: beta-wheel
           path: ./dist
@@ -670,7 +670,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: beta-wheel
           path: ./dist
@@ -758,12 +758,12 @@ jobs:
           git tag -f beta "$TARGET_SHA"
           git push origin refs/tags/beta --force
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: beta-wheel
           path: ./wheel
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: beta-exe
           path: ./exe
@@ -840,7 +840,7 @@ jobs:
           fetch-depth: 1
 
       - name: Download WebUI artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: webui-dist
           path: kuasarr/webui/dist
@@ -891,7 +891,7 @@ jobs:
           fetch-depth: 1
 
       - name: Download WebUI artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: webui-dist
           path: kuasarr/webui/dist

@@ -21,6 +21,8 @@ dependencies = [
     "bottle>=0.13.4",
     "deathbycaptcha-official>=4.6.0",
     "dukpy>=0.5.0",
+    "numpy>=1.24.0",
+    "opencv-python>=4.11.0",
     "pillow>=12.0.0",
     "pycryptodomex>=3.23.0",
     "requests>=2.32.5",
@@ -38,7 +40,7 @@ kuasarr = "kuasarr:run"
 include = ["kuasarr*"]
 
 [tool.setuptools.package-data]
-kuasarr = ["static/*.png", "static/*.js", "static/*.html", "static/*.webmanifest", "version.json"]
+kuasarr = ["static/*.png", "static/*.js", "static/*.html", "static/*.webmanifest", "version.json", "webui/dist/**/*"]
 
 [tool.uv]
 package = true
@@ -46,4 +48,12 @@ package = true
 [dependency-groups]
 dev = [
     "pyinstaller>=6.0",
+    "pytest>=7.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

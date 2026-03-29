@@ -56,3 +56,16 @@ def get_nk_download_links(shared_state, url, mirror, title):
         info(f"No external download links found on {hostname} page for {title}")
 
     return candidates
+
+
+from kuasarr.downloads.base import AbstractDownloadSource
+
+
+class Source(AbstractDownloadSource):
+    initials = "nk"
+
+    def get_download_links(self, shared_state, url, mirror, title, password=None):
+        raw = get_nk_download_links(shared_state, url, mirror, title)
+        if not raw:
+            return {"links": []}
+        return {"links": raw}

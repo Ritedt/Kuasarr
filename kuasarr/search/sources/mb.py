@@ -192,3 +192,22 @@ def mb_search(shared_state, start_time, request_from, search_string, mirror=None
 
 
 
+
+
+from kuasarr.search.base import AbstractSearchSource
+
+
+class Source(AbstractSearchSource):
+    initials = "mb"
+    supports_imdb = True
+    supports_phrase = False
+    supports_feed = True
+    supported_categories = frozenset({"movies", "tv-shows"})
+
+    def search(self, shared_state, start_time, request_from, search_string,
+               mirror=None, season=None, episode=None):
+        return mb_search(shared_state, start_time, request_from, search_string,
+                         mirror=mirror, season=season, episode=episode)
+
+    def feed(self, shared_state, start_time, request_from, mirror=None):
+        return mb_feed(shared_state, start_time, request_from, mirror=mirror)

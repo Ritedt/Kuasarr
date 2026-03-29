@@ -105,16 +105,7 @@ def is_valid_release(title: str,
                      search_string: str,
                      season: int = None,
                      episode: int = None) -> bool:
-    """
-    Return True if the given release title is valid for the given search parameters.
-    
-    Args:
-        title: The release title to test
-        request_from: User agent, contains 'Radarr' for movie searches or 'Sonarr' for TV searches
-        search_string: The original search phrase (could be an IMDb id or plain text)
-        season: Desired season number (or None)
-        episode: Desired episode number (or None)
-    """
+    """Return True if the given release title is valid for the given search parameters."""
     try:
         # Determine whether this is a movie or TV search
         rf = request_from.lower()

@@ -66,4 +66,14 @@ def get_dt_download_links(shared_state, url, mirror, title): # signature must al
     return filtered
 
 
+from kuasarr.downloads.base import AbstractDownloadSource
 
+
+class Source(AbstractDownloadSource):
+    initials = "dt"
+
+    def get_download_links(self, shared_state, url, mirror, title, password=None):
+        raw = get_dt_download_links(shared_state, url, mirror, title)
+        if not raw:
+            return {"links": []}
+        return {"links": raw}

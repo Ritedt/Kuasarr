@@ -138,6 +138,14 @@ def connection_config(shared_state):
 
         shared_state.set_connection_info(internal, external, shared_state.values['port'])
 
+        # Notify observers of core settings change (Sprint H4: Live-Update without Restart)
+        from kuasarr.providers.settings_observer import notify_core_settings_changed
+        notify_core_settings_changed({
+            'internal_address': internal,
+            'external_address': external,
+            'timezone': config.get('timezone') or 'Europe/Berlin'
+        })
+
         kuasarr.providers.web_server.temp_server_success = True
         return render_success("Connection settings saved successfully!", 5)
 

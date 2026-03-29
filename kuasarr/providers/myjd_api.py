@@ -40,6 +40,7 @@ from Cryptodome.Cipher import AES
 
 from kuasarr.providers.log import debug
 from kuasarr.providers.version import get_version
+from kuasarr.constants import MYJD_API_TIMEOUT_SECONDS, get_timeout
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 BS = 16
@@ -400,16 +401,7 @@ class Downloads:
         return resp
 
     def set_enabled(self, link_ids=None, package_ids=None, enabled=True):
-        """Enable or disable links and packages.
-
-        Args:
-            link_ids: List of link UUIDs to enable/disable
-            package_ids: List of package UUIDs to enable/disable
-            enabled: True to enable, False to disable
-
-        Returns:
-            API response
-        """
+        """Enable or disable links and packages."""
         # JDownloader API expects: linkIds, packageIds, enabled
         params = [
             link_ids or [],
@@ -419,14 +411,7 @@ class Downloads:
         return self.device.action(self.url + "/setEnabled", params)
 
     def set_pause(self, paused=True):
-        """Pause or unpause all downloads.
-
-        Args:
-            paused: True to pause, False to unpause
-
-        Returns:
-            API response
-        """
+        """Pause or unpause all downloads."""
         return self.device.action(self.url + "/setPause", [paused])
 
 
@@ -522,15 +507,7 @@ class Jddevice:
         return {"status": False, "ip": None}
 
     def action(self, path, params=(), http_action="POST"):
-        """Execute any action in the device using the postparams and params.
-        All the info of which params are required and what are they default value, type,etc
-        can be found in the MY.Jdownloader API Specifications ( https://goo.gl/pkJ9d1 ).
-
-        :param path:
-        :param http_action:
-        :param params: Params in the url, in a list of tuples. Example:
-        /example?param1=ex&param2=ex2 [("param1","ex"),("param2","ex2")]
-        """
+        """Execute any action in the device using the postparams and params."""
         action_url = self.__action_url()
         if not self.__direct_connection_enabled or self.__direct_connection_info is None \
                 or time.time() < self.__direct_connection_cooldown:
@@ -809,7 +786,7 @@ class Myjdapi:
                     params=None,
                     action=None,
                     api=None,
-                    timeout=30,
+                    timeout=MYJD_API_TIMEOUT_SECONDS,
                     output_errors=True):
         """
         Makes a request to the API to the 'path' using the 'http_method' with parameters,'params'.

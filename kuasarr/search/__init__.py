@@ -7,8 +7,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
-from kuasarr.providers.log import info, debug
+from kuasarr.providers.log import info, debug, error
 from kuasarr.providers.xrel_metadata import get_xrel_release_info
+from kuasarr.search.sources import get_sources as _get_registered_sources
 from kuasarr.search.sources.al import al_feed, al_search
 from kuasarr.search.sources.ad import ad_feed, ad_search
 from kuasarr.search.sources.by import by_feed, by_search
@@ -28,6 +29,80 @@ from kuasarr.search.sources.at import at_feed, at_search
 from kuasarr.search.sources.hs import hs_feed, hs_search
 from kuasarr.search.sources.rm import rm_feed, rm_search
 from kuasarr.search.sources.wx import wx_feed, wx_search
+
+
+def _detect_category_from_client(request_from: str) -> str:
+    """Map requesting client to primary Kuasarr category."""
+    lower = (request_from or "").lower()
+    if "radarr" in lower:
+        return "movies"
+    if "sonarr" in lower:
+        return "tv-shows"
+    if "lazylibrarian" in lower:
+        return "books"
+    return ""
+
+
+def _build_functions_from_registry(shared_state, imdb_id, search_phrase,
+                                    request_from, allow_phrase_search,
+                                    mirror, season, episode, is_feed, start_time):
+    """
+    Build search function list from AbstractSearchSource registry.
+    Falls back to legacy maps if no registered sources found.
+    """
+    sources = _get_registered_sources()
+    if not sources:
+        return None  # Fallback to legacy
+
+    client_category = _detect_category_from_client(request_from)
+    lower_request = request_from.lower()
+    docs_search = "lazylibrarian" in lower_request
+
+    functions = []
+
+    if imdb_id:
+        for source in sources.values():
+            if not source.is_enabled(shared_state):
+                continue
+            if not source.supports_imdb:
+                continue
+            if client_category and not source.supports_category(client_category):
+                continue
+            functions.append(
+                lambda f=source: f.search(shared_state, start_time, request_from, imdb_id,
+                                          mirror=mirror, season=season, episode=episode)
+            )
+
+    elif search_phrase and allow_phrase_search:
+        for source in sources.values():
+            if not source.is_enabled(shared_state):
+                continue
+            # For LazyLibrarian: only phrase sources in matching categories
+            if docs_search:
+                if not source.supports_phrase:
+                    continue
+                if client_category and not source.supports_category(client_category):
+                    continue
+            else:
+                # WebUI: phrase sources OR imdb sources
+                if not source.supports_phrase and not source.supports_imdb:
+                    continue
+            functions.append(
+                lambda f=source: f.search(shared_state, start_time, request_from, search_phrase,
+                                          mirror=mirror, season=season, episode=episode)
+            )
+
+    elif is_feed:
+        for source in sources.values():
+            if not source.is_enabled(shared_state):
+                continue
+            if not source.supports_feed:
+                continue
+            functions.append(
+                lambda f=source: f.feed(shared_state, start_time, request_from, mirror=mirror)
+            )
+
+    return functions if functions else None
 
 
 def get_search_results(shared_state, request_from, imdb_id="", search_phrase="", mirror=None, season="", episode="",
@@ -64,100 +139,110 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
 
     start_time = time.time()
 
-    functions = []
-
-    # Radarr/Sonarr use imdb_id for searches
-    imdb_map = [
-        (al, al_search),
-        (at, at_search),
-        (by, by_search),
-        (dd, dd_search),
-        (dl, dl_search),
-        (dt, dt_search),
-        (dw, dw_search),
-        (fx, fx_search),
-        (he, he_search),
-        (hs, hs_search),
-        (mb, mb_search),
-        (nk, nk_search),
-        (nx, nx_search),
-        (rm, rm_search),
-        (sf, sf_search),
-        (sl, sl_search),
-        (wd, wd_search),
-        (wx, wx_search),
-    ]
-
-    # LazyLibrarian uses search_phrase for searches
-    phrase_map = [
-        (ad, ad_search),
-        (by, by_search),
-        (dl, dl_search),
-        (dt, dt_search),
-        (nx, nx_search),
-        (sl, sl_search),
-        (wd, wd_search),
-        (wx, wx_search),
-    ]
-    phrase_map_webui = phrase_map.copy()
-    for entry in imdb_map:
-        if entry not in phrase_map_webui:
-            phrase_map_webui.append(entry)
-
-    # Feed searches omit imdb_id and search_phrase
-    feed_map = [
-        (ad, ad_feed),
-        (al, al_feed),
-        (at, at_feed),
-        (by, by_feed),
-        (dd, dd_feed),
-        (dl, dl_feed),
-        (dt, dt_feed),
-        (dw, dw_feed),
-        (fx, fx_feed),
-        (he, he_feed),
-        (hs, hs_feed),
-        (mb, mb_feed),
-        (nk, nk_feed),
-        (nx, nx_feed),
-        (rm, rm_feed),
-        (sf, sf_feed),
-        (sl, sl_feed),
-        (wd, wd_feed),
-        (wx, wx_feed),
-    ]
-
-    if imdb_id:  # only Radarr/Sonarr are using imdb_id
-        args, kwargs = (
-            (shared_state, start_time, request_from, imdb_id),
-            {'mirror': mirror, 'season': season, 'episode': episode}
-        )
-        for flag, func in imdb_map:
-            if flag:
-                functions.append(lambda f=func, a=args, kw=kwargs: f(*a, **kw))
-
-    elif search_phrase and allow_phrase_search:
-        args, kwargs = (
-            (shared_state, start_time, request_from, search_phrase),
-            {'mirror': mirror, 'season': season, 'episode': episode}
-        )
-        selected_map = phrase_map if docs_search else phrase_map_webui
-        for flag, func in selected_map:
-            if flag:
-                functions.append(lambda f=func, a=args, kw=kwargs: f(*a, **kw))
-
-    elif search_phrase:
-        debug(
-            f"Search phrase '{search_phrase}' is not supported for {request_from}. Only LazyLibrarian can use search phrases.")
-
+    # --- Registry-basiertes Routing (Quasarr v4.0.0 Provider Abstraction) ---
+    registry_functions = _build_functions_from_registry(
+        shared_state, imdb_id, search_phrase,
+        request_from, allow_phrase_search,
+        mirror, season, episode,
+        is_feed=is_feed, start_time=start_time
+    )
+    if registry_functions is not None:
+        functions = registry_functions
     else:
-        args, kwargs = (
-            (shared_state, start_time, request_from),
-            {'mirror': mirror}
-        )
-        for flag, func in feed_map:
-            if flag:
-                functions.append(lambda f=func, a=args, kw=kwargs: f(*a, **kw))
+        functions = []
+
+        # Radarr/Sonarr use imdb_id for searches
+        imdb_map = [
+            (al, al_search),
+            (at, at_search),
+            (by, by_search),
+            (dd, dd_search),
+            (dl, dl_search),
+            (dt, dt_search),
+            (dw, dw_search),
+            (fx, fx_search),
+            (he, he_search),
+            (hs, hs_search),
+            (mb, mb_search),
+            (nk, nk_search),
+            (nx, nx_search),
+            (rm, rm_search),
+            (sf, sf_search),
+            (sl, sl_search),
+            (wd, wd_search),
+            (wx, wx_search),
+        ]
+
+        # LazyLibrarian uses search_phrase for searches
+        phrase_map = [
+            (ad, ad_search),
+            (by, by_search),
+            (dl, dl_search),
+            (dt, dt_search),
+            (nx, nx_search),
+            (sl, sl_search),
+            (wd, wd_search),
+            (wx, wx_search),
+        ]
+        phrase_map_webui = phrase_map.copy()
+        for entry in imdb_map:
+            if entry not in phrase_map_webui:
+                phrase_map_webui.append(entry)
+
+        # Feed searches omit imdb_id and search_phrase
+        feed_map = [
+            (ad, ad_feed),
+            (al, al_feed),
+            (at, at_feed),
+            (by, by_feed),
+            (dd, dd_feed),
+            (dl, dl_feed),
+            (dt, dt_feed),
+            (dw, dw_feed),
+            (fx, fx_feed),
+            (he, he_feed),
+            (hs, hs_feed),
+            (mb, mb_feed),
+            (nk, nk_feed),
+            (nx, nx_feed),
+            (rm, rm_feed),
+            (sf, sf_feed),
+            (sl, sl_feed),
+            (wd, wd_feed),
+            (wx, wx_feed),
+        ]
+
+        if imdb_id:  # only Radarr/Sonarr are using imdb_id
+            args, kwargs = (
+                (shared_state, start_time, request_from, imdb_id),
+                {'mirror': mirror, 'season': season, 'episode': episode}
+            )
+            for flag, func in imdb_map:
+                if flag:
+                    functions.append(lambda f=func, a=args, kw=kwargs: f(*a, **kw))
+
+        elif search_phrase and allow_phrase_search:
+            args, kwargs = (
+                (shared_state, start_time, request_from, search_phrase),
+                {'mirror': mirror, 'season': season, 'episode': episode}
+            )
+            selected_map = phrase_map if docs_search else phrase_map_webui
+            for flag, func in selected_map:
+                if flag:
+                    functions.append(lambda f=func, a=args, kw=kwargs: f(*a, **kw))
+
+        elif search_phrase:
+            debug(
+                f"Search phrase '{search_phrase}' is not supported for {request_from}. Only LazyLibrarian can use search phrases.")
+
+        else:
+            args, kwargs = (
+                (shared_state, start_time, request_from),
+                {'mirror': mirror}
+            )
+            for flag, func in feed_map:
+                if flag:
+                    functions.append(lambda f=func, a=args, kw=kwargs: f(*a, **kw))
 
     if imdb_id:
         stype = f'IMDb-ID "{imdb_id}"'
@@ -175,7 +260,7 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
                 result = future.result()
                 results.extend(result)
             except Exception as e:
-                info(f"An error occurred: {e}")
+                error(f"An error occurred: {e}")
 
     elapsed_time = time.time() - start_time
     info(f"Providing {len(results)} releases to {request_from} for {stype}. Time taken: {elapsed_time:.2f} seconds")

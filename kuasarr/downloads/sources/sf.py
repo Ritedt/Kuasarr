@@ -156,4 +156,18 @@ def resolve_sf_redirect(url, user_agent):
     return None
 
 
+from kuasarr.downloads.base import AbstractDownloadSource
 
+
+class Source(AbstractDownloadSource):
+    initials = "sf"
+
+    def get_download_links(self, shared_state, url, mirror, title, password=None):
+        raw = get_sf_download_links(shared_state, url, mirror, title)
+        if not raw or not isinstance(raw, dict):
+            return {"links": []}
+        real_url = raw.get("real_url")
+        imdb_id = raw.get("imdb_id")
+        if not real_url:
+            return {"links": [], "imdb_id": imdb_id}
+        return {"links": [real_url], "imdb_id": imdb_id}

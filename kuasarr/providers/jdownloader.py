@@ -11,7 +11,7 @@ import time
 
 import kuasarr
 from kuasarr.providers import shared_state
-from kuasarr.providers.log import info
+from kuasarr.providers.log import info, warn, error
 from kuasarr.providers.myjd_api import (
     Myjdapi,
     TokenExpiredException,
@@ -28,6 +28,7 @@ __all__ = [
     "check_device",
     "connect_device",
     "get_device",
+    "run_device_request",
     "get_devices",
     "set_device_settings",
     "update_jdownloader",
@@ -168,6 +169,25 @@ def get_device():
             break
 
     return shared_state.values["device"]
+
+
+def run_device_request(request_name, request_fn, default=None):
+    """Execute a JDownloader request with graceful reconnect+retry."""
+    try:
+        return request_fn(get_device())
+    except (TokenExpiredException, RequestTimeoutException, MYJDException) as e:
+        warn(f'JDownloader request "{request_name}" failed ({type(e).__name__}). Retrying once after reconnect...')
+
+    shared_state.update("device", False)
+    if not connect_device():
+        error(f'JDownloader reconnect failed while handling "{request_name}". Returning fallback result.')
+        return default
+
+    try:
+        return request_fn(shared_state.values["device"])
+    except (TokenExpiredException, RequestTimeoutException, MYJDException) as e:
+        error(f'JDownloader request "{request_name}" failed after retry ({type(e).__name__}). Returning fallback result.')
+        return default
 
 
 def get_devices(user, password):

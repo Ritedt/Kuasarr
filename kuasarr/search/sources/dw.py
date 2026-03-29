@@ -17,7 +17,7 @@ supported_mirrors = ["1fichier", "rapidgator", "ddownload", "katfile"]
 
 
 def convert_to_rss_date(date_str):
-    german_months = ["Januar", "Februar", "MÃ¤rz", "April", "Mai", "Juni",
+    german_months = ["Januar", "Februar", "März", "April", "Mai", "Juni",
                      "Juli", "August", "September", "Oktober", "November", "Dezember"]
     english_months = ["January", "February", "March", "April", "May", "June",
                       "July", "August", "September", "October", "November", "December"]
@@ -212,4 +212,21 @@ def dw_search(shared_state, start_time, request_from, search_string, mirror=None
     return releases
 
 
+from kuasarr.search.base import AbstractSearchSource
+
+
+class Source(AbstractSearchSource):
+    initials = "dw"
+    supports_imdb = True
+    supports_phrase = False
+    supports_feed = True
+    supported_categories = frozenset({"movies", "tv-shows"})
+
+    def search(self, shared_state, start_time, request_from, search_string,
+               mirror=None, season=None, episode=None):
+        return dw_search(shared_state, start_time, request_from, search_string,
+                         mirror=mirror, season=season, episode=episode)
+
+    def feed(self, shared_state, start_time, request_from, mirror=None):
+        return dw_feed(shared_state, start_time, request_from, mirror=mirror)
 

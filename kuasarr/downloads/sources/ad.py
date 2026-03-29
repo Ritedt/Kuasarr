@@ -249,4 +249,16 @@ def get_ad_download_links(shared_state, url, mirror, title):  # signature must a
 __all__ = ["get_ad_download_links"]
 
 
+from kuasarr.downloads.base import AbstractDownloadSource
 
+
+class Source(AbstractDownloadSource):
+    initials = "ad"
+
+    def get_download_links(self, shared_state, url, mirror, title, password=None):
+        raw = get_ad_download_links(shared_state, url, mirror, title)
+        if not raw:
+            return {"links": []}
+        if isinstance(raw, dict):
+            return raw
+        return {"links": raw}

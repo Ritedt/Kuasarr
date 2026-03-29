@@ -50,12 +50,7 @@ def resolve_legacy_container(shared_state, legacy_id: str) -> Optional[dict]:
 
 
 def unhide_links(shared_state, url: str, password: Optional[str] = None) -> Tuple[List[str], Optional[str]]:
-    """
-    Decrypt hide.cx container links via API.
-    
-    Returns:
-        Tuple of (list of decrypted links, error message or None)
-    """
+    """Decrypt hide.cx container links via API."""
     api_key = get_hide_api_key(shared_state)
     if not api_key:
         return [], "hide.cx API Key nicht konfiguriert. Bitte unter Settings > HideCX > api_key eintragen."
@@ -149,13 +144,7 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None) -> Tupl
 
 
 def decrypt_links_if_hide(shared_state: Any, items: List[Any]) -> Dict[str, Any]:
-    """
-    Resolve redirects and decrypt hide.cx links from a list of item lists.
-
-    :param shared_state: State object required by unhide_links function
-    :param items: List of lists or strings. If list, URL at index 0. If string, treated as URL.
-    :return: Dict with 'status' and 'results' (flat list of decrypted link URLs)
-    """
+    """Resolve redirects and decrypt hide.cx links from a list of item lists."""
     if not items:
         info("No items provided to decrypt.")
         return {"status": "error", "results": []}

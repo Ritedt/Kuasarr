@@ -13,6 +13,7 @@ from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.log import error
 from kuasarr.providers.statistics import StatsHelper
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html
+from kuasarr.providers.ui.spa import try_serve_spa
 
 
 _APP_START = _time.time()
@@ -63,6 +64,12 @@ def setup_statistics(app: Bottle, shared_state: Any) -> None:
     @app.get('/statistics')
     def statistics() -> str:
         """Return HTML statistics page (legacy UI)."""
+        # Try to serve React SPA first
+        spa = try_serve_spa()
+        if spa is not None:
+            return spa
+
+        # Fall back to legacy HTML rendering
         try:
             stats_helper = StatsHelper(shared_state)
             stats = stats_helper.get_stats()

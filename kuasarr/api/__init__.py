@@ -490,15 +490,17 @@ def get_api(shared_state_dict, shared_state_lock):
     @require_api_key
     def get_statistics():
         response.content_type = 'application/json'
+        from kuasarr.providers.statistics import StatsHelper
+        stats = StatsHelper(shared_state).get_stats()
         return json.dumps({'data': {
-            'total_packages': 0,
-            'completed_packages': 0,
-            'failed_packages': 0,
+            'total_packages': stats['total_download_attempts'],
+            'completed_packages': stats['packages_downloaded'],
+            'failed_packages': stats['failed_downloads'],
             'total_downloaded': 0,
             'average_speed': 0,
             'uptime_seconds': int(_time.time() - _APP_START),
             'api_calls_today': 0,
-            'captchas_solved_today': 0,
+            'captchas_solved_today': stats['total_captcha_decryptions'],
             'hoster_status': [],
             'daily_stats': [],
         }})

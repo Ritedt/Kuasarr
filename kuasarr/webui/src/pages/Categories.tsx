@@ -50,25 +50,25 @@ function CategoryRow({
 }) {
   return (
     <div className="p-4 border-b border-bg-tertiary last:border-0 hover:bg-bg-tertiary/30 transition-colors">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          <div className="p-2 bg-kuasarr-primary/10 rounded-lg">
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="p-2 bg-kuasarr-primary/10 rounded-lg shrink-0">
             <Folder className="h-5 w-5 text-kuasarr-primary" />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h3 className="font-medium text-text-primary">{category.name}</h3>
               <Badge variant={category.enabled ? 'success' : 'default'} size="sm">
                 {category.enabled ? 'Enabled' : 'Disabled'}
               </Badge>
             </div>
-            <div className="flex items-center gap-4 text-sm text-text-secondary mt-1">
-              <span className="font-mono text-xs bg-bg-tertiary px-2 py-0.5 rounded">{category.pattern}</span>
+            <div className="flex items-center gap-3 text-sm text-text-secondary mt-1 flex-wrap">
+              <span className="font-mono text-xs bg-bg-tertiary px-2 py-0.5 rounded truncate max-w-[180px] sm:max-w-none">{category.pattern}</span>
               <span>Priority: {category.priority}</span>
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 pl-1">
           <Toggle
             checked={category.enabled}
             onChange={(checked) => onToggleEnabled(category.id, checked)}

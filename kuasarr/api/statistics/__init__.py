@@ -1,17 +1,76 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # Kuasarr
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
+import json
+import time as _time
+from typing import Any, Dict
+
+from bottle import Bottle, response, HTTPError
+
 import kuasarr.providers.ui.html_images as images
-from kuasarr.providers.ui.html_templates import render_button, render_centered_html
+from kuasarr.providers.auth import require_api_key
+from kuasarr.providers.log import error
 from kuasarr.providers.statistics import StatsHelper
+from kuasarr.providers.ui.html_templates import render_button, render_centered_html
 
 
-def setup_statistics(app, shared_state):
+_APP_START = _time.time()
+_AVG_LINK_SIZE_MB = 100  # Estimated average size per link for statistics
+
+
+def setup_statistics(app: Bottle, shared_state: Any) -> None:
+    def _json(payload: Dict[str, Any]) -> Dict[str, Any]:
+        response.content_type = 'application/json'
+        return payload
+
+    @app.get('/api/statistics')
+    @require_api_key
+    def get_statistics() -> Dict[str, Any]:
+        """Return statistics data for the React WebUI.
+
+        Returns:
+            JSON object with statistics including:
+            - total_packages: Total download attempts (completed + failed)
+            - completed_packages: Successfully downloaded packages
+            - failed_packages: Failed download attempts
+            - total_downloaded: Estimated total bytes downloaded
+            - uptime_seconds: Application uptime in seconds
+            - captchas_solved_today: Total CAPTCHAs solved (auto + manual)
+        """
+        try:
+            stats_helper = StatsHelper(shared_state)
+            stats = stats_helper.get_stats()
+        except Exception as e:
+            error(f"Failed to retrieve statistics: {e}")
+            raise HTTPError(500, "Failed to retrieve statistics")
+
+        return _json({'data': {
+            'total_packages': stats['packages_downloaded'] + stats['failed_downloads'],
+            'completed_packages': stats['packages_downloaded'],
+            'failed_packages': stats['failed_downloads'],
+            'total_downloaded': stats['links_processed'] * 1024 * 1024 * _AVG_LINK_SIZE_MB,
+            'average_speed': 0,  # Not tracked yet
+            'uptime_seconds': int(_time.time() - _APP_START),
+            'api_calls_today': 0,  # Not tracked yet
+            'captchas_solved_today': (
+                stats['captcha_decryptions_automatic'] + stats['captcha_decryptions_manual']
+            ),
+            'hoster_status': [],  # Not implemented yet
+            'daily_stats': [],  # Not implemented yet
+        }})
+
     @app.get('/statistics')
-    def statistics():
-        stats_helper = StatsHelper(shared_state)
-        stats = stats_helper.get_stats()
+    def statistics() -> str:
+        """Return HTML statistics page (legacy UI)."""
+        try:
+            stats_helper = StatsHelper(shared_state)
+            stats = stats_helper.get_stats()
+        except Exception as e:
+            error(f"Failed to retrieve statistics: {e}")
+            return render_centered_html(
+                f"<h2>Error</h2><p>Failed to retrieve statistics: {e}</p>"
+            )
 
         stats_html = f"""
         <h1><img src="{images.logo}" type="image/png" alt="kuasarr logo" class="logo"/>kuasarr</h1>
@@ -196,4 +255,4 @@ def setup_statistics(app, shared_state):
         return render_centered_html(stats_html)
 
 
-
+__all__ = ["setup_statistics"]

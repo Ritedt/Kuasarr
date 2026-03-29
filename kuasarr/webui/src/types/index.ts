@@ -290,6 +290,72 @@ export interface Toast {
 export type Theme = 'dark';
 
 // ============================================================================
+// Settings Types
+// ============================================================================
+
+export interface GeneralSettings {
+  internal_address: string;
+  external_address: string;
+  timezone: string;
+  slow_mode: boolean;
+  flaresolverr_url: string;
+  webui_user: string;
+  webui_password: string;
+  _is_set: Record<string, boolean>;
+}
+
+export interface CaptchaSettings {
+  service: 'dbc' | '2captcha';
+  dbc_authtoken: string;
+  twocaptcha_api_key: string;
+  timeout: string;
+  max_retries: string;
+  retry_backoff: string;
+  _is_set: Record<string, boolean>;
+}
+
+export interface IntegrationSettings {
+  sonarr_url: string;
+  sonarr_api_key: string;
+  radarr_url: string;
+  radarr_api_key: string;
+  _is_set: Record<string, boolean>;
+}
+
+export interface HostnamesSettings {
+  ad: string;
+  al: string;
+  at: string;
+  by: string;
+  dd: string;
+  dl: string;
+  dt: string;
+  dw: string;
+  fx: string;
+  he: string;
+  hs: string;
+  mb: string;
+  nk: string;
+  nx: string;
+  rm: string;
+  sf: string;
+  sl: string;
+  wd: string;
+  wx: string;
+  sj: string;
+  dj: string;
+}
+
+export interface AdvancedSettings {
+  flatten_nested_folders: boolean;
+  trigger_rescan: boolean;
+  xrel_enabled: boolean;
+  xrel_filter_nuked: boolean;
+  hidecx_api_key: string;
+  _is_set: Record<string, boolean>;
+}
+
+// ============================================================================
 // Window Extensions
 // ============================================================================
 

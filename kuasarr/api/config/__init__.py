@@ -578,3 +578,322 @@ def setup_config(app, shared_state):
             timezone=timezone,
             csrf_token=csrf_token
         )
+
+    # ============================================================================
+    # SPA Settings API — General / Captcha / Integrations / Hostnames / Advanced
+    # ============================================================================
+
+    @app.get('/api/settings/general-config')
+    @require_api_key
+    def get_general_config():
+        from bottle import response
+        import json
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+        conn = Config('Connection')
+        flare = Config('FlareSolverr')
+        webui = Config('WebUI')
+
+        webui_user = webui.get('user') or ''
+        webui_password = webui.get('password') or ''
+
+        return json.dumps({
+            'success': True,
+            'data': {
+                'internal_address': conn.get('internal_address') or '',
+                'external_address': conn.get('external_address') or '',
+                'timezone': conn.get('timezone') or 'Europe/Berlin',
+                'slow_mode': (conn.get('slow_mode') or 'false').lower() == 'true',
+                'flaresolverr_url': flare.get('url') or '',
+                'webui_user': '',
+                'webui_password': '',
+                '_is_set': {
+                    'webui_user': bool(webui_user),
+                    'webui_password': bool(webui_password),
+                },
+            }
+        })
+
+    @app.post('/api/settings/general-config')
+    @require_api_key
+    def save_general_config():
+        from bottle import response, request
+        import json
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+        try:
+            payload = request.json or {}
+        except Exception:
+            response.status = 400
+            return json.dumps({'success': False, 'error': 'Invalid JSON'})
+
+        conn = Config('Connection')
+        flare = Config('FlareSolverr')
+        webui = Config('WebUI')
+
+        if 'internal_address' in payload:
+            conn.save('internal_address', (payload['internal_address'] or '').strip())
+            shared_state.update('internal_address', (payload['internal_address'] or '').strip())
+        if 'external_address' in payload:
+            conn.save('external_address', (payload['external_address'] or '').strip())
+            shared_state.update('external_address', (payload['external_address'] or '').strip())
+        if 'timezone' in payload:
+            conn.save('timezone', (payload['timezone'] or 'Europe/Berlin').strip())
+            shared_state.update('timezone', (payload['timezone'] or 'Europe/Berlin').strip())
+        if 'slow_mode' in payload:
+            conn.save('slow_mode', 'true' if payload['slow_mode'] else 'false')
+        if 'flaresolverr_url' in payload:
+            flare.save('url', (payload['flaresolverr_url'] or '').strip())
+        if payload.get('webui_user', ''):
+            webui.save('user', payload['webui_user'].strip())
+        if payload.get('webui_password', ''):
+            webui.save('password', payload['webui_password'].strip())
+
+        return json.dumps({'success': True, 'message': 'General settings saved successfully'})
+
+    @app.get('/api/settings/captcha-config')
+    @require_api_key
+    def get_captcha_config():
+        from bottle import response
+        import json
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+        captcha = Config('Captcha')
+
+        dbc_authtoken = captcha.get('dbc_authtoken') or ''
+        twocaptcha_api_key = captcha.get('twocaptcha_api_key') or ''
+
+        return json.dumps({
+            'success': True,
+            'data': {
+                'service': captcha.get('service') or 'dbc',
+                'dbc_authtoken': '',
+                'twocaptcha_api_key': '',
+                'timeout': captcha.get('timeout') or '120',
+                'max_retries': captcha.get('max_retries') or '3',
+                'retry_backoff': captcha.get('retry_backoff') or '5',
+                '_is_set': {
+                    'dbc_authtoken': bool(dbc_authtoken),
+                    'twocaptcha_api_key': bool(twocaptcha_api_key),
+                },
+            }
+        })
+
+    @app.post('/api/settings/captcha-config')
+    @require_api_key
+    def save_captcha_config():
+        from bottle import response, request
+        import json
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+        try:
+            payload = request.json or {}
+        except Exception:
+            response.status = 400
+            return json.dumps({'success': False, 'error': 'Invalid JSON'})
+
+        captcha = Config('Captcha')
+
+        service = (payload.get('service') or 'dbc').strip().lower()
+        captcha.save('service', service)
+
+        if payload.get('dbc_authtoken', ''):
+            authtoken = payload['dbc_authtoken'].strip()
+            captcha.save('dbc_authtoken', authtoken)
+            dbc_config = shared_state.values.get('dbc_config', {})
+            dbc_config['authtoken'] = authtoken
+            shared_state.update('dbc_config', dbc_config)
+        else:
+            authtoken = captcha.get('dbc_authtoken') or ''
+
+        if payload.get('twocaptcha_api_key', ''):
+            twocaptcha_key = payload['twocaptcha_api_key'].strip()
+            captcha.save('twocaptcha_api_key', twocaptcha_key)
+            shared_state.update('twocaptcha_api_key', twocaptcha_key)
+        else:
+            twocaptcha_key = captcha.get('twocaptcha_api_key') or ''
+
+        if 'timeout' in payload:
+            captcha.save('timeout', str(int(payload['timeout'])) if str(payload['timeout']).isdigit() else '120')
+        if 'max_retries' in payload:
+            captcha.save('max_retries', str(int(payload['max_retries'])) if str(payload['max_retries']).isdigit() else '3')
+        if 'retry_backoff' in payload:
+            captcha.save('retry_backoff', str(int(payload['retry_backoff'])) if str(payload['retry_backoff']).isdigit() else '5')
+
+        shared_state.update('captcha_service', service)
+        shared_state.update('dbc_enabled', bool(authtoken or twocaptcha_key))
+
+        return json.dumps({'success': True, 'message': 'Captcha settings saved successfully'})
+
+    @app.get('/api/settings/integrations')
+    @require_api_key
+    def get_integrations():
+        from bottle import response
+        import json
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+        sonarr = Config('Sonarr')
+        radarr = Config('Radarr')
+
+        sonarr_api_key = sonarr.get('api_key') or ''
+        radarr_api_key = radarr.get('api_key') or ''
+
+        return json.dumps({
+            'success': True,
+            'data': {
+                'sonarr_url': sonarr.get('url') or '',
+                'sonarr_api_key': '',
+                'radarr_url': radarr.get('url') or '',
+                'radarr_api_key': '',
+                '_is_set': {
+                    'sonarr_api_key': bool(sonarr_api_key),
+                    'radarr_api_key': bool(radarr_api_key),
+                },
+            }
+        })
+
+    @app.post('/api/settings/integrations')
+    @require_api_key
+    def save_integrations():
+        from bottle import response, request
+        import json
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+        try:
+            payload = request.json or {}
+        except Exception:
+            response.status = 400
+            return json.dumps({'success': False, 'error': 'Invalid JSON'})
+
+        sonarr = Config('Sonarr')
+        radarr = Config('Radarr')
+
+        if 'sonarr_url' in payload:
+            sonarr.save('url', (payload['sonarr_url'] or '').strip())
+        if payload.get('sonarr_api_key', ''):
+            sonarr.save('api_key', payload['sonarr_api_key'].strip())
+        if 'radarr_url' in payload:
+            radarr.save('url', (payload['radarr_url'] or '').strip())
+        if payload.get('radarr_api_key', ''):
+            radarr.save('api_key', payload['radarr_api_key'].strip())
+
+        return json.dumps({'success': True, 'message': 'Integration settings saved successfully'})
+
+    @app.get('/api/settings/hostnames-config')
+    @require_api_key
+    def get_hostnames_config():
+        from bottle import response
+        import json
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+        hostnames = Config('Hostnames')
+        sites = ['ad', 'al', 'at', 'by', 'dd', 'dl', 'dt', 'dw', 'fx', 'he',
+                 'hs', 'mb', 'nk', 'nx', 'rm', 'sf', 'sl', 'wd', 'wx', 'sj', 'dj']
+
+        data = {site: hostnames.get(site) or '' for site in sites}
+        return json.dumps({'success': True, 'data': data})
+
+    @app.post('/api/settings/hostnames-config')
+    @require_api_key
+    def save_hostnames_config():
+        from bottle import response, request
+        import json
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+        try:
+            payload = request.json or {}
+        except Exception:
+            response.status = 400
+            return json.dumps({'success': False, 'error': 'Invalid JSON'})
+
+        sites = ['ad', 'al', 'at', 'by', 'dd', 'dl', 'dt', 'dw', 'fx', 'he',
+                 'hs', 'mb', 'nk', 'nx', 'rm', 'sf', 'sl', 'wd', 'wx', 'sj', 'dj']
+        restart_required_sites = {'al', 'dd', 'nx'}
+        requires_restart = []
+
+        hostnames = Config('Hostnames')
+        for site in sites:
+            if site in payload:
+                new_val = (payload[site] or '').strip().lower()
+                old_val = (hostnames.get(site) or '').strip().lower()
+                hostnames.save(site, new_val)
+                if site in restart_required_sites and new_val != old_val:
+                    requires_restart.append(site)
+
+        return json.dumps({
+            'success': True,
+            'message': 'Hostname settings saved successfully',
+            'requires_restart': requires_restart,
+        })
+
+    @app.get('/api/settings/advanced-config')
+    @require_api_key
+    def get_advanced_config():
+        from bottle import response
+        import json
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+        pp = Config('PostProcessing')
+        xrel = Config('XRel')
+        hidecx = Config('HideCX')
+
+        hidecx_api_key = hidecx.get('api_key') or ''
+
+        def _bool(val, default=False):
+            if val is None:
+                return default
+            return str(val).lower() == 'true'
+
+        return json.dumps({
+            'success': True,
+            'data': {
+                'flatten_nested_folders': _bool(pp.get('flatten_nested_folders'), True),
+                'trigger_rescan': _bool(pp.get('trigger_rescan'), True),
+                'xrel_enabled': _bool(xrel.get('enabled'), False),
+                'xrel_filter_nuked': _bool(xrel.get('filter_nuked'), False),
+                'hidecx_api_key': '',
+                '_is_set': {
+                    'hidecx_api_key': bool(hidecx_api_key),
+                },
+            }
+        })
+
+    @app.post('/api/settings/advanced-config')
+    @require_api_key
+    def save_advanced_config():
+        from bottle import response, request
+        import json
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+        try:
+            payload = request.json or {}
+        except Exception:
+            response.status = 400
+            return json.dumps({'success': False, 'error': 'Invalid JSON'})
+
+        pp = Config('PostProcessing')
+        xrel = Config('XRel')
+        hidecx = Config('HideCX')
+
+        if 'flatten_nested_folders' in payload:
+            pp.save('flatten_nested_folders', 'true' if payload['flatten_nested_folders'] else 'false')
+        if 'trigger_rescan' in payload:
+            pp.save('trigger_rescan', 'true' if payload['trigger_rescan'] else 'false')
+        if 'xrel_enabled' in payload:
+            xrel.save('enabled', 'true' if payload['xrel_enabled'] else 'false')
+        if 'xrel_filter_nuked' in payload:
+            xrel.save('filter_nuked', 'true' if payload['xrel_filter_nuked'] else 'false')
+        if payload.get('hidecx_api_key', ''):
+            hidecx.save('api_key', payload['hidecx_api_key'].strip())
+
+        return json.dumps({'success': True, 'message': 'Advanced settings saved successfully'})

@@ -20,6 +20,11 @@ import type {
   PausePackageRequest,
   ResumePackageRequest,
   DeletePackageRequest,
+  GeneralSettings,
+  CaptchaSettings,
+  IntegrationSettings,
+  HostnamesSettings,
+  AdvancedSettings,
 } from '../types';
 
 const API_BASE = '/api';
@@ -298,5 +303,73 @@ export async function updateNotificationConfig(configId: string, config: Partial
 export async function deleteNotificationConfig(configId: string): Promise<void> {
   await fetchApi<void>(`/notifications/configs/${configId}`, {
     method: 'DELETE',
+  });
+}
+
+// General Settings API
+export async function getGeneralSettings(): Promise<GeneralSettings | null> {
+  const response = await fetchApi<GeneralSettings>('/settings/general-config');
+  return response.data || null;
+}
+
+export async function saveGeneralSettings(data: Partial<GeneralSettings>): Promise<void> {
+  await fetchApi<void>('/settings/general-config', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// Captcha Settings API
+export async function getCaptchaSettings(): Promise<CaptchaSettings | null> {
+  const response = await fetchApi<CaptchaSettings>('/settings/captcha-config');
+  return response.data || null;
+}
+
+export async function saveCaptchaSettings(data: Partial<CaptchaSettings>): Promise<void> {
+  await fetchApi<void>('/settings/captcha-config', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// Integration Settings API
+export async function getIntegrationSettings(): Promise<IntegrationSettings | null> {
+  const response = await fetchApi<IntegrationSettings>('/settings/integrations');
+  return response.data || null;
+}
+
+export async function saveIntegrationSettings(data: Partial<IntegrationSettings>): Promise<void> {
+  await fetchApi<void>('/settings/integrations', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// Hostnames Settings API
+export async function getHostnamesSettings(): Promise<HostnamesSettings | null> {
+  const response = await fetchApi<HostnamesSettings>('/settings/hostnames-config');
+  return response.data || null;
+}
+
+export async function saveHostnamesSettings(
+  data: Partial<HostnamesSettings>
+): Promise<{ requires_restart?: string[] }> {
+  const response = await fetchApi<{ requires_restart?: string[] }>('/settings/hostnames-config', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+  return response.data || {};
+}
+
+// Advanced Settings API
+export async function getAdvancedSettings(): Promise<AdvancedSettings | null> {
+  const response = await fetchApi<AdvancedSettings>('/settings/advanced-config');
+  return response.data || null;
+}
+
+export async function saveAdvancedSettings(data: Partial<AdvancedSettings>): Promise<void> {
+  await fetchApi<void>('/settings/advanced-config', {
+    method: 'POST',
+    body: JSON.stringify(data),
   });
 }

@@ -1,6 +1,6 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
-import { useEffect } from 'react';
 import { Dashboard } from './pages/Dashboard';
 import { Packages } from './pages/Packages';
 import Search from './pages/Search';
@@ -23,28 +23,29 @@ const queryClient = new QueryClient({
   },
 });
 
-function JdStatusPoller() {
+function JdStatusSync() {
   const { setJdConnected, setJdStatus } = useUIStore();
-  const { data } = useQuery({
-    queryKey: ['jdownloader-status-global'],
+  const { data: jdStatus } = useQuery({
+    queryKey: ['jdownloader', 'status'],
     queryFn: getJDownloaderStatus,
     refetchInterval: 30000,
-    staleTime: 0,
   });
+
   useEffect(() => {
-    if (data !== undefined) {
-      setJdStatus(data);
-      setJdConnected(data.connected);
+    if (jdStatus) {
+      setJdStatus(jdStatus);
+      setJdConnected(jdStatus.connected);
     }
-  }, [data, setJdStatus, setJdConnected]);
+  }, [jdStatus, setJdStatus, setJdConnected]);
+
   return null;
 }
 
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <JdStatusPoller />
       <BrowserRouter>
+        <JdStatusSync />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/packages" element={<Packages />} />

@@ -753,18 +753,70 @@ def setup_packages_routes(app) -> None:
     @app.get("/api/packages")
     @require_api_key
     def packages_json_api():
-        """JSON status endpoint."""
+        """Return packages as Package[] for the React WebUI."""
         response.content_type = "application/json"
         device = shared_state.values.get("device")
         if not device:
-            return json.dumps({"connected": False, "queue": [], "history": []})
+            return json.dumps({"success": True, "data": []})
 
         downloads = get_packages(shared_state)
-        return json.dumps({
-            "connected": True,
-            "queue": downloads.get("queue", []),
-            "history": downloads.get("history", []),
-        })
+        packages = []
+
+        _STATUS_PREFIXES = [
+            ("[Downloading] ", "downloading"),
+            ("[Extracting] ", "extracting"),
+            ("[Paused] ", "paused"),
+            ("[Linkgrabber] ", "queued"),
+            ("[CAPTCHA not solved!] ", "queued"),
+        ]
+
+        for item in downloads.get("queue", []):
+            filename = item.get("filename", "Unknown")
+            status = "downloading"
+            name = filename
+            for prefix, mapped_status in _STATUS_PREFIXES:
+                if filename.startswith(prefix):
+                    status = mapped_status
+                    name = filename[len(prefix):]
+                    break
+            mb = item.get("mb", 0) or 0
+            mb_left = item.get("mbleft", 0) or 0
+            size = int(mb * 1024 * 1024)
+            downloaded = int((mb - mb_left) * 1024 * 1024)
+            packages.append({
+                "id": item.get("nzo_id", ""),
+                "name": name,
+                "status": status,
+                "progress": item.get("percentage", 0),
+                "size": size,
+                "downloaded": max(0, downloaded),
+                "speed": 0,
+                "eta": None,
+                "links": [],
+                "category": item.get("cat", ""),
+                "created_at": "",
+                "updated_at": "",
+            })
+
+        for item in downloads.get("history", []):
+            status = "failed" if item.get("fail_message") else "completed"
+            size = item.get("bytes", 0) or 0
+            packages.append({
+                "id": item.get("nzo_id", ""),
+                "name": item.get("name", "Unknown"),
+                "status": status,
+                "progress": 100,
+                "size": size,
+                "downloaded": size,
+                "speed": 0,
+                "eta": None,
+                "links": [],
+                "category": item.get("category", ""),
+                "created_at": "",
+                "updated_at": "",
+            })
+
+        return json.dumps({"success": True, "data": packages})
 
     @app.post("/api/packages/delete")
     @require_api_key

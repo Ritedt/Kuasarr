@@ -6,17 +6,10 @@ import re
 import requests
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 
+from kuasarr.constants import HTTP_DEFAULT_TIMEOUT_SECONDS, get_timeout
+
 def normalize_url(url, base_url=None):
-    """
-    Normalisiert eine URL (macht relative URLs absolut, etc.)
-    
-    Args:
-        url (str): Die zu normalisierende URL
-        base_url (str): Basis-URL fÃ¼r relative URLs
-        
-    Returns:
-        str: Normalisierte URL
-    """
+    """Normalisiert eine URL (macht relative URLs absolut, etc.)"""
     if not url:
         return ""
     
@@ -27,15 +20,7 @@ def normalize_url(url, base_url=None):
     return url
 
 def extract_domain(url):
-    """
-    Extrahiert die Domain aus einer URL
-    
-    Args:
-        url (str): Die URL
-        
-    Returns:
-        str: Domain oder None
-    """
+    """Extrahiert die Domain aus einer URL"""
     try:
         parsed = urlparse(url)
         return parsed.netloc
@@ -43,17 +28,7 @@ def extract_domain(url):
         return None
 
 def build_search_url(base_url, query, params=None):
-    """
-    Baut eine Such-URL zusammen
-    
-    Args:
-        base_url (str): Basis-URL fÃ¼r die Suche
-        query (str): Suchbegriff
-        params (dict): ZusÃ¤tzliche Parameter
-        
-    Returns:
-        str: Zusammengebaute Such-URL
-    """
+    """Baut eine Such-URL zusammen"""
     if not params:
         params = {}
     
@@ -76,15 +51,7 @@ def build_search_url(base_url, query, params=None):
     return urlunparse(new_parsed)
 
 def is_valid_download_link(url):
-    """
-    PrÃ¼ft ob eine URL ein gÃ¼ltiger Download-Link ist
-    
-    Args:
-        url (str): Die zu prÃ¼fende URL
-        
-    Returns:
-        bool: True wenn gÃ¼ltiger Download-Link
-    """
+    """PrÃ¼ft ob eine URL ein gÃ¼ltiger Download-Link ist"""
     if not url:
         return False
     
@@ -103,15 +70,7 @@ def is_valid_download_link(url):
         return False
 
 def extract_file_id(url):
-    """
-    Extrahiert eine Datei-ID aus einer URL
-    
-    Args:
-        url (str): Die URL
-        
-    Returns:
-        str: Datei-ID oder None
-    """
+    """Extrahiert eine Datei-ID aus einer URL"""
     # Verschiedene Patterns fÃ¼r verschiedene Hoster
     patterns = [
         r'/Container/([A-F0-9]+)\.html',  # FileCrypt
@@ -127,16 +86,7 @@ def extract_file_id(url):
     return None
 
 def clean_url_params(url, keep_params=None):
-    """
-    Bereinigt URL-Parameter (entfernt Tracking, etc.)
-    
-    Args:
-        url (str): Die URL
-        keep_params (list): Parameter die behalten werden sollen
-        
-    Returns:
-        str: Bereinigte URL
-    """
+    """Bereinigt URL-Parameter (entfernt Tracking, etc.)"""
     if not keep_params:
         keep_params = []
     
@@ -160,38 +110,23 @@ def clean_url_params(url, keep_params=None):
     except:
         return url
 
-def get_final_url(url, session=None, timeout=10):
-    """
-    Folgt Redirects und gibt die finale URL zurÃ¼ck
-    
-    Args:
-        url (str): Start-URL
-        session: Optional requests Session
-        timeout (int): Timeout in Sekunden
-        
-    Returns:
-        str: Finale URL oder ursprÃ¼ngliche URL bei Fehler
-    """
+def get_final_url(url, session=None, timeout=None):
+    """Folgt Redirects und gibt die finale URL zurÃ¼ck"""
+    # Apply slow mode multiplier
+    effective_timeout = get_timeout(timeout or HTTP_DEFAULT_TIMEOUT_SECONDS)
+
     try:
         if session:
-            response = session.head(url, timeout=timeout, allow_redirects=True)
+            response = session.head(url, timeout=effective_timeout, allow_redirects=True)
         else:
-            response = requests.head(url, timeout=timeout, allow_redirects=True)
-        
+            response = requests.head(url, timeout=effective_timeout, allow_redirects=True)
+
         return response.url
     except:
         return url
 
 def get_url_headers(url=None):
-    """
-    Gibt Standard-HTTP-Headers zurÃ¼ck
-    
-    Args:
-        url (str): Optional URL fÃ¼r spezifische Headers
-        
-    Returns:
-        dict: HTTP Headers Dictionary
-    """
+    """Gibt Standard-HTTP-Headers zurÃ¼ck"""
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -210,28 +145,20 @@ def get_url_headers(url=None):
     
     return headers
 
-def get_url(url, session=None, timeout=10, headers=None):
-    """
-    Macht einen GET-Request zu einer URL
-    
-    Args:
-        url (str): Die URL
-        session: Optional requests Session
-        timeout (int): Timeout in Sekunden
-        headers (dict): Optional Headers
-        
-    Returns:
-        requests.Response: Response-Objekt oder None bei Fehler
-    """
+def get_url(url, session=None, timeout=None, headers=None):
+    """Macht einen GET-Request zu einer URL"""
     if not headers:
         headers = get_url_headers(url)
-    
+
+    # Apply slow mode multiplier
+    effective_timeout = get_timeout(timeout or HTTP_DEFAULT_TIMEOUT_SECONDS)
+
     try:
         if session:
-            response = session.get(url, timeout=timeout, headers=headers)
+            response = session.get(url, timeout=effective_timeout, headers=headers)
         else:
-            response = requests.get(url, timeout=timeout, headers=headers)
-        
+            response = requests.get(url, timeout=effective_timeout, headers=headers)
+
         return response
     except Exception as e:
         print(f"Error getting URL {url}: {e}")

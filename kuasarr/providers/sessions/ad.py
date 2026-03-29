@@ -13,6 +13,11 @@ from urllib.parse import urlencode
 import requests
 
 from kuasarr.providers.log import debug, info
+from kuasarr.constants import (
+    FLARESOLVERR_REQUEST_TIMEOUT_SECONDS,
+    get_timeout,
+    get_flaresolverr_max_timeout,
+)
 
 hostname = "ad"
 
@@ -77,7 +82,7 @@ def _apply_solution_to_session(shared_state, session: requests.Session, solution
 
 
 def flaresolverr_request(shared_state, session: Optional[requests.Session], method: str, url: str,
-                          data: Optional[dict] = None, timeout: int = 60) -> Optional[dict]:
+                          data: Optional[dict] = None, timeout: int = None) -> Optional[dict]:
     """Make request via FlareSolverr for Cloudflare bypass. Session is optional."""
     config_cls = shared_state.values.get("config")
     if not config_cls:
@@ -90,13 +95,16 @@ def flaresolverr_request(shared_state, session: Optional[requests.Session], meth
         info(f"{hostname}: FlareSolverr URL nicht konfiguriert")
         return None
 
+    # Apply slow mode multiplier
+    effective_timeout = get_timeout(timeout or FLARESOLVERR_REQUEST_TIMEOUT_SECONDS)
+
     method = method.upper()
     cmd = "request.get" if method == "GET" else "request.post"
 
     payload = {
         "cmd": cmd,
         "url": url,
-        "maxTimeout": timeout * 1000,
+        "maxTimeout": get_flaresolverr_max_timeout(effective_timeout),
         "cookies": _load_session_cookies_for_flaresolverr(session) if session else [],
     }
 
@@ -118,7 +126,7 @@ def flaresolverr_request(shared_state, session: Optional[requests.Session], meth
             flaresolverr_url,
             headers=headers,
             data=json.dumps(payload),
-            timeout=timeout + 10,
+            timeout=effective_timeout + 10,
         )
         response.raise_for_status()
     except requests.RequestException as exc:

@@ -16,9 +16,21 @@ from urllib import parse
 from kuasarr.providers.log import info, debug
 from kuasarr.storage.config import Config
 from kuasarr.storage.sqlite_database import DataBase
+from kuasarr.providers.settings_observer import notify_core_settings_changed
 
 # Re-export from submodules for backward compatibility
+from kuasarr.categories import (
+    get_category_manager,
+    get_destination_folder,
+    get_all_categories,
+    get_enabled_categories,
+    get_category,
+    DEFAULT_CATEGORIES,
+)
+from kuasarr.categories.matcher import match_release_to_category
+
 from kuasarr.providers.jdownloader import (
+    run_device_request,
     connect_to_jd,
     set_device,
     set_device_from_config,
@@ -72,12 +84,22 @@ __all__ = [
     "set_state",
     "update",
     "set_connection_info",
+    "get_core_settings",
+    "reload_core_settings_from_config",
     "set_files",
     "generate_api_key",
     "extract_valid_hostname",
     "get_db",
     "get_recently_searched",
     "download_package",
+    # Categories (re-exported)
+    "get_category_manager",
+    "get_destination_folder",
+    "match_release_to_category",
+    "get_all_categories",
+    "get_enabled_categories",
+    "get_category",
+    "DEFAULT_CATEGORIES",
     # JDownloader (re-exported)
     "connect_to_jd",
     "set_device",
@@ -139,13 +161,53 @@ def update(key, value):
         lock.release()
 
 
-def set_connection_info(internal_address, external_address, port):
+def set_connection_info(internal_address, external_address, port, timezone=None):
     """Set connection info for the web server."""
     if internal_address.count(":") < 2:
         internal_address = f"{internal_address}:{port}"
     update("internal_address", internal_address)
     update("external_address", external_address)
     update("port", port)
+    if timezone:
+        update("timezone", timezone)
+
+
+def get_core_settings():
+    """Get current core settings from shared state."""
+    return {
+        "internal_address": values.get("internal_address", ""),
+        "external_address": values.get("external_address", ""),
+        "timezone": values.get("timezone", "Europe/Berlin"),
+        "port": values.get("port", 9999)
+    }
+
+
+def reload_core_settings_from_config():
+    """Reload core settings from Config into shared state."""
+    config = Config('Connection')
+    internal_address = config.get('internal_address') or values.get('internal_address', '')
+    external_address = config.get('external_address') or values.get('external_address', '')
+    timezone = config.get('timezone') or 'Europe/Berlin'
+    port = values.get('port', 9999)
+
+    # Ensure internal_address includes port (use urlparse to handle IPv6 safely)
+    if internal_address:
+        _parsed = parse.urlparse(internal_address)
+        if _parsed.port is None:
+            # Inject port into netloc, preserving IPv6 brackets
+            _netloc_with_port = f"{_parsed.hostname}:{port}" if ':' not in (_parsed.hostname or '') else f"[{_parsed.hostname}]:{port}"
+            internal_address = parse.urlunparse(_parsed._replace(netloc=_netloc_with_port))
+
+    update("internal_address", internal_address)
+    update("external_address", external_address)
+    update("timezone", timezone)
+
+    return {
+        "internal_address": internal_address,
+        "external_address": external_address,
+        "timezone": timezone,
+        "port": port
+    }
 
 
 def set_files(config_path):

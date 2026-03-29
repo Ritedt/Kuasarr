@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 
 from kuasarr.providers.network.cloudflare import is_cloudflare_challenge, ensure_session_cf_bypassed, flaresolverr_get
 from kuasarr.providers.log import info, debug
+from kuasarr.providers.captcha.circle_solver import solve_circle_captcha, fallback_random_coordinates
 
 
 class CNL:
@@ -248,9 +249,17 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
         circle_captcha = bool(soup.find_all("div", {"class": "circle_captcha"}))
         i = 0
         while circle_captcha and i < 3:
-            random_x = str(random.randint(100, 200))
-            random_y = str(random.randint(100, 200))
-            output = session.post(url, data="buttonx.x=" + random_x + "&buttonx.y=" + random_y,
+            # Try to solve using computer vision, fallback to random
+            domain = urlparse(url).netloc
+            solution = solve_circle_captcha(session, domain)
+            if solution:
+                click_x, click_y = solution
+                info(f"Circle captcha solved at ({click_x}, {click_y})")
+            else:
+                click_x, click_y = fallback_random_coordinates()
+                info(f"Using fallback coordinates ({click_x}, {click_y})")
+
+            output = session.post(url, data=f"buttonx.x={click_x}&buttonx.y={click_y}",
                                   headers={'User-Agent': shared_state.values["user_agent"],
                                            'Content-Type': 'application/x-www-form-urlencoded'})
             if output.status_code == 403:

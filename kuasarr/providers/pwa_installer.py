@@ -44,14 +44,7 @@ def mark_pwa_prompted(config_class):
 
 
 def open_pwa_install_page(base_url, delay=3):
-    """
-    Open the PWA installation page in the default browser after a delay.
-    The delay allows the web server to start first.
-    
-    Args:
-        base_url: The base URL of the Kuasarr server (e.g., http://localhost:8080)
-        delay: Seconds to wait before opening browser
-    """
+    """Open the PWA installation page in the default browser after a delay."""
     def _open_browser():
         time.sleep(delay)
         # Open the install page which will guide the user through PWA installation

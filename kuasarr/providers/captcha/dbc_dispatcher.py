@@ -44,6 +44,7 @@ from kuasarr.providers.hosters import filter_blocked_hosters
 from kuasarr.downloads import fail
 from kuasarr.downloads.linkcrypters.filecrypt import CNL, DLC
 from kuasarr.downloads.linkcrypters.hide import unhide_links
+from kuasarr.constants import HTTP_DEFAULT_TIMEOUT_SECONDS, get_timeout
 
 DEFAULT_DISPATCH_INTERVAL_SECONDS = 10
 MAX_BACKOFF_MULTIPLIER = 8
@@ -454,7 +455,7 @@ class DBCDispatcher:
                             'Content-Type': 'application/x-www-form-urlencoded'}
             data = {password_field: password}
             try:
-                output = session.post(output.url, data=data, headers=post_headers, timeout=30)
+                output = session.post(output.url, data=data, headers=post_headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
             except requests.RequestException as e:
                 info(f"POSTing password failed: {e}")
                 return None
@@ -577,7 +578,7 @@ class DBCDispatcher:
                 try:
                     if not img_src.startswith("http"):
                         img_src = requests.compat.urljoin(url, img_src)
-                    img_response = requests.get(img_src, timeout=30)
+                    img_response = requests.get(img_src, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
                     result = self._client.solve_captcha(img_response.content)
                     if result.is_solved:
                         return result.text
@@ -763,7 +764,7 @@ class DBCDispatcher:
         for attempt in range(3):
             try:
                 # Fetch the circle captcha page
-                response = session.get(url, headers=headers, timeout=30)
+                response = session.get(url, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
                 soup = BeautifulSoup(response.text, 'html.parser')
                 
                 # Find circle captcha image
@@ -773,7 +774,7 @@ class DBCDispatcher:
                     match = re.search(r"top\.location\.href\s*=\s*['\"]([^'\"]+)['\"]", response.text)
                     if match:
                         redirect_url = requests.compat.urljoin(url, match.group(1))
-                        redirect_resp = session.get(redirect_url, allow_redirects=True, timeout=30)
+                        redirect_resp = session.get(redirect_url, allow_redirects=True, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
                         if redirect_resp.ok and "expired" not in redirect_resp.text.lower():
                             return [redirect_resp.url]
                     continue
@@ -791,7 +792,7 @@ class DBCDispatcher:
                             img_src = requests.compat.urljoin(url, img_src)
                         
                         # Download captcha image
-                        img_response = session.get(img_src, timeout=30)
+                        img_response = session.get(img_src, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
                         
                         # Solve via DBC (coordinates captcha)
                         debug(f"DBC: Solving coordinates captcha ({len(img_response.content)} bytes)")
@@ -802,7 +803,7 @@ class DBCDispatcher:
                             debug(f"DBC: Circle-Captcha coordinates: x={x}, y={y}")
                             # Submit solution
                             data = {"buttonx.x": str(x), "buttonx.y": str(y)}
-                            submit_response = session.post(url, data=data, headers=headers, timeout=30)
+                            submit_response = session.post(url, data=data, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
                             
                             if submit_response.url.endswith("404.html"):
                                 info("IP blocked by Filecrypt")
@@ -812,7 +813,7 @@ class DBCDispatcher:
                             match = re.search(r"top\.location\.href\s*=\s*['\"]([^'\"]+)['\"]", submit_response.text)
                             if match:
                                 redirect_url = requests.compat.urljoin(url, match.group(1))
-                                redirect_resp = session.get(redirect_url, allow_redirects=True, timeout=30)
+                                redirect_resp = session.get(redirect_url, allow_redirects=True, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
                                 if redirect_resp.ok and "expired" not in redirect_resp.text.lower():
                                     info(f"Circle-Captcha successfully solved: {redirect_resp.url}")
                                     return [redirect_resp.url]
@@ -857,7 +858,7 @@ class DBCDispatcher:
         try:
             # Step 1: Initial GET request
             debug(f"Keeplinks: Initial GET request")
-            response = session.get(url, headers=headers, timeout=30)
+            response = session.get(url, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
             
             if response.status_code != 200:
                 info(f"Keeplinks: Initial request failed with status {response.status_code}")
@@ -896,7 +897,7 @@ class DBCDispatcher:
                         if name:
                             post_data[name] = btn.get('value', '')
                     
-                    response = session.post(url, data=post_data, headers=headers, timeout=30)
+                    response = session.post(url, data=post_data, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
                     
                     if response.status_code != 200:
                         info(f"Keeplinks: Proceed POST failed with status {response.status_code}")
@@ -923,7 +924,7 @@ class DBCDispatcher:
             debug(f"Keeplinks: CAPTCHA image URL: {captcha_url}")
             
             # Download CAPTCHA image
-            captcha_response = session.get(captcha_url, headers=headers, timeout=30)
+            captcha_response = session.get(captcha_url, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
             if captcha_response.status_code != 200:
                 info(f"Keeplinks: Failed to download CAPTCHA image")
                 return None
@@ -960,7 +961,7 @@ class DBCDispatcher:
                         post_data[name] = value
             
             debug(f"Keeplinks: Submitting CAPTCHA solution")
-            response = session.post(url, data=post_data, headers=headers, timeout=30)
+            response = session.post(url, data=post_data, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
             
             if response.status_code != 200:
                 info(f"Keeplinks: CAPTCHA POST failed with status {response.status_code}")
@@ -1094,7 +1095,7 @@ class DBCDispatcher:
         try:
             # Step 1: Initial GET request
             debug(f"ToLink: Initial GET request")
-            response = session.get(url, headers=headers, timeout=30)
+            response = session.get(url, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
             
             if response.status_code != 200:
                 info(f"ToLink: Initial request failed with status {response.status_code}")
@@ -1129,7 +1130,7 @@ class DBCDispatcher:
             debug(f"ToLink: CAPTCHA image URL: {captcha_url}")
             
             # Download CAPTCHA image
-            captcha_response = session.get(captcha_url, headers=headers, timeout=30)
+            captcha_response = session.get(captcha_url, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
             if captcha_response.status_code != 200:
                 info(f"ToLink: Failed to download CAPTCHA image")
                 return None
@@ -1178,7 +1179,7 @@ class DBCDispatcher:
                 form_action = urljoin(url, form_action)
             submit_url = form_action if form_action else url
             
-            response = session.post(submit_url, data=post_data, headers=headers, timeout=30)
+            response = session.post(submit_url, data=post_data, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
             
             if response.status_code != 200:
                 info(f"ToLink: CAPTCHA POST failed with status {response.status_code}")

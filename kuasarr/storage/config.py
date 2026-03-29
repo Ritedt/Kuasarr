@@ -83,6 +83,16 @@ class Config(object):
             ("user", "secret", ""),
             ("password", "secret", "")
         ],
+        'SJ': [
+            ("user", "secret", ""),
+            ("password", "secret", ""),
+            ("preferred_hoster", "str", "")
+        ],
+        'DJ': [
+            ("user", "secret", ""),
+            ("password", "secret", ""),
+            ("preferred_hoster", "str", "")
+        ],
         'Sonarr': [
             ("url", "str", ""),
             ("api_key", "secret", "")
@@ -108,7 +118,9 @@ class Config(object):
         ],
         'Connection': [
             ("internal_address", "str", ""),
-            ("external_address", "str", "")
+            ("external_address", "str", ""),
+            ("timezone", "str", "Europe/Berlin"),
+            ("slow_mode", "bool", "false")  # Enable 3x timeout multiplier for slow connections
         ],
         'PWA': [
             ("install_prompted", "bool", "false")  # Track if PWA install was prompted on Windows EXE
@@ -116,6 +128,23 @@ class Config(object):
         'XRel': [
             ("enabled", "bool", "false"),        # Enable xREL.to size lookup
             ("filter_nuked", "bool", "false"),    # Hide nuked releases from results
+        ],
+        'Categories': [
+            ("auto_detect", "bool", "true"),      # Enable automatic category detection
+            ("movies_enabled", "bool", "true"),
+            ("movies_path", "str", "kuasarr/movies/<jd:packagename>"),
+            ("tv_shows_enabled", "bool", "true"),
+            ("tv_shows_path", "str", "kuasarr/tv-shows/<jd:packagename>"),
+            ("books_enabled", "bool", "true"),
+            ("books_path", "str", "kuasarr/books/<jd:packagename>"),
+            ("audio_enabled", "bool", "true"),
+            ("audio_path", "str", "kuasarr/audio/<jd:packagename>"),
+            ("software_enabled", "bool", "true"),
+            ("software_path", "str", "kuasarr/software/<jd:packagename>"),
+            ("games_enabled", "bool", "true"),
+            ("games_path", "str", "kuasarr/games/<jd:packagename>"),
+            ("docs_enabled", "bool", "true"),
+            ("docs_path", "str", "kuasarr/docs/<jd:packagename>"),
         ]
     }
     __config__ = []

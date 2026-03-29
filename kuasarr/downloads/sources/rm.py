@@ -290,3 +290,13 @@ def _extract_imdb_id(production):
             return match.group(1)
 
     return None
+
+
+from kuasarr.downloads.base import AbstractDownloadSource
+
+
+class Source(AbstractDownloadSource):
+    initials = "rm"
+
+    def get_download_links(self, shared_state, url, mirror, title, password=None):
+        return get_rm_download_links(shared_state, url, mirror, title, password=password)

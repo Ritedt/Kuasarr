@@ -1,12 +1,15 @@
 ﻿# -*- coding: utf-8 -*-
 # Kuasarr
-# Project by weedo078 (Fork von https://github.com/rix1337/Quasarr)
+# Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 #
 # Special note: The signatures of all handlers must stay the same so we can neatly call them in download()
 # Same is true for every get_xx_download_links() function in sources/xx.py
 
+import hashlib
 import json
 
+from kuasarr.categories import get_destination_folder
+from kuasarr.categories.matcher import match_release_to_category, SOURCE_CATEGORY_MAP
 from kuasarr.downloads.linkcrypters.hide import decrypt_links_if_hide
 from kuasarr.downloads.sources.ad import get_ad_download_links
 from kuasarr.downloads.sources.al import get_al_download_links
@@ -22,11 +25,12 @@ from kuasarr.downloads.sources.mb import get_mb_download_links
 from kuasarr.downloads.sources.nk import get_nk_download_links
 from kuasarr.downloads.sources.nx import get_nx_download_links
 from kuasarr.downloads.sources.dl import get_dl_download_links
+from kuasarr.downloads.sources.sj import get_sj_download_links, get_dj_download_links
 from kuasarr.downloads.sources.sf import get_sf_download_links, resolve_sf_redirect
 from kuasarr.downloads.sources.sl import get_sl_download_links
 from kuasarr.downloads.sources.wd import get_wd_download_links
 from kuasarr.downloads.sources.wx import get_wx_download_links
-from kuasarr.providers.log import info
+from kuasarr.providers.log import info, debug
 from kuasarr.providers.notifications import send_discord_message
 from kuasarr.providers.statistics import StatsHelper
 
@@ -168,7 +172,6 @@ def handle_by(shared_state, title, password, package_id, imdb_id, url, mirror, s
             # Protected link [url, hostname] (from filecrypt)
             protected_links.append(link)
     
-    # If we have direct links, download them immediately
     if direct_links:
         info(f"BY: Found {len(direct_links)} direct download links (hide.cx)")
         send_discord_message(shared_state, title=title, case="unprotected", imdb_id=imdb_id, source=url)
@@ -186,7 +189,6 @@ def handle_by(shared_state, title, password, package_id, imdb_id, url, mirror, s
             fail(title, package_id, shared_state,
                  reason=f'Failed to add {len(direct_links)} direct links for "{title}" to linkgrabber')
     
-    # If we have protected links (filecrypt), queue them for CAPTCHA
     if protected_links:
         info(f"BY: Found {len(protected_links)} protected links (filecrypt) - CAPTCHA required")
         send_discord_message(shared_state, title=title, case="captcha", imdb_id=imdb_id, source=url)
@@ -200,7 +202,6 @@ def handle_by(shared_state, title, password, package_id, imdb_id, url, mirror, s
         shared_state.values["database"]("protected").update_store(package_id, blob)
         return {"success": True, "title": title}
     
-    # No valid links found
     fail(title, package_id, shared_state,
          reason=f'No valid links found for "{title}" on BY - "{url}"')
     return {"success": False, "title": title}
@@ -362,7 +363,6 @@ def handle_dl(shared_state, title, password, package_id, imdb_id, url, mirror, s
             info("DL: Failed to decrypt hide.cx links; leaving them protected (CAPTCHA queue)")
             captcha_links.extend([l for l in hide_links if l not in captcha_links])
 
-    # If we have direct hoster links (including decrypted hide.cx), send to JDownloader
     if direct_links:
         info(f"DL: Sending {len(direct_links)} link(s) to JDownloader")
         send_discord_message(shared_state, title=title, case="unprotected", imdb_id=imdb_id, source=url)
@@ -380,7 +380,6 @@ def handle_dl(shared_state, title, password, package_id, imdb_id, url, mirror, s
             fail(title, package_id, shared_state,
                  reason=f'Failed to add {len(direct_links)} links for "{title}" to linkgrabber')
     
-    # If we have container links (filecrypt/keeplinks - need CAPTCHA), queue them
     if captcha_links:
         info(f"DL: Found {len(captcha_links)} container link(s) - CAPTCHA required (DBC will solve)")
         send_discord_message(shared_state, title=title, case="captcha", imdb_id=imdb_id, source=url)
@@ -394,26 +393,43 @@ def handle_dl(shared_state, title, password, package_id, imdb_id, url, mirror, s
         shared_state.values["database"]("protected").update_store(package_id, blob)
         return {"success": True, "title": title}
     
-    # No valid links found
     fail(title, package_id, shared_state,
          reason=f'No valid links found for "{title}" on DL - "{url}"')
     return {"success": False, "title": title}
 
 
 def download(shared_state, request_from, title, url, mirror, size_mb, password, imdb_id=None,
-             destination_folder=None):
-    if "lazylibrarian" in request_from.lower():
-        category = "docs"
-    elif "radarr" in request_from.lower():
-        category = "movies"
-    else:
-        category = "tv"
+             destination_folder=None, preferred_category=None, manual_job_id=None):
+    """Route download to appropriate source handler."""
+    category = match_release_to_category(
+        release_name=title,
+        source=request_from,
+        preferred_category=preferred_category
+    )
 
-    package_hash = str(hash(title + url)).replace('-', '')
+    if not category:
+        if "lazylibrarian" in request_from.lower():
+            category = "docs"
+        elif "radarr" in request_from.lower():
+            category = "movies"
+        else:
+            category = "tv-shows"
+
+    package_hash = hashlib.sha256(f"{title}|{url}".encode("utf-8")).hexdigest()[:16]
     package_id = f"kuasarr_{category}_{package_hash}"
+
+    if manual_job_id:
+        package_id = f"{package_id}_{manual_job_id}"
 
     if imdb_id is not None and imdb_id.lower() == "none":
         imdb_id = None
+
+    if destination_folder is None:
+        destination_folder = get_destination_folder(
+            category_id=category,
+            release_name=title
+        )
+        debug(f"Category '{category}' determined for '{title[:50]}...' -> {destination_folder}")
 
     config = shared_state.values["config"]("Hostnames")
     flags = {
@@ -433,6 +449,8 @@ def download(shared_state, request_from, title, url, mirror, size_mb, password, 
         'SF': config.get("sf"),
         'RM': config.get("rm"),
         'SL': config.get("sl"),
+        'SJ': config.get("sj"),
+        'DJ': config.get("dj"),
         'WD': config.get("wd"),
         'WX': config.get("wx")
     }
@@ -547,6 +565,24 @@ def download(shared_state, request_from, title, url, mirror, size_mb, password, 
             "package_id": package_id,
             **handle_rm(shared_state, title, password, package_id, imdb_id, url, mirror, size_mb,
                         destination_folder=destination_folder)
+        }
+
+    if flags['SJ'] and flags['SJ'].lower() in url.lower():
+        return {
+            "package_id": package_id,
+            **handle_unprotected(
+                shared_state, title, password, package_id, imdb_id, url, mirror=mirror, size_mb=size_mb,
+                func=get_sj_download_links, label='SJ', destination_folder=destination_folder,
+            )
+        }
+
+    if flags['DJ'] and flags['DJ'].lower() in url.lower():
+        return {
+            "package_id": package_id,
+            **handle_unprotected(
+                shared_state, title, password, package_id, imdb_id, url, mirror=mirror, size_mb=size_mb,
+                func=get_dj_download_links, label='DJ', destination_folder=destination_folder,
+            )
         }
 
     if flags['SF'] and flags['SF'].lower() in url.lower():

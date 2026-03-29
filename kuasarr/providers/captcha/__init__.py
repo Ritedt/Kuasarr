@@ -8,16 +8,10 @@ from kuasarr.providers.log import info, debug
 
 def create_captcha_client(shared_state) -> Optional[Union["DeathByCaptchaClient", "TwoCaptchaClient"]]:
     """Factory: Erstellt den konfigurierten Captcha-Client.
-    
+
     Unterstützt:
     - DeathByCaptcha (dbc) - Standard
     - 2Captcha (2captcha) - 50% günstiger für CutCaptcha
-    
-    Args:
-        shared_state: Kuasarr shared state module
-        
-    Returns:
-        Configured captcha client or None if not configured
     """
     from kuasarr.storage.config import Config
     

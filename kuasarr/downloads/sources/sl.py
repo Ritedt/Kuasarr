@@ -90,4 +90,16 @@ def get_sl_download_links(shared_state, url, mirror, title): # signature must al
     }
 
 
+from kuasarr.downloads.base import AbstractDownloadSource
 
+
+class Source(AbstractDownloadSource):
+    initials = "sl"
+
+    def get_download_links(self, shared_state, url, mirror, title, password=None):
+        raw = get_sl_download_links(shared_state, url, mirror, title)
+        if not raw:
+            return {"links": []}
+        if isinstance(raw, dict):
+            return raw
+        return {"links": raw}

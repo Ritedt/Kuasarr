@@ -11,8 +11,9 @@ from bottle import request, response, redirect
 import kuasarr.providers.ui.html_images as images
 from kuasarr.downloads.packages import delete_package, get_packages
 from kuasarr.providers import shared_state
-from kuasarr.providers.auth import require_api_key, is_browser_authenticated
+from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html
+from kuasarr.providers.ui.spa import try_serve_spa
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +373,9 @@ def _render_not_connected_page() -> str:
 def setup_packages_routes(app) -> None:
     @app.get("/packages")
     def packages_page():
+        spa = try_serve_spa()
+        if spa is not None:
+            return spa
         device = shared_state.values.get("device")
         if not device:
             return _render_not_connected_page()
@@ -735,11 +739,6 @@ def setup_packages_routes(app) -> None:
     @require_api_key
     def packages_content_api():
         """AJAX endpoint — returns only the packages content HTML for background refresh."""
-        if not is_browser_authenticated():
-            response.status = 401
-            response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
-            response.content_type = "application/json"
-            return '{"error": "Unauthorized"}'
         device = shared_state.values.get("device")
         if not device:
             return """
@@ -754,32 +753,76 @@ def setup_packages_routes(app) -> None:
     @app.get("/api/packages")
     @require_api_key
     def packages_json_api():
-        """JSON status endpoint."""
+        """Return packages as Package[] for the React WebUI."""
         response.content_type = "application/json"
-        if not is_browser_authenticated():
-            response.status = 401
-            response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
-            return '{"error": "Unauthorized"}'
         device = shared_state.values.get("device")
         if not device:
-            return json.dumps({"connected": False, "queue": [], "history": []})
+            return json.dumps({"success": True, "data": []})
 
         downloads = get_packages(shared_state)
-        return json.dumps({
-            "connected": True,
-            "queue": downloads.get("queue", []),
-            "history": downloads.get("history", []),
-        })
+        packages = []
+
+        _STATUS_PREFIXES = [
+            ("[Downloading] ", "downloading"),
+            ("[Extracting] ", "extracting"),
+            ("[Paused] ", "paused"),
+            ("[Linkgrabber] ", "queued"),
+            ("[CAPTCHA not solved!] ", "queued"),
+        ]
+
+        for item in downloads.get("queue", []):
+            filename = item.get("filename", "Unknown")
+            status = "downloading"
+            name = filename
+            for prefix, mapped_status in _STATUS_PREFIXES:
+                if filename.startswith(prefix):
+                    status = mapped_status
+                    name = filename[len(prefix):]
+                    break
+            mb = item.get("mb", 0) or 0
+            mb_left = item.get("mbleft", 0) or 0
+            size = int(mb * 1024 * 1024)
+            downloaded = int((mb - mb_left) * 1024 * 1024)
+            packages.append({
+                "id": item.get("nzo_id", ""),
+                "name": name,
+                "status": status,
+                "progress": item.get("percentage", 0),
+                "size": size,
+                "downloaded": max(0, downloaded),
+                "speed": 0,
+                "eta": None,
+                "links": [],
+                "category": item.get("cat", ""),
+                "created_at": "",
+                "updated_at": "",
+            })
+
+        for item in downloads.get("history", []):
+            status = "failed" if item.get("fail_message") else "completed"
+            size = item.get("bytes", 0) or 0
+            packages.append({
+                "id": item.get("nzo_id", ""),
+                "name": item.get("name", "Unknown"),
+                "status": status,
+                "progress": 100,
+                "size": size,
+                "downloaded": size,
+                "speed": 0,
+                "eta": None,
+                "links": [],
+                "category": item.get("category", ""),
+                "created_at": "",
+                "updated_at": "",
+            })
+
+        return json.dumps({"success": True, "data": packages})
 
     @app.post("/api/packages/delete")
     @require_api_key
     def packages_delete():
         """Delete a package by ID. POST replaces the old GET route to prevent CSRF."""
         response.content_type = "application/json"
-        if not is_browser_authenticated():
-            response.status = 401
-            response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
-            return '{"error": "Unauthorized"}'
         device = shared_state.values.get("device")
         if not device:
             return json.dumps({"success": False, "error": "Not connected"})
@@ -806,10 +849,6 @@ def setup_packages_routes(app) -> None:
     def packages_pause():
         """Pause a specific package or the global download controller."""
         response.content_type = "application/json"
-        if not is_browser_authenticated():
-            response.status = 401
-            response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
-            return '{"error": "Unauthorized"}'
         device = shared_state.values.get("device")
         if not device:
             return json.dumps({"success": False, "error": "Not connected"})
@@ -837,10 +876,6 @@ def setup_packages_routes(app) -> None:
     def packages_resume():
         """Resume a specific package or the global download controller."""
         response.content_type = "application/json"
-        if not is_browser_authenticated():
-            response.status = 401
-            response.set_header("WWW-Authenticate", 'Basic realm="Kuasarr WebUI"')
-            return '{"error": "Unauthorized"}'
         device = shared_state.values.get("device")
         if not device:
             return json.dumps({"success": False, "error": "Not connected"})

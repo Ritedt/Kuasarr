@@ -609,6 +609,7 @@ def render_nav(active_page=""):
     pages = [
         ("/", "Home"),
         ("/settings", "Settings"),
+        ("/categories", "Categories"),
         ("/captcha-config", "CAPTCHA"),
         ("/hosters", "Hosters"),
         ("/notifications", "Notifications"),
@@ -683,3 +684,679 @@ def render_fail(message):
         <h2>{safe_message}</h2>
         {button_html}
     """)
+
+
+def render_core_settings_form(internal_address="", external_address="", timezone="Europe/Berlin", csrf_token=""):
+    """Render the Core Settings form for Sprint H2/H5 with CSRF protection."""
+    common_timezones = [
+        "UTC",
+        "Europe/Berlin",
+        "Europe/London",
+        "Europe/Paris",
+        "America/New_York",
+        "America/Chicago",
+        "America/Denver",
+        "America/Los_Angeles",
+        "Asia/Tokyo",
+        "Asia/Shanghai",
+        "Australia/Sydney",
+    ]
+
+    timezone_options = "\n".join(
+        f'<option value="{tz}"{" selected" if tz == timezone else ""}>{tz}</option>'
+        for tz in common_timezones
+    )
+
+    # Sprint H5: Include CSRF token in form
+    csrf_input = f'<input type="hidden" name="csrf_token" id="csrf_token" value="{html.escape(csrf_token)}">' if csrf_token else ''
+
+    form_html = f"""
+    <form id="core-settings-form" class="form-container">
+        {csrf_input}
+        <div class="form-group">
+            <label for="internal_address" class="form-label">
+                Internal Address
+                <span class="required" aria-label="required">*</span>
+            </label>
+            <input type="url" id="internal_address" name="internal_address"
+                   value="{html.escape(internal_address)}"
+                   placeholder="http://localhost:8080" required
+                   pattern="https?://.*" class="form-input"
+                   aria-describedby="internal_help">
+            <small id="internal_help" class="form-help">
+                Address for JDownloader callback. Must be reachable from JDownloader.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="external_address" class="form-label">
+                External Address
+                <span class="optional">(optional)</span>
+            </label>
+            <input type="url" id="external_address" name="external_address"
+                   value="{html.escape(external_address)}"
+                   placeholder="https://kuasarr.example.com"
+                   pattern="https?://.*" class="form-input"
+                   aria-describedby="external_help">
+            <small id="external_help" class="form-help">
+                External URL for generated links. Leave empty to use internal address.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="timezone" class="form-label">Timezone</label>
+            <select id="timezone" name="timezone" class="form-select" required>
+                {timezone_options}
+            </select>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn-primary">
+                <span class="btn-text">Save Settings</span>
+                <span class="btn-spinner" hidden>
+                    <svg class="spinner" viewBox="0 0 24 24" width="16" height="16">
+                        <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor"
+                                stroke-width="3" stroke-dasharray="31.4 31.4" transform="rotate(-90 12 12)">
+                            <animateTransform attributeName="transform" type="rotate"
+                                              from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
+                        </circle>
+                    </svg>
+                    Saving...
+                </span>
+            </button>
+            <button type="button" class="btn-secondary" onclick="location.href='/settings'">Back</button>
+            <div id="form-feedback" class="form-feedback" role="status" aria-live="polite"></div>
+        </div>
+    </form>
+    """
+
+    script = """
+    <script>
+    function initializeCoreSettingsForm() {
+        const form = document.getElementById('core-settings-form');
+        const feedback = document.getElementById('form-feedback');
+        const submitBtn = form.querySelector('button[type="submit"]');
+        // Sprint H5: Get CSRF token from hidden input or cookie
+        const csrfToken = document.getElementById('csrf_token')?.value || document.cookie.match(/kuasarr_csrf=([^;]+)/)?.[1] || '';
+
+        // Create error message elements for each field
+        const fields = ['internal_address', 'external_address', 'timezone'];
+        fields.forEach(fieldName => {
+            const input = document.getElementById(fieldName);
+            if (input) {
+                const errorId = fieldName + '-error';
+                let errorEl = document.getElementById(errorId);
+                if (!errorEl) {
+                    errorEl = document.createElement('div');
+                    errorEl.id = errorId;
+                    errorEl.className = 'field-error';
+                    errorEl.setAttribute('role', 'alert');
+                    input.parentNode.insertBefore(errorEl, input.nextSibling);
+                }
+            }
+        });
+
+        // URL validation helper
+        function isValidUrl(url, allowEmpty = false) {
+            if (!url || url.trim() === '') return allowEmpty;
+            try {
+                const parsed = new URL(url);
+                return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+            } catch (e) {
+                return false;
+            }
+        }
+
+        // Get specific error message for URL validation
+        function getUrlErrorMessage(fieldName, url) {
+            if (!url || url.trim() === '') {
+                return fieldName + ' is required. Please enter a valid URL.';
+            }
+            try {
+                new URL(url);
+                return fieldName + ' must use http:// or https:// protocol.';
+            } catch (e) {
+                return fieldName + ' must be a valid URL starting with http:// or https://';
+            }
+        }
+
+        // Show field error
+        function showFieldError(fieldName, message) {
+            const input = document.getElementById(fieldName);
+            const errorEl = document.getElementById(fieldName + '-error');
+            if (input) {
+                input.setAttribute('aria-invalid', 'true');
+                input.classList.add('has-error');
+            }
+            if (errorEl) {
+                errorEl.textContent = message;
+                errorEl.style.display = 'block';
+            }
+        }
+
+        // Clear field error
+        function clearFieldError(fieldName) {
+            const input = document.getElementById(fieldName);
+            const errorEl = document.getElementById(fieldName + '-error');
+            if (input) {
+                input.removeAttribute('aria-invalid');
+                input.classList.remove('has-error');
+            }
+            if (errorEl) {
+                errorEl.textContent = '';
+                errorEl.style.display = 'none';
+            }
+        }
+
+        // Clear all field errors
+        function clearAllErrors() {
+            fields.forEach(clearFieldError);
+        }
+
+        // Real-time URL validation on blur
+        const urlInputs = form.querySelectorAll('input[type="url"]');
+        urlInputs.forEach(input => {
+            input.addEventListener('blur', () => {
+                const value = input.value.trim();
+                const fieldName = input.id === 'internal_address' ? 'Internal Address' : 'External Address';
+                const isOptional = input.id === 'external_address';
+
+                if (!value && isOptional) {
+                    clearFieldError(input.id);
+                    return;
+                }
+
+                if (!value && !isOptional) {
+                    showFieldError(input.id, fieldName + ' is required. Please enter a valid URL.');
+                    return;
+                }
+
+                if (!isValidUrl(value, isOptional)) {
+                    showFieldError(input.id, getUrlErrorMessage(fieldName, value));
+                } else {
+                    // Additional validation for localhost without port
+                    try {
+                        const parsed = new URL(value);
+                        if ((parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') && !parsed.port) {
+                            showFieldError(input.id, fieldName + ' using localhost must include a port (e.g., http://localhost:8080).');
+                            return;
+                        }
+                        // External address cannot use localhost
+                        if (input.id === 'external_address' && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1')) {
+                            showFieldError(input.id, 'External Address cannot use localhost or 127.0.0.1. Use your public IP or domain name.');
+                            return;
+                        }
+                    } catch (e) {
+                        // URL parsing failed, already handled above
+                    }
+                    clearFieldError(input.id);
+                }
+            });
+
+            // Clear error on input
+            input.addEventListener('input', () => {
+                if (input.getAttribute('aria-invalid') === 'true') {
+                    clearFieldError(input.id);
+                }
+            });
+        });
+
+        // Timezone validation
+        const timezoneSelect = document.getElementById('timezone');
+        if (timezoneSelect) {
+            timezoneSelect.addEventListener('change', () => {
+                if (timezoneSelect.value) {
+                    clearFieldError('timezone');
+                }
+            });
+
+            timezoneSelect.addEventListener('blur', () => {
+                if (!timezoneSelect.value) {
+                    showFieldError('timezone', 'Please select a valid timezone from the dropdown.');
+                }
+            });
+        }
+
+        // Form submission with validation
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            // Clear previous errors
+            clearAllErrors();
+            feedback.className = 'form-feedback';
+            feedback.textContent = '';
+
+            // Validate all fields before submission
+            let hasErrors = false;
+            const formData = new FormData(form);
+            const data = Object.fromEntries(formData);
+
+            // Validate internal_address
+            const internalValue = (data.internal_address || '').trim();
+            if (!internalValue) {
+                showFieldError('internal_address', 'Internal Address is required. Please enter the URL Radarr/Sonarr will use to connect to Kuasarr.');
+                hasErrors = true;
+            } else if (!isValidUrl(internalValue)) {
+                showFieldError('internal_address', 'Internal Address must be a valid URL starting with http:// or https://');
+                hasErrors = true;
+            } else {
+                try {
+                    const parsed = new URL(internalValue);
+                    if ((parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') && !parsed.port) {
+                        showFieldError('internal_address', 'Internal Address using localhost must include a port (e.g., http://localhost:8080).');
+                        hasErrors = true;
+                    }
+                } catch (e) {
+                    showFieldError('internal_address', 'Internal Address must be a valid URL starting with http:// or https://');
+                    hasErrors = true;
+                }
+            }
+
+            // Validate external_address (optional)
+            const externalValue = (data.external_address || '').trim();
+            if (externalValue) {
+                if (!isValidUrl(externalValue, true)) {
+                    showFieldError('external_address', 'External Address must be a valid URL starting with http:// or https:// Leave empty if not using external access.');
+                    hasErrors = true;
+                } else {
+                    try {
+                        const parsed = new URL(externalValue);
+                        if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+                            showFieldError('external_address', 'External Address cannot use localhost or 127.0.0.1. Use your public IP or domain name.');
+                            hasErrors = true;
+                        }
+                    } catch (e) {
+                        // Already handled above
+                    }
+                }
+            }
+
+            // Validate timezone
+            const timezoneValue = (data.timezone || '').trim();
+            if (!timezoneValue) {
+                showFieldError('timezone', 'Timezone is required. Please select a valid timezone from the dropdown.');
+                hasErrors = true;
+            }
+
+            if (hasErrors) {
+                feedback.classList.add('error');
+                feedback.textContent = 'Please correct the errors above before saving.';
+                // Focus first error field
+                const firstError = form.querySelector('[aria-invalid="true"]');
+                if (firstError) firstError.focus();
+                return;
+            }
+
+            // Set loading state
+            submitBtn.setAttribute('aria-busy', 'true');
+            submitBtn.disabled = true;
+
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                // Sprint H5: Include CSRF token in request header
+                if (csrfToken) {
+                    headers['X-CSRF-Token'] = csrfToken;
+                }
+
+                const response = await kuasarrApiFetch('/api/settings/core', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(data)
+                });
+
+                let result;
+                try {
+                    result = await response.json();
+                } catch (parseError) {
+                    throw new Error('Invalid response from server. Please try again.');
+                }
+
+                if (response.ok && result.success) {
+                    feedback.classList.add('success');
+                    let message = result.message || 'Settings saved successfully!';
+                    if (result.warning) {
+                        message += ' (' + result.warning + ')';
+                    }
+                    feedback.textContent = message;
+                } else {
+                    feedback.classList.add('error');
+
+                    // Handle field-specific errors from server
+                    if (result.errors && typeof result.errors === 'object') {
+                        Object.keys(result.errors).forEach(fieldName => {
+                            showFieldError(fieldName, result.errors[fieldName]);
+                        });
+                        feedback.textContent = result.error || 'Validation failed. Please correct the errors above.';
+                    } else {
+                        feedback.textContent = result.error || 'Failed to save settings. Please try again.';
+                    }
+                }
+            } catch (err) {
+                feedback.classList.add('error');
+                if (err.name === 'TypeError' && err.message.includes('fetch')) {
+                    feedback.textContent = 'Network error: Unable to connect to server. Please check your connection and try again.';
+                } else if (err.name === 'AbortError') {
+                    feedback.textContent = 'Request timed out. Please try again.';
+                } else {
+                    feedback.textContent = err.message || 'An unexpected error occurred. Please try again.';
+                }
+            } finally {
+                submitBtn.setAttribute('aria-busy', 'false');
+                submitBtn.disabled = false;
+            }
+        });
+    }
+
+    initializeCoreSettingsForm();
+    </script>
+    """
+
+    # Form-specific CSS styles
+    form_css = """
+    <style>
+    /* Form Container */
+    .form-container {
+        max-width: 480px;
+        margin: 0 auto;
+        text-align: left;
+    }
+
+    /* Form Groups */
+    .form-group {
+        margin-bottom: 1.5rem;
+    }
+
+    .form-group:last-of-type {
+        margin-bottom: 2rem;
+    }
+
+    /* Labels */
+    .form-label {
+        display: block;
+        font-weight: 600;
+        font-size: 0.875rem;
+        color: var(--fg-color);
+        margin-bottom: 0.5rem;
+    }
+
+    .form-label .required {
+        color: var(--error-color);
+        margin-left: 0.25rem;
+    }
+
+    .form-label .optional {
+        color: var(--text-muted);
+        font-weight: 400;
+        font-size: 0.8rem;
+        margin-left: 0.25rem;
+    }
+
+    /* Inputs */
+    .form-input,
+    .form-select {
+        width: 100%;
+        padding: 0.625rem 0.875rem;
+        font-size: 1rem;
+        line-height: 1.5;
+        color: var(--fg-color);
+        background-color: var(--card-bg);
+        border: 1.5px solid var(--border-color);
+        border-radius: var(--border-radius);
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        box-sizing: border-box;
+    }
+
+    .form-input:hover,
+    .form-select:hover {
+        border-color: var(--primary-hover);
+    }
+
+    .form-input:focus,
+    .form-select:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.15);
+    }
+
+    /* Dark mode focus ring */
+    @media (prefers-color-scheme: dark) {
+        .form-input:focus,
+        .form-select:focus {
+            box-shadow: 0 0 0 3px rgba(77, 143, 212, 0.25);
+        }
+    }
+
+    :root[data-theme="dark"] .form-input:focus,
+    :root[data-theme="dark"] .form-select:focus {
+        box-shadow: 0 0 0 3px rgba(77, 143, 212, 0.25);
+    }
+
+    /* Help Text */
+    .form-help {
+        display: block;
+        margin-top: 0.375rem;
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        line-height: 1.4;
+    }
+
+    /* Form Actions */
+    .form-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        align-items: flex-start;
+    }
+
+    /* Button with Loading State */
+    .btn-primary {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        min-width: 140px;
+    }
+
+    .btn-primary[aria-busy="true"] .btn-text {
+        opacity: 0;
+    }
+
+    .btn-primary[aria-busy="true"] .btn-spinner {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        position: absolute;
+    }
+
+    .btn-spinner {
+        display: none;
+    }
+
+    .spinner {
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .spinner {
+            animation: none;
+        }
+    }
+
+    /* Form Feedback */
+    .form-feedback {
+        padding: 0.75rem 1rem;
+        border-radius: var(--border-radius);
+        font-size: 0.875rem;
+        font-weight: 500;
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    .form-feedback.success {
+        background-color: var(--success-bg);
+        color: var(--success-color);
+        border: 1px solid var(--success-border);
+    }
+
+    .form-feedback.error {
+        background-color: var(--error-bg);
+        color: var(--error-color);
+        border: 1px solid var(--error-border);
+    }
+
+    .form-feedback:empty {
+        display: none;
+    }
+
+    /* Validation States */
+    .form-input:invalid:not(:placeholder-shown) {
+        border-color: var(--error-color);
+    }
+
+    .form-input:invalid:not(:placeholder-shown):focus {
+        box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.15);
+    }
+
+    /* Field Error Messages */
+    .field-error {
+        display: none;
+        margin-top: 0.375rem;
+        padding: 0.5rem 0.75rem;
+        background-color: var(--error-bg);
+        color: var(--error-color);
+        border: 1px solid var(--error-border);
+        border-radius: var(--border-radius);
+        font-size: 0.8rem;
+        font-weight: 500;
+        line-height: 1.4;
+    }
+
+    .field-error[role="alert"] {
+        display: block;
+    }
+
+    .form-input.has-error,
+    .form-select.has-error {
+        border-color: var(--error-color);
+        background-color: rgba(220, 53, 69, 0.05);
+    }
+
+    .form-input.has-error:focus,
+    .form-select.has-error:focus {
+        box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.15);
+    }
+
+    /* Dark mode error styles */
+    @media (prefers-color-scheme: dark) {
+        .form-input.has-error,
+        .form-select.has-error {
+            background-color: rgba(252, 129, 129, 0.1);
+        }
+    }
+
+    :root[data-theme="dark"] .form-input.has-error,
+    :root[data-theme="dark"] .form-select.has-error {
+        background-color: rgba(252, 129, 129, 0.1);
+    }
+
+    /* Mobile Optimization */
+    @media (max-width: 480px) {
+        .form-container {
+            padding: 0 0.5rem;
+        }
+
+        .form-input,
+        .form-select {
+            font-size: 16px; /* Prevents iOS zoom */
+        }
+
+        .form-actions {
+            width: 100%;
+        }
+
+        .btn-primary {
+            width: 100%;
+        }
+    }
+    </style>
+    """
+
+    return render_form(
+        header="Core Settings",
+        form=form_css + form_html,
+        script=script,
+        footer_content="",
+        active_page="/settings"
+    )
+
+
+def render_category_selector(selected_category: str = "", id_prefix: str = "", required: bool = False) -> str:
+    """Render a category dropdown selector."""
+    from kuasarr.providers import shared_state
+
+    required_attr = ' required' if required else ''
+    required_mark = ' <span class="required">*</span>' if required else ''
+
+    # Get categories from database
+    try:
+        db = shared_state.get_db("categories")
+        raw_data = db.retrieve_all_titles()
+        categories = []
+        for key, value in raw_data:
+            try:
+                import json
+                category = json.loads(value)
+                categories.append(category)
+            except json.JSONDecodeError:
+                continue
+        categories = sorted(categories, key=lambda x: x.get('name', ''))
+    except Exception:
+        categories = []
+
+    options = '<option value="">-- Select Category --</option>'
+    for cat in categories:
+        selected = ' selected' if cat.get('id') == selected_category else ''
+        options += f'<option value="{cat.get("id", "")}"{selected}>{html.escape(cat.get("name", ""))}</option>'
+
+    select_id = f"{id_prefix}category" if id_prefix else "category"
+
+    return f"""
+    <div class="form-group">
+        <label for="{select_id}">Category{required_mark}</label>
+        <select id="{select_id}" name="category" class="form-select"{required_attr}>
+            {options}
+        </select>
+        <div class="field-error" id="{select_id}-error"></div>
+    </div>
+    """
+
+
+def get_categories_for_selector() -> list:
+    """Get categories formatted for selector use."""
+    from kuasarr.providers import shared_state
+
+    try:
+        db = shared_state.get_db("categories")
+        raw_data = db.retrieve_all_titles()
+        categories = []
+        for key, value in raw_data:
+            try:
+                import json
+                category = json.loads(value)
+                categories.append({
+                    'id': category.get('id', ''),
+                    'name': category.get('name', ''),
+                    'download_path': category.get('download_path', '')
+                })
+            except json.JSONDecodeError:
+                continue
+        return sorted(categories, key=lambda x: x['name'])
+    except Exception:
+        return []
+

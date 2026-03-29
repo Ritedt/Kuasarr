@@ -4,13 +4,18 @@
 
 import json
 import os
+import time as _time
+
+_APP_START = _time.time()
 
 from bottle import Bottle, static_file, request, response, abort
 
 # Static files directory (resolved at import time)
 STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
+WEBUI_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'webui', 'dist'))
 from kuasarr.api.arr import setup_arr_routes
 from kuasarr.api.captcha import setup_captcha_routes
+from kuasarr.api.categories import setup_categories_routes
 from kuasarr.api.config import setup_config
 from kuasarr.api.hosters import setup_hosters_routes
 from kuasarr.api.dbc import setup_dbc_routes
@@ -22,6 +27,7 @@ from kuasarr.providers import shared_state
 from kuasarr.providers.auth import add_auth_hook, add_auth_routes, require_api_key
 from kuasarr.providers.log import debug
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html, render_success_no_wait
+from kuasarr.providers.ui.spa import try_serve_spa
 from kuasarr.providers.web_server import Server
 from kuasarr.storage.config import Config
 from kuasarr.storage.setup.notifications import initialize_notification_settings
@@ -37,6 +43,7 @@ def get_api(shared_state_dict, shared_state_lock):
 
     setup_arr_routes(app)
     setup_captcha_routes(app)
+    setup_categories_routes(app)
     setup_config(app, shared_state)
     setup_hosters_routes(app)
     setup_statistics(app, shared_state)
@@ -48,16 +55,55 @@ def get_api(shared_state_dict, shared_state_lock):
     # Initialize notification settings from storage
     initialize_notification_settings(shared_state)
 
-    # Serve static files (logo, PWA assets)
+    # Serve static files (React build assets first, then legacy static)
     @app.get('/static/<filename:path>')
     def serve_static(filename):
-        # Set correct MIME types for PWA files
+        # Try React build assets first
+        webui_path = os.path.join(WEBUI_DIR, filename)
+        if os.path.exists(webui_path):
+            mimetype = None
+            if filename.endswith('.js'):
+                mimetype = 'application/javascript'
+            elif filename.endswith('.css'):
+                mimetype = 'text/css'
+            return static_file(filename, root=WEBUI_DIR, mimetype=mimetype)
+
+        # Fallback to legacy static directory (logo, PWA assets)
         mimetype = None
         if filename.endswith('.webmanifest'):
             mimetype = 'application/manifest+json'
         elif filename.endswith('.js'):
             mimetype = 'application/javascript'
         return static_file(filename, root=STATIC_DIR, mimetype=mimetype)
+
+    # Serve Vite build assets from /assets/ path
+    @app.get('/assets/<filename:path>')
+    def serve_assets(filename):
+        mimetype = None
+        if filename.endswith('.js'):
+            mimetype = 'application/javascript'
+        elif filename.endswith('.css'):
+            mimetype = 'text/css'
+        elif filename.endswith('.svg'):
+            mimetype = 'image/svg+xml'
+        elif filename.endswith('.png'):
+            mimetype = 'image/png'
+        elif filename.endswith('.jpg') or filename.endswith('.jpeg'):
+            mimetype = 'image/jpeg'
+        return static_file(filename, root=os.path.join(WEBUI_DIR, 'assets'), mimetype=mimetype)
+
+    # Serve PWA manifest and service worker from root
+    @app.get('/manifest.webmanifest')
+    def serve_manifest():
+        return static_file('manifest.webmanifest', root=WEBUI_DIR, mimetype='application/manifest+json')
+
+    @app.get('/registerSW.js')
+    def serve_service_worker():
+        return static_file('registerSW.js', root=WEBUI_DIR, mimetype='application/javascript')
+
+    @app.get('/sw.js')
+    def serve_sw():
+        return static_file('sw.js', root=WEBUI_DIR, mimetype='application/javascript')
 
     # PWA installation page
     @app.get('/pwa-install')
@@ -66,6 +112,11 @@ def get_api(shared_state_dict, shared_state_lock):
 
     @app.get('/')
     def index():
+        spa = try_serve_spa()
+        if spa is not None:
+            return spa
+
+        # Legacy HTML fallback
         protected = shared_state.get_db("protected").retrieve_all_titles()
         api_key = Config('API').get('key')
         jd_config = Config('JDownloader')
@@ -192,6 +243,10 @@ def get_api(shared_state_dict, shared_state_lock):
         <div class="section">
             <h2>⚡ Quick Actions</h2>
             <div class="action-grid">
+                <button class="action-btn" onclick="location.href='/categories'">
+                    <span class="action-icon">📁</span>
+                    <span class="action-text">Categories</span>
+                </button>
                 <button class="action-btn" onclick="location.href='/hostnames'">
                     <span class="action-icon">🌍</span>
                     <span class="action-text">Update Hostnames</span>
@@ -419,63 +474,122 @@ def get_api(shared_state_dict, shared_state_lock):
         """
         return render_centered_html(info)
 
+    @app.get('/api/key')
+    def get_api_key():
+        """Return the API key for authenticated browser sessions.
+
+        This endpoint is protected by browser auth (session cookie or Basic Auth).
+        The React SPA calls it on startup to obtain the key without it being
+        embedded in the HTML source.
+        """
+        response.content_type = 'application/json'
+        api_key = Config('API').get('key') or ''
+        return json.dumps({'data': {'key': api_key}})
+
+    @app.get('/api/statistics')
+    @require_api_key
+    def get_statistics():
+        response.content_type = 'application/json'
+        return json.dumps({'data': {
+            'total_packages': 0,
+            'completed_packages': 0,
+            'failed_packages': 0,
+            'total_downloaded': 0,
+            'average_speed': 0,
+            'uptime_seconds': int(_time.time() - _APP_START),
+            'api_calls_today': 0,
+            'captchas_solved_today': 0,
+            'hoster_status': [],
+            'daily_stats': [],
+        }})
+
+    @app.get('/api/jdownloader/status')
+    @require_api_key
+    def jd_status():
+        response.content_type = 'application/json'
+        from kuasarr.providers.myjd_api import Jddevice
+        device = shared_state.values.get("device")
+        connected = isinstance(device, Jddevice)
+        jd_cfg = Config('JDownloader')
+        return json.dumps({'data': {
+            'connected': connected,
+            'email': jd_cfg.get('user') or '',
+            'device_name': jd_cfg.get('device') or '',
+            'total_downloads': 0,
+            'active_downloads': 0,
+            'global_speed': 0,
+            'reconnect_enabled': False,
+        }})
+
+    @app.get('/api/jdownloader/config')
+    @require_api_key
+    def jd_config_get():
+        response.content_type = 'application/json'
+        jd_cfg = Config('JDownloader')
+        return json.dumps({'data': {
+            'email': jd_cfg.get('user') or '',
+            'password': '',
+            'device_name': jd_cfg.get('device') or '',
+            'auto_reconnect': True,
+            'max_downloads': 3,
+            'max_speed': 0,
+        }})
+
     @app.post('/api/jdownloader/verify')
     @require_api_key
     def jd_verify():
-        """Verify JDownloader credentials and return list of devices."""
         response.content_type = 'application/json'
         try:
             data = json.loads(request.body.read().decode('utf-8'))
-            user = data.get('user', '').strip()
+            # Accept both 'email' (WebUI) and 'user' (legacy)
+            user = (data.get('email') or data.get('user') or '').strip()
             password = data.get('password', '').strip()
         except Exception:
-            return json.dumps({'error': 'Invalid request'})
+            return json.dumps({'data': {'valid': False}})
 
         if not user or not password:
-            return json.dumps({'error': 'Email and password required'})
+            return json.dumps({'data': {'valid': False}})
 
         from kuasarr.providers.jdownloader import get_devices
         devices = get_devices(user, password)
-        if devices is None:
-            return json.dumps({'error': 'Authentication failed or API unreachable'})
-        # devices is a list of dicts: {'name': '...', 'id': '...', 'type': 'jd'}
-        names = [d['name'] for d in devices if isinstance(d, dict) and d.get('name')]
-        return json.dumps({'devices': names})
+        return json.dumps({'data': {'valid': devices is not None}})
 
     @app.post('/api/jdownloader/save')
     @require_api_key
     def jd_save():
-        """Save JDownloader credentials and connect."""
         response.content_type = 'application/json'
         try:
             data = json.loads(request.body.read().decode('utf-8'))
-            user = data.get('user', '').strip()
+            user = (data.get('email') or data.get('user') or '').strip()
             password = data.get('password', '').strip()
-            device = data.get('device', '').strip()
+            device = (data.get('device_name') or data.get('device') or '').strip()
         except Exception:
             return json.dumps({'success': False, 'error': 'Invalid request'})
 
         if not user or not password or not device:
             return json.dumps({'success': False, 'error': 'All fields required'})
 
-        # Basic email validation
         import re
         if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', user):
             return json.dumps({'success': False, 'error': 'Invalid email format'})
 
-        # SECURITY FIX: Verify connection BEFORE saving credentials
         from kuasarr.providers.jdownloader import set_device
         ok = set_device(user, password, device)
         if not ok:
             return json.dumps({'success': False, 'error': 'Connection failed. Please verify credentials and device name.'})
 
-        # Only save to config after successful connection
         config = Config('JDownloader')
         config.save('user', user)
         config.save('password', password)
         config.save('device', device)
 
         return json.dumps({'success': True})
+
+    @app.post('/api/jdownloader/config')
+    @require_api_key
+    def jd_config_post():
+        # WebUI uses POST /api/jdownloader/config to save settings
+        return jd_save()
 
     @app.get('/regenerate-api-key')
     def regenerate_api_key():
@@ -484,5 +598,38 @@ def get_api(shared_state_dict, shared_state_lock):
             "API Key regenerated",
             f'<p>New key: <code>{new_key}</code></p><p>Update it in Radarr/Sonarr before continuing.</p>'
         )
+
+    # SPA catch-all: serve index.html for all non-API routes
+    @app.get('/<path:path>')
+    def spa_catchall(path):
+        """Serve React SPA for all non-API routes."""
+        # Don't interfere with API routes
+        if path.startswith('api/') or path.startswith('captcha') or path.startswith('download'):
+            abort(404)
+        # Don't interfere with static assets
+        if path.startswith('assets/') or path.startswith('static/'):
+            abort(404)
+
+        # Serve any existing file from the webui dist root with the correct MIME type
+        # (handles workbox-*.js, favicon.svg, icons.svg, registerSW.js, sw.js, etc.)
+        candidate = os.path.join(WEBUI_DIR, path)
+        if os.path.isfile(candidate) and path == os.path.basename(path):
+            mimetype = None
+            if path.endswith('.js'):
+                mimetype = 'application/javascript'
+            elif path.endswith('.css'):
+                mimetype = 'text/css'
+            elif path.endswith('.svg'):
+                mimetype = 'image/svg+xml'
+            elif path.endswith('.webmanifest'):
+                mimetype = 'application/manifest+json'
+            return static_file(path, root=WEBUI_DIR, mimetype=mimetype)
+
+        spa = try_serve_spa()
+        if spa is not None:
+            return spa
+
+        # If no React build, return 404
+        abort(404)
 
     Server(app, listen='0.0.0.0', port=shared_state.values["port"]).serve_forever()

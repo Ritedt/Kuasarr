@@ -4,3 +4,4 @@ include README.md
 include README_PYPI.md
 include LICENSE
 recursive-include kuasarr/static *
+recursive-include kuasarr/webui/dist *

@@ -101,12 +101,7 @@ def is_nested_duplicate(parent_name: str, child_name: str) -> bool:
 
 
 def find_nested_structure(base_path: str) -> Tuple[Optional[str], List[str]]:
-    """
-    Findet verschachtelte Ordnerstrukturen und gibt den tiefsten Ordner mit Dateien zurück.
-    
-    Returns:
-        Tuple von (deepest_folder_with_files, list_of_files_to_move)
-    """
+    """Findet verschachtelte Ordnerstrukturen und gibt den tiefsten Ordner mit Dateien zurück."""
     base = Path(base_path)
     
     if not base.exists() or not base.is_dir():
@@ -147,13 +142,10 @@ def find_nested_structure(base_path: str) -> Tuple[Optional[str], List[str]]:
 def flatten_nested_folders(download_path: str) -> bool:
     """
     Korrigiert verschachtelte Ordnerstrukturen.
-    
+
     Beispiel:
     /downloads/Movie Name 2024/Movie.Name.2024/Movie.Name.2024.mkv
     → /downloads/Movie Name 2024/Movie.Name.2024.mkv
-    
-    Returns:
-        True wenn Änderungen vorgenommen wurden
     """
     if not download_path or not os.path.exists(download_path):
         debug(f"PostProcessing: Pfad existiert nicht: {download_path}")
@@ -229,12 +221,7 @@ def _cleanup_empty_dirs(base_path: str) -> None:
 
 
 def trigger_sonarr_rescan(download_path: str) -> bool:
-    """
-    Triggert einen Sonarr Download-Scan.
-    
-    Returns:
-        True wenn erfolgreich
-    """
+    """Triggert einen Sonarr Download-Scan."""
     config = get_sonarr_config()
     
     if not config["url"] or not config["api_key"]:
@@ -269,12 +256,7 @@ def trigger_sonarr_rescan(download_path: str) -> bool:
 
 
 def trigger_radarr_rescan(download_path: str) -> bool:
-    """
-    Triggert einen Radarr Download-Scan.
-    
-    Returns:
-        True wenn erfolgreich
-    """
+    """Triggert einen Radarr Download-Scan."""
     config = get_radarr_config()
     
     if not config["url"] or not config["api_key"]:
@@ -309,16 +291,7 @@ def trigger_radarr_rescan(download_path: str) -> bool:
 
 
 def process_completed_download(download_path: str, category: str) -> dict:
-    """
-    Führt Post-Processing für einen abgeschlossenen Download durch.
-    
-    Args:
-        download_path: Pfad zum Download-Ordner
-        category: Kategorie des Downloads ("movies", "tv", "docs")
-    
-    Returns:
-        Dict mit Ergebnissen
-    """
+    """Führt Post-Processing für einen abgeschlossenen Download durch."""
     result = {
         "flattened": False,
         "sonarr_triggered": False,

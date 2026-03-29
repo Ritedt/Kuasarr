@@ -219,14 +219,7 @@ def _trigger_postprocessing(storage_path: str, category: str, package_id: str) -
 
 
 def get_packages(shared_state, _cache=None):
-    """
-    Get all packages from protected DB, failed DB, linkgrabber, and downloader.
-
-    Args:
-        shared_state: The shared state object
-        _cache: INTERNAL USE ONLY. Used by delete_package() to share cached data
-                within a single request. External callers should never pass this.
-    """
+    """Get all packages from protected DB, failed DB, linkgrabber, and downloader."""
     packages = []
 
     # Create cache for this request - only valid for duration of this call

@@ -9,6 +9,7 @@ import requests
 
 from kuasarr.providers import shared_state
 from kuasarr.providers.log import debug, error
+from kuasarr.constants import HTTP_EXTENDED_TIMEOUT_SECONDS, get_timeout
 
 trace = debug
 warn = error
@@ -48,7 +49,7 @@ def _fetch_all_names():
                 "seasonNumbers": 1,
             },
             headers={"User-Agent": shared_state.values["user_agent"]},
-            timeout=30,
+            timeout=get_timeout(HTTP_EXTENDED_TIMEOUT_SECONDS),
         )
         response.raise_for_status()
         result = response.json()
@@ -113,7 +114,7 @@ def _fetch_season_names(tvdb_id):
                 "language": "jp",
             },
             headers={"User-Agent": shared_state.values["user_agent"]},
-            timeout=30,
+            timeout=get_timeout(HTTP_EXTENDED_TIMEOUT_SECONDS),
         )
         response.raise_for_status()
         result = response.json()

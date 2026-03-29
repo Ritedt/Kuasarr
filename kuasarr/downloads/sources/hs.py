@@ -133,3 +133,13 @@ def get_hs_download_links(shared_state, url, mirror, title, password=None):
         info(f"HS: download error for {title}: {e}")
 
     return {"links": links}
+
+
+from kuasarr.downloads.base import AbstractDownloadSource
+
+
+class Source(AbstractDownloadSource):
+    initials = "hs"
+
+    def get_download_links(self, shared_state, url, mirror, title, password=None):
+        return get_hs_download_links(shared_state, url, mirror, title, password=password)

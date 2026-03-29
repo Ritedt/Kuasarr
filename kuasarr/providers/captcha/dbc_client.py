@@ -20,6 +20,7 @@ import requests
 from requests import RequestException
 
 from kuasarr.providers.log import info, debug, error
+from kuasarr.constants import CAPTCHA_SOLVE_TIMEOUT_SECONDS, get_timeout
 
 
 # Affiliate link for when balance is empty
@@ -92,20 +93,13 @@ class DeathByCaptchaClient:
     def __init__(
         self,
         authtoken: str = "",
-        timeout: int = 120,
+        timeout: int = None,
         max_retries: int = 3,
         retry_backoff: int = 5,
     ) -> None:
-        """Initialize the DBC client.
-        
-        Args:
-            authtoken: DBC authentication token
-            timeout: Request timeout in seconds
-            max_retries: Maximum number of retries for failed requests
-            retry_backoff: Seconds to wait between retries
-        """
+        """Initialize the DBC client."""
         self.authtoken = authtoken
-        self.timeout = max(1, int(timeout))
+        self.timeout = get_timeout(timeout or CAPTCHA_SOLVE_TIMEOUT_SECONDS)
         self.max_retries = max(1, int(max_retries))
         self.retry_backoff = max(1, int(retry_backoff))
         self._session = requests.Session()
@@ -126,27 +120,14 @@ class DeathByCaptchaClient:
         data: Optional[Dict[str, Any]] = None,
         files: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Execute an HTTP request with retry logic.
-        
-        Args:
-            method: HTTP method (GET, POST)
-            endpoint: API endpoint (without base URL)
-            data: Form data to send
-            files: Files to upload
-            
-        Returns:
-            JSON response as dictionary
-            
-        Raises:
-            DBCError: On API errors
-        """
+        """Execute an HTTP request with retry logic."""
         url = f"{DBC_API_BASE}/{endpoint}" if endpoint else DBC_API_BASE
         last_exc: Optional[Exception] = None
-        
+
         for attempt in range(1, self.max_retries + 1):
             try:
                 debug(f"DBC {method.upper()} {url} (Versuch {attempt}/{self.max_retries})")
-                
+
                 response = self._session.request(
                     method.upper(),
                     url,
@@ -154,7 +135,7 @@ class DeathByCaptchaClient:
                     files=files,
                     timeout=self.timeout,
                 )
-                
+
                 # Handle HTTP status codes
                 if response.status_code == 403:
                     raise DBCAccessDenied("DBC credentials rejected or account banned")
@@ -164,23 +145,23 @@ class DeathByCaptchaClient:
                     raise DBCServiceOverload("DBC service is overloaded")
                 elif response.status_code == 500:
                     raise DBCError(f"DBC server error: {response.text}")
-                
+
                 response.raise_for_status()
-                
+
                 # Parse response
                 if response.headers.get("Content-Type", "").startswith("application/json"):
                     result = response.json()
                 else:
                     # URL-encoded response - parse manually
                     result = dict(x.split("=") for x in response.text.split("&") if "=" in x)
-                
+
                 # Check for error in response
                 if result.get("status") == 255:
                     error_msg = result.get("error", "Unknown error")
                     raise DBCError(f"DBC API error: {error_msg}")
-                
+
                 return result
-                
+
             except DBCAccessDenied:
                 raise  # Don't retry auth errors
             except DBCServiceOverload as exc:
@@ -196,45 +177,34 @@ class DeathByCaptchaClient:
                 if attempt < self.max_retries:
                     time.sleep(self.retry_backoff * attempt)
                     continue
-        
+
         raise DBCError(f"DBC request failed after {self.max_retries} attempts") from last_exc
     
     def get_balance(self) -> float:
-        """Get account balance in US cents.
-        
-        Returns:
-            Balance in US cents
-            
-        Raises:
-            DBCInsufficientCredits: If balance is 0
-        """
+        """Get account balance in US cents."""
         data = self._get_auth_data()
         result = self._request("POST", "", data=data)
-        
+
         balance = float(result.get("balance", 0))
         is_banned = result.get("is_banned", False)
-        
+
         if is_banned or str(is_banned).lower() == "true" or is_banned == 1:
             raise DBCAccessDenied("DBC account is banned")
-        
+
         self._last_balance = balance
         info(f"DBC Balance: {balance:.2f} cents (${balance/100:.4f})")
-        
+
         if balance <= 0:
             info(f"⚠️ DBC credits exhausted! Top up at: {DBC_AFFILIATE_LINK}")
             raise DBCInsufficientCredits(f"No DBC credits left. Top up at: {DBC_AFFILIATE_LINK}")
-        
+
         return balance
     
     def get_account_info(self) -> AccountInfo:
-        """Get full account information.
-        
-        Returns:
-            AccountInfo object with balance, rate, etc.
-        """
+        """Get full account information."""
         data = self._get_auth_data()
         result = self._request("POST", "", data=data)
-        
+
         return AccountInfo(
             user_id=int(result.get("user", 0)),
             balance=float(result.get("balance", 0)),
@@ -243,13 +213,9 @@ class DeathByCaptchaClient:
         )
     
     def get_service_status(self) -> ServiceStatus:
-        """Get DBC service status.
-        
-        Returns:
-            ServiceStatus with accuracy, solve time, overload status
-        """
+        """Get DBC service status."""
         result = self._request("GET", "status")
-        
+
         return ServiceStatus(
             accuracy=float(result.get("todays_accuracy", 0)),
             solved_in=float(result.get("solved_in", 0)),
@@ -261,15 +227,7 @@ class DeathByCaptchaClient:
         image_data: bytes,
         timeout: Optional[int] = None,
     ) -> CaptchaResult:
-        """Upload a captcha image for solving.
-        
-        Args:
-            image_data: Raw image bytes (JPG, PNG, GIF, BMP)
-            timeout: Optional custom timeout
-            
-        Returns:
-            CaptchaResult with captcha_id (may not be solved yet)
-        """
+        """Upload a captcha image for solving."""
         # Log balance before cost-incurring operation
         try:
             self.get_balance()
@@ -277,23 +235,23 @@ class DeathByCaptchaClient:
             raise
         except Exception as e:
             debug(f"Could not fetch balance before upload: {e}")
-        
+
         data = self._get_auth_data()
-        
+
         # Encode image as base64
         b64_image = "base64:" + base64.b64encode(image_data).decode("utf-8")
         data["captchafile"] = b64_image
-        
+
         debug(f"DBC: Uploading image captcha ({len(image_data)} bytes)")
         result = self._request("POST", "captcha", data=data)
         debug(f"DBC: Upload response: captcha_id={result.get('captcha')}, text={result.get('text', '')[:50]}")
-        
+
         captcha_id = int(result.get("captcha", 0))
         text = result.get("text", "")
         is_correct = result.get("is_correct", 1) in (1, True, "1", "true")
-        
+
         status = CaptchaStatus.SOLVED if text else CaptchaStatus.PENDING
-        
+
         return CaptchaResult(
             captcha_id=captcha_id,
             text=text,
@@ -302,26 +260,19 @@ class DeathByCaptchaClient:
         )
     
     def get_captcha_result(self, captcha_id: int) -> CaptchaResult:
-        """Poll for captcha result.
-        
-        Args:
-            captcha_id: ID of the uploaded captcha
-            
-        Returns:
-            CaptchaResult with current status
-        """
+        """Poll for captcha result."""
         result = self._request("GET", f"captcha/{captcha_id}")
-        
+
         text = result.get("text", "")
         is_correct = result.get("is_correct", 1) in (1, True, "1", "true")
-        
+
         if not text:
             status = CaptchaStatus.PENDING
         elif not is_correct:
             status = CaptchaStatus.FAILED
         else:
             status = CaptchaStatus.SOLVED
-        
+
         return CaptchaResult(
             captcha_id=captcha_id,
             text=text,
@@ -335,40 +286,31 @@ class DeathByCaptchaClient:
         poll_interval: float = 3.0,
         max_wait: float = 120.0,
     ) -> CaptchaResult:
-        """Upload and wait for captcha solution.
-        
-        Args:
-            image_data: Raw image bytes
-            poll_interval: Seconds between status polls
-            max_wait: Maximum seconds to wait for solution
-            
-        Returns:
-            CaptchaResult with solution or timeout status
-        """
+        """Upload and wait for captcha solution."""
         # Upload captcha
         result = self.upload_captcha(image_data)
-        
+
         if result.is_solved:
             info(f"CAPTCHA {result.captcha_id} solved immediately: {result.text}")
             return result
-        
+
         # Poll for result
         start = time.time()
         while time.time() - start < max_wait:
             time.sleep(poll_interval)
-            
+
             result = self.get_captcha_result(result.captcha_id)
-            
+
             if result.is_solved:
                 info(f"CAPTCHA {result.captcha_id} solved: {result.text}")
                 return result
-            
+
             if result.status == CaptchaStatus.FAILED:
                 info(f"CAPTCHA {result.captcha_id} failed")
                 return result
-            
+
             debug(f"CAPTCHA {result.captcha_id} not yet solved, waiting...")
-        
+
         # Timeout
         info(f"CAPTCHA {result.captcha_id} timeout after {max_wait}s")
         return CaptchaResult(
@@ -379,16 +321,9 @@ class DeathByCaptchaClient:
         )
     
     def report_incorrect(self, captcha_id: int) -> bool:
-        """Report an incorrectly solved captcha for refund.
-        
-        Args:
-            captcha_id: ID of the incorrectly solved captcha
-            
-        Returns:
-            True if report was accepted
-        """
+        """Report an incorrectly solved captcha for refund."""
         data = self._get_auth_data()
-        
+
         try:
             result = self._request("POST", f"captcha/{captcha_id}/report", data=data)
             is_correct = result.get("is_correct", 1)
@@ -409,19 +344,7 @@ class DeathByCaptchaClient:
         poll_interval: float = 5.0,
         max_wait: float = 180.0,
     ) -> CaptchaResult:
-        """Solve a reCAPTCHA v2 challenge.
-        
-        Args:
-            site_key: The reCAPTCHA site key (data-sitekey)
-            page_url: URL of the page with the captcha
-            proxy: Optional proxy in format ip:port or user:pass@ip:port
-            proxy_type: Proxy type (HTTP, SOCKS4, SOCKS5)
-            poll_interval: Seconds between status polls
-            max_wait: Maximum seconds to wait
-            
-        Returns:
-            CaptchaResult with g-recaptcha-response token
-        """
+        """Solve a reCAPTCHA v2 challenge."""
         # Log balance before cost-incurring operation
         try:
             self.get_balance()
@@ -429,9 +352,9 @@ class DeathByCaptchaClient:
             raise
         except Exception as e:
             debug(f"Could not fetch balance before reCAPTCHA: {e}")
-        
+
         data = self._get_auth_data()
-        
+
         token_params = {
             "googlekey": site_key,
             "pageurl": page_url,
@@ -439,17 +362,17 @@ class DeathByCaptchaClient:
         if proxy:
             token_params["proxy"] = proxy
             token_params["proxytype"] = proxy_type or "HTTP"
-        
+
         data["type"] = "4"  # reCAPTCHA v2 type
         data["token_params"] = json.dumps(token_params)
-        
+
         debug(f"DBC: Solving reCAPTCHA v2 for {page_url} (sitekey={site_key[:20]}...)")
         result = self._request("POST", "captcha", data=data)
         debug(f"DBC: reCAPTCHA response: captcha_id={result.get('captcha')}")
-        
+
         captcha_id = int(result.get("captcha", 0))
         text = result.get("text", "")
-        
+
         if text:
             info(f"reCAPTCHA {captcha_id} solved immediately")
             return CaptchaResult(
@@ -458,11 +381,11 @@ class DeathByCaptchaClient:
                 is_correct=True,
                 status=CaptchaStatus.SOLVED,
             )
-        
-        poll_intervals = [1, 1, 2, 3, 2, 2, 3, 2, 2]  
+
+        poll_intervals = [1, 1, 2, 3, 2, 2, 3, 2, 2]
         start = time.time()
         poll_idx = 0
-        
+
         while time.time() - start < max_wait:
             # Wait before polling
             if poll_idx < len(poll_intervals):
@@ -470,21 +393,21 @@ class DeathByCaptchaClient:
                 poll_idx += 1
             else:
                 wait_time = poll_interval
-            
+
             time.sleep(wait_time)
-            
+
             poll_result = self.get_captcha_result(captcha_id)
-            
+
             if poll_result.is_solved:
                 info(f"reCAPTCHA {captcha_id} solved")
                 return poll_result
-            
+
             if poll_result.status == CaptchaStatus.FAILED:
                 info(f"reCAPTCHA {captcha_id} failed")
                 return poll_result
-            
+
             debug(f"reCAPTCHA {captcha_id} not yet solved ({int(time.time() - start)}s elapsed)...")
-        
+
         info(f"reCAPTCHA {captcha_id} timeout after {max_wait}s")
         return CaptchaResult(
             captcha_id=captcha_id,
@@ -504,21 +427,9 @@ class DeathByCaptchaClient:
         max_wait: float = 180.0,
     ) -> CaptchaResult:
         """Solve a CutCaptcha challenge using official DBC library.
-        
+
         The HTTP API doesn't support CutCaptcha (returns 501).
         Must use the official deathbycaptcha-official package.
-        
-        Args:
-            api_key: CutCaptcha API key (e.g. 'SAs61IAI')
-            page_url: URL of the page with the captcha
-            misery_key: CutCaptcha misery key (32 char hex)
-            proxy: Optional proxy
-            proxy_type: Proxy type (HTTP, SOCKS4, SOCKS5)
-            poll_interval: Seconds between status polls
-            max_wait: Maximum seconds to wait
-            
-        Returns:
-            CaptchaResult with solution token
         """
         try:
             import deathbycaptcha
@@ -530,25 +441,25 @@ class DeathByCaptchaClient:
                 is_correct=False,
                 status=CaptchaStatus.FAILED,
             )
-        
+
         info(f"Solving CutCaptcha for {page_url} (apikey={api_key})")
         debug(f"DBC: Using official SocketClient, miserykey={misery_key[:10] if misery_key else 'none'}...")
         debug(f"DBC: Credentials - authtoken={bool(self.authtoken)}")
-        
+
         try:
             # Create official DBC SocketClient (required for type=19)
             # SocketClient signature: SocketClient(username, password, authtoken)
             # Use authtoken exclusively
             debug(f"DBC: Creating SocketClient with authtoken")
             client = deathbycaptcha.SocketClient("", "", self.authtoken)
-            
+
             # Log balance
             balance = client.get_balance()
             info(f"DBC Balance: {balance} cents (${balance/100:.2f})")
-            
+
             if balance <= 0:
                 raise DBCInsufficientCredits(f"No credits left! Top up at: {DBC_AFFILIATE_LINK}")
-            
+
             # Build CutCaptcha params
             captcha_params = {
                 'proxy': proxy or '',
@@ -558,12 +469,12 @@ class DeathByCaptchaClient:
                 'pageurl': page_url
             }
             json_params = json.dumps(captcha_params)
-            
+
             debug(f"DBC: Sending CutCaptcha request with type=19, params={captcha_params}")
-            
+
             # Use official client's decode method
             captcha = client.decode(type=19, cutcaptcha_params=json_params)
-            
+
             if captcha and captcha.get("captcha") and captcha.get("text"):
                 captcha_id = captcha["captcha"]
                 text = captcha["text"]
@@ -588,7 +499,7 @@ class DeathByCaptchaClient:
                     is_correct=False,
                     status=CaptchaStatus.FAILED,
                 )
-                
+
         except deathbycaptcha.AccessDeniedException:
             error("DBC Access Denied - check credentials")
             raise DBCAccessDenied("Access to DBC API denied - check credentials")
@@ -610,25 +521,17 @@ class DeathByCaptchaClient:
         max_wait: float = 60.0,
     ) -> Optional[Tuple[int, int]]:
         """Solve a coordinates/click captcha (like Circle-Captcha).
-        
+
         DBC returns coordinates in format "x,y" for where to click.
-        
-        Args:
-            image_data: Raw image bytes of the captcha
-            poll_interval: Seconds between status polls
-            max_wait: Maximum seconds to wait
-            
-        Returns:
-            Tuple of (x, y) coordinates or None if failed
         """
         result = self.solve_captcha(image_data, poll_interval, max_wait)
-        
+
         if not result.is_solved or not result.text:
             return None
-        
+
         # DBC returns coordinates as "x,y" or "x;y"
         text = result.text.strip()
-        
+
         # Try different separators
         for sep in [",", ";", " ", ":"]:
             if sep in text:
@@ -641,7 +544,7 @@ class DeathByCaptchaClient:
                         return (x, y)
                     except ValueError:
                         continue
-        
+
         # If no separator found, try to parse as single coordinate pair
         try:
             # Sometimes returned as just numbers
@@ -653,30 +556,23 @@ class DeathByCaptchaClient:
                 return (x, y)
         except (ValueError, IndexError):
             pass
-        
+
         info(f"Circle-Captcha coordinates not parsable: {text}")
         return None
 
 
 def create_dbc_client(shared_state) -> Optional[DeathByCaptchaClient]:
-    """Factory function: Create a DeathByCaptchaClient from shared_state.
-    
-    Args:
-        shared_state: Kuasarr shared state module
-        
-    Returns:
-        Configured DeathByCaptchaClient or None if not configured
-    """
+    """Factory function: Create a DeathByCaptchaClient from shared_state."""
     dbc_config = shared_state.values.get("dbc_config", {})
     authtoken = dbc_config.get("authtoken", "")
-    
+
     if not authtoken:
         return None
-    
+
     timeout = int(dbc_config.get("timeout", 120))
     max_retries = int(dbc_config.get("max_retries", 3))
     retry_backoff = int(dbc_config.get("retry_backoff", 5))
-    
+
     return DeathByCaptchaClient(
         authtoken=authtoken,
         timeout=timeout,

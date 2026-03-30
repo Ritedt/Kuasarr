@@ -91,3 +91,9 @@
     padding-bottom: env(safe-area-inset-bottom);
   }
 }
+
+@supports (padding-top: env(safe-area-inset-top)) {
+  .safe-area-pt {
+    padding-top: env(safe-area-inset-top);
+  }
+}

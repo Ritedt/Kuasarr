@@ -27,10 +27,13 @@
 
   html {
     @apply scroll-smooth;
+    height: 100%;
   }
 
   body {
-    @apply bg-bg-primary text-text-primary font-sans antialiased min-h-screen;
+    @apply bg-bg-primary text-text-primary font-sans antialiased;
+    height: 100%;
+    overflow: hidden;
   }
 
   h1, h2, h3, h4, h5, h6 {

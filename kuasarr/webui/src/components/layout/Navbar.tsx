@@ -31,7 +31,7 @@ export function Navbar({ jdConnected = false }: NavbarProps) {
   const { isMobileMenuOpen, toggleMobileMenu, closeMobileMenu } = useUIStore()
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 h-16">
+    <header className="flex-shrink-0 z-50 h-16">
       <nav className="h-full glass border-b border-bg-tertiary/50">
         <div className="h-full px-4 sm:px-6 lg:px-8 flex items-center justify-between">
           {/* Logo */}

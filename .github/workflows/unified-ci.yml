@@ -770,7 +770,7 @@ jobs:
 
       - id: changelog
         continue-on-error: true
-        uses: metcalfc/changelog-generator@v4.6.2
+        uses: metcalfc/changelog-generator@v4.7.0
         with:
           myToken: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1105,7 +1105,7 @@ jobs:
         id: changelog
         # continue-on-error: first release on a new repo has no previous release to compare against
         continue-on-error: true
-        uses: metcalfc/changelog-generator@v4.6.2
+        uses: metcalfc/changelog-generator@v4.7.0
         with:
           myToken: ${{ secrets.GITHUB_TOKEN }}
 

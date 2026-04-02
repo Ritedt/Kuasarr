@@ -203,7 +203,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: '3.12'
           enable-cache: true
@@ -216,7 +216,7 @@ jobs:
       - name: Run import smoke test
         run: |
           set -euo pipefail
-          python - <<'EOF'
+          uv run python - <<'EOF'
           import sys
           modules = [
               "kuasarr",
@@ -503,7 +503,7 @@ jobs:
           name: webui-dist
           path: kuasarr/webui/dist
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: '3.12'
           enable-cache: true
@@ -564,7 +564,7 @@ jobs:
           name: webui-dist
           path: kuasarr/webui/dist
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: '3.12'
           enable-cache: true
@@ -606,8 +606,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "Building beta EXE with version: $VERSION"
-          python kuasarr/providers/version.py
-          pyinstaller --noconfirm --onefile --console --add-data "kuasarr/static;kuasarr/static" --add-data "kuasarr/webui/dist;kuasarr/webui/dist" --add-data "version.json;." --version-file "file_version_info.txt" --name "kuasarr" Kuasarr.py
+          uv run python kuasarr/providers/version.py
+          uv run pyinstaller --noconfirm --onefile --console --add-data "kuasarr/static;kuasarr/static" --add-data "kuasarr/webui/dist;kuasarr/webui/dist" --add-data "version.json;." --version-file "file_version_info.txt" --name "kuasarr" Kuasarr.py
 
       - uses: actions/upload-artifact@v7
         with:
@@ -845,7 +845,7 @@ jobs:
           name: webui-dist
           path: kuasarr/webui/dist
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: '3.12'
           enable-cache: true
@@ -896,7 +896,7 @@ jobs:
           name: webui-dist
           path: kuasarr/webui/dist
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: '3.12'
           enable-cache: true
@@ -925,8 +925,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "Building EXE with version: $VERSION"
-          python kuasarr/providers/version.py
-          pyinstaller --noconfirm --onefile --console --add-data "kuasarr/static;kuasarr/static" --add-data "kuasarr/webui/dist;kuasarr/webui/dist" --add-data "version.json;." --version-file "file_version_info.txt" --name "kuasarr" Kuasarr.py
+          uv run python kuasarr/providers/version.py
+          uv run pyinstaller --noconfirm --onefile --console --add-data "kuasarr/static;kuasarr/static" --add-data "kuasarr/webui/dist;kuasarr/webui/dist" --add-data "version.json;." --version-file "file_version_info.txt" --name "kuasarr" Kuasarr.py
       - uses: actions/upload-artifact@v7
         with:
           name: exe
@@ -1087,7 +1087,7 @@ jobs:
           echo "Releasing version: ${VERSION}"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: false  # disabled for reproducible releases
 

@@ -10,19 +10,22 @@ interface LayoutProps {
 
 export function Layout({ children, jdConnected = false }: LayoutProps) {
   return (
-    <div className="min-h-screen bg-bg-primary">
+    <div className="h-[100dvh] flex flex-col bg-bg-primary overflow-hidden">
       {/* Top Navigation */}
       <Navbar jdConnected={jdConnected} />
 
-      {/* Left Sidebar (Desktop) */}
-      <Sidebar />
+      {/* Middle: Sidebar + Content */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left Sidebar (Desktop) */}
+        <Sidebar />
 
-      {/* Main Content Area */}
-      <main className="pt-16 lg:pl-64 pb-16 lg:pb-0 min-h-screen">
-        <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
-          {children}
-        </div>
-      </main>
+        {/* Main Content Area */}
+        <main className="flex-1 overflow-y-auto">
+          <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
+            {children}
+          </div>
+        </main>
+      </div>
 
       {/* Bottom Navigation (Mobile) */}
       <MobileNav />

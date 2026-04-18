@@ -47,3 +47,8 @@ tmp-config/
 
 README_PYPI.md
 log.txt
+
+# Local artifacts
+kuasarr/webui/
+droid-wiki/
+.mulch/

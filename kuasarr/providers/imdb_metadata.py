@@ -125,9 +125,15 @@ def get_localized_title(shared_state, imdb_id, language='de'):
     except requests.exceptions.RequestException as e:
         info(f"Error loading IMDb metadata for {imdb_id}: {e}")
 
-    if response is None or response.status_code == 403:
+    needs_flaresolverr = (
+        response is None
+        or response.status_code in (403, 202)
+        or (response.status_code == 200 and not response.text.strip())
+        or "awsWafCookieDomainList" in (response.text if response.text else "")
+    )
+    if needs_flaresolverr:
         try:
-            info(f"IMDb request failed for {imdb_id}, retrying via FlareSolverr")
+            info(f"IMDb request blocked for {imdb_id} (status {getattr(response, 'status_code', 'none')}), retrying via FlareSolverr")
             response = flaresolverr_get(shared_state, imdb_url)
         except Exception as e:
             info(f"FlareSolverr fallback for IMDb {imdb_id} failed: {e}")

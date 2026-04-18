@@ -310,6 +310,49 @@ class TestGetLocalizedTitle:
             result = get_localized_title(state, "tt0000003")
             assert result is None
 
+    def test_status_202_triggers_flaresolverr(self):
+        """IMDb returns 202 (AWS WAF challenge) — must fall back to FlareSolverr."""
+        state = _mock_shared_state()
+        with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get, \
+             patch("kuasarr.providers.imdb_metadata.flaresolverr_get") as mock_fs:
+            mock_get.return_value = MagicMock(status_code=202, text="<!DOCTYPE html><html>...")
+            fs_resp = MagicMock()
+            fs_resp.text = _make_jsonld_html("American Dad!")
+            fs_resp.status_code = 200
+            mock_fs.return_value = fs_resp
+
+            result = get_localized_title(state, "tt0397306")
+            assert result == "American Dad"
+            mock_fs.assert_called_once()
+
+    def test_waf_challenge_html_triggers_flaresolverr(self):
+        """Status 200 but HTML contains AWS WAF challenge markers."""
+        state = _mock_shared_state()
+        waf_html = '<!DOCTYPE html><html><head><title></title><script>window.awsWafCookieDomainList = [];</script></head></html>'
+        with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get, \
+             patch("kuasarr.providers.imdb_metadata.flaresolverr_get") as mock_fs:
+            mock_get.return_value = MagicMock(status_code=200, text=waf_html)
+            fs_resp = MagicMock()
+            fs_resp.text = _make_jsonld_html("The Matrix")
+            fs_resp.status_code = 200
+            mock_fs.return_value = fs_resp
+
+            result = get_localized_title(state, "tt0133093")
+            assert result == "The Matrix"
+            mock_fs.assert_called_once()
+
+    def test_status_202_and_flaresolverr_fails_returns_none(self):
+        """Both direct request (202) and FlareSolverr fail → None."""
+        state = _mock_shared_state()
+        with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get, \
+             patch("kuasarr.providers.imdb_metadata.flaresolverr_get") as mock_fs:
+            mock_get.return_value = MagicMock(status_code=202, text="")
+            mock_fs.side_effect = RuntimeError("FlareSolverr down")
+
+            result = get_localized_title(state, "tt0000004")
+            assert result is None
+            mock_fs.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # get_clean_title

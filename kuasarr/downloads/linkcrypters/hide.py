@@ -11,6 +11,35 @@ from kuasarr.providers.log import info, debug
 from kuasarr.providers.statistics import StatsHelper
 
 
+# hide.cx returns links as {host, file} without a ready hoster_url.
+# Map known hosters to their download-URL scheme so we can reconstruct it.
+# Unknown hosts are skipped (logged) rather than sending JD a broken URL.
+_HOSTER_URL_TEMPLATES = {
+    "rg.to": "https://rapidgator.net/file/{f}",
+    "rapidgator.net": "https://rapidgator.net/file/{f}",
+    "ddownload.com": "https://ddownload.com/{f}",
+    "ddl.to": "https://ddl.to/{f}",
+    "turbobit.net": "https://turbobit.net/{f}.html",
+    "katfile.com": "https://katfile.com/{f}.html",
+    "hexload.com": "https://hexload.com/{f}",
+    "clicknupload.click": "https://clicknupload.click/{f}",
+    "clicknupload.cc": "https://clicknupload.cc/{f}",
+    "alfafile.net": "https://alfafile.net/file/{f}",
+    "nitroflare.com": "https://nitroflare.com/view/{f}",
+}
+
+
+def _build_hoster_url(host: str, file_id: str) -> Optional[str]:
+    """Build a hoster download URL from hide.cx host + file fields."""
+    if not host or not file_id:
+        return None
+    template = _HOSTER_URL_TEMPLATES.get(host.lower().strip())
+    if template:
+        return template.format(f=file_id.strip())
+    debug(f"hide.cx: no URL template for host '{host}' (file={file_id[:24]})")
+    return None
+
+
 def get_hide_api_key(shared_state) -> Optional[str]:
     """Get hide.cx API key from config."""
     from kuasarr.storage.config import Config
@@ -107,10 +136,6 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None) -> Tupl
             else:
                 data = response.json()
 
-        # TEMP DIAGNOSIS (remove after hide.cx parser fix): dump raw API response
-        # so the current link structure (field names / nesting) becomes visible.
-        debug(f"HIDE.CX RESPONSE ({container_id}): {str(data)[:3000]}")
-
         access_status = data.get("access_status", "unknown")
         if access_status == "offline":
             info(f"hide.cx: Container is OFFLINE - no retry needed")
@@ -119,6 +144,14 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None) -> Tupl
 
         for link in data.get("links", []):
             hoster_url = link.get("hoster_url")
+            if not hoster_url:
+                # hide.cx API returns links as host + file (hoster_url is None);
+                # reconstruct the hoster download URL from those fields.
+                host = (link.get("host") or "").lower().strip()
+                file_id = (link.get("file") or "").strip()
+                hoster_url = _build_hoster_url(host, file_id)
+                if hoster_url:
+                    debug(f"hide.cx: built URL from host={host} file={file_id[:24]}: {hoster_url[:60]}")
             if hoster_url and hoster_url not in links:
                 links.append(hoster_url)
                 debug(f"hide.cx: Found link: {hoster_url[:60]}...")

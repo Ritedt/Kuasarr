@@ -430,9 +430,6 @@ class DBCDispatcher:
             return None
         
         info(f"Filecrypt page loaded successfully (status={output.status_code}, {len(output.text)} bytes)")
-        # TEMP DIAGNOSIS (remove after filecrypt parser fix): dump raw HTML so the
-        # current filecrypt.cc structure (captcha/CNL selectors) becomes visible.
-        debug(f"FILECRYPT RAW HTML:\n{output.text[:4000]}")
 
         soup = BeautifulSoup(output.text, 'html.parser')
 
@@ -529,7 +526,15 @@ class DBCDispatcher:
         """Get captcha token by solving via DBC."""
         
         debug(f"DBC: Checking for captcha types on {url}")
-        
+
+        # filecrypt.cc now uses a Proof-of-Work captcha (pow-captcha) that requires
+        # browser-side JS execution + fingerprinting (s.js/m.js signals). It cannot
+        # be solved by DBC/2Captcha (no image/reCAPTCHA). Detect it explicitly so the
+        # failure reason is clear instead of the misleading "no captcha found" path.
+        if soup.find("div", {"class": "pow-captcha"}):
+            info("Filecrypt PoW-captcha detected — requires browser-based solving, not solvable via DBC/2Captcha")
+            return None
+
         # Check for CutCaptcha
         cutcaptcha_div = soup.find("div", {"class": "cutcaptcha"})
         if cutcaptcha_div or "SAs61IAI" in str(soup):

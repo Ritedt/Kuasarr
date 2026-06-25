@@ -125,6 +125,10 @@ def get_localized_title(shared_state, imdb_id, language='de'):
             api_title = _MULTI_SPACE_RE.sub(' ', api_title)
             recently_searched[cache_key] = {"title": api_title, "timestamp": datetime.now()}
             shared_state.update(context, recently_searched)
+            # also persist in a long-term context (survives the 24h purge) for stale fallback
+            _lt = shared_state.get_recently_searched(shared_state, "recents_imdb_titles_lt", 60 * 60 * 24 * 30)
+            _lt[cache_key] = {"title": api_title, "timestamp": datetime.now()}
+            shared_state.update("recents_imdb_titles_lt", _lt)
             return api_title
     except Exception as e:
         debug(f"IMDb API tier failed for {imdb_id}, falling through to HTML: {e}")
@@ -159,6 +163,17 @@ def get_localized_title(shared_state, imdb_id, language='de'):
 
     if not localized_title:
         debug(f"Could not get localized title for {imdb_id} in {language} from IMDb")
+        # Stale-cache fallback: during a transient WAF/API outage, return the
+        # last known good title (looked up beyond the normal 24h window) so the
+        # dependent scrapers keep producing results instead of emptying out.
+        try:
+            long_term = shared_state.get_recently_searched(shared_state, "recents_imdb_titles_lt", 60 * 60 * 24 * 30)
+            prior = long_term.get(cache_key)
+            if prior and prior.get("title"):
+                debug(f"IMDb: returning stale cached title for {imdb_id} during outage: {prior['title']}")
+                return prior["title"]
+        except Exception:
+            pass
         recently_searched[cache_key] = {"title": None, "timestamp": datetime.now()}
         shared_state.update(context, recently_searched)
         return None
@@ -169,6 +184,10 @@ def get_localized_title(shared_state, imdb_id, language='de'):
 
     recently_searched[cache_key] = {"title": localized_title, "timestamp": datetime.now()}
     shared_state.update(context, recently_searched)
+    # also persist in a long-term context (survives the 24h purge) for stale fallback
+    _lt = shared_state.get_recently_searched(shared_state, "recents_imdb_titles_lt", 60 * 60 * 24 * 30)
+    _lt[cache_key] = {"title": localized_title, "timestamp": datetime.now()}
+    shared_state.update("recents_imdb_titles_lt", _lt)
 
     return localized_title
 

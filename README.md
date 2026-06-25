@@ -30,15 +30,21 @@ docker run -d \
   ghcr.io/ritedt/kuasarr:latest
 ```
 
-**Open `http://localhost:9999`** and follow the setup wizard in the WebUI. No config file editing required – everything is done through the interface.
+**Open `http://localhost:9999`** and follow the setup wizard in the WebUI. On first start you're prompted for the internal/external URL directly in the browser — no config file editing required, everything is done through the interface.
+
+> **Tip:** For deterministic deployments (e.g. compose/automated setups), pass `-e INTERNAL_ADDRESS=http://<host-ip>:9999` to skip the first-start prompt. `TZ`, `EXTERNAL_ADDRESS` and the credentials below work the same way.
 
 ### Optional: Environment Variables
+
+Environment variables always override WebUI settings (useful for Docker secrets). Anything not set here is configurable through the WebUI.
 
 | Variable | Description |
 |----------|-------------|
 | `TZ` | Timezone (e.g. `Europe/Berlin`) |
-| `INTERNAL_ADDRESS` | Local URL (for internal API calls) |
-| `EXTERNAL_ADDRESS` | External URL (for downloads) |
+| `INTERNAL_ADDRESS` | Local URL Radarr/Sonarr use to reach Kuasarr |
+| `EXTERNAL_ADDRESS` | External URL (defaults to internal) |
+| `KUASARR_WEBUI_USER` / `KUASARR_WEBUI_PASS` | Optional WebUI login (ENV or WebUI → Settings → General) |
+| `DBC_MAX_CONCURRENT` | Max concurrent CAPTCHA jobs (default `1`; requires restart) |
 
 ---
 

@@ -348,6 +348,15 @@ def setup_arr_routes(app):
                                 f'Ignoring search request from {request_from} - only imdbid searches are supported')
                             releases = []  # sonarr expects this but we will not support non-imdbid searches
 
+                    # Newznab <category> per search type — Radarr/Sonarr reject every
+                    # release whose category is absent or outside their configured range.
+                    # IDs must match the ones advertised in the caps response above.
+                    _newznab_category = {
+                        'movie': 2000, 'tvsearch': 5000, 'book': 7000, 'search': 7000,
+                    }.get(mode, 2000)
+                    _search_imdb_id = getattr(request.query, 'imdbid', '')
+                    _attr_imdbid = f'<attr name="imdbid" value="{_search_imdb_id}"/>' if _search_imdb_id else ''
+
                     items = ""
                     for release in releases:
                         release = release.get("details", {})
@@ -366,6 +375,9 @@ def setup_arr_routes(app):
                             <link>{release.get("link", "")}</link>
                             <comments>{source}</comments>
                             <pubDate>{release.get("date", datetime.now().strftime("%a, %d %b %Y %H:%M:%S +0000"))}</pubDate>
+                            <category>{_newznab_category}</category>
+                            <attr name="category" value="{_newznab_category}"/>
+                            {_attr_imdbid}
                             <enclosure url="{release.get("link", "")}" length="{release.get("size", 0)}" type="application/x-nzb" />
                         </item>'''
 

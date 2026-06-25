@@ -561,7 +561,7 @@ def delete_package(shared_state, package_id):
         packages = get_packages(shared_state)
         for package_location in packages:
             for package in packages[package_location]:
-                if package["nzo_id"] == package_id:
+                if package.get("nzo_id") == package_id:
                     if package["type"] == "linkgrabber":
                         ids = get_links_matching_package_uuid(package,
                                                               shared_state.get_device().linkgrabber.query_links())
@@ -608,7 +608,9 @@ def delete_package(shared_state, package_id):
             info(f'Deleted package "{deleted_title}" with ID "{package_id}"')
         else:
             info(f'Deleted package "{package_id}"')
-    except:
-        info(f"Failed to delete package {package_id}")
-        return False
+    except Exception as e:
+        # Idempotent: a missing package (already imported/cleaned in JDownloader)
+        # is treated as success so *arr stops re-probing. Log for traceability.
+        info(f"delete_package {package_id} failed (treating as success for idempotency): {e}")
+        return True
     return True

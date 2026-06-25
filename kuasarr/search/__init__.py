@@ -112,6 +112,20 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
     if imdb_id and not imdb_id.startswith('tt'):
         imdb_id = f'tt{imdb_id}'
 
+    # Search-level cache: *arr poll the same movie repeatedly — serve cached
+    # results instantly instead of re-running all scrapers (5-8s -> ~0ms).
+    from kuasarr.search.cache import search_cache, TTL_SEARCH, TTL_FEED, TTL_EMPTY
+    cache_mode = "feed" if is_feed else "search"
+    cache_key = search_cache.make_key("ALL", cache_mode, imdb_id, search_phrase, season, episode, mirror)
+    cached = search_cache.get(cache_key)
+    if cached is not None:
+        # cached holds the FULL enriched+sorted set; apply pagination+cap here
+        # (offset/limit are NOT in the cache key, so one entry serves all pages)
+        cached_page = cached[offset:offset + limit] if limit > 0 else cached[offset:]
+        cached_page = cached_page[:1000]
+        info(f"Providing {len(cached_page)} releases to {request_from} from cache ({cache_mode})")
+        return cached_page
+
     lower_request = request_from.lower()
     docs_search = "lazylibrarian" in lower_request
     webui_search = "webui" in lower_request
@@ -276,6 +290,14 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
             return datetime.min
 
     results.sort(key=_parse_date, reverse=True)
+
+    # Cache the FULL enriched+sorted set BEFORE pagination/cap so different
+    # offset/limit requests share one cache entry. TTL is derived from the
+    # pre-pagination length. Deep-copy to isolate the cache from any caller
+    # mutation of the returned list/dicts.
+    import copy
+    ttl = TTL_FEED if is_feed else (TTL_EMPTY if not results else TTL_SEARCH)
+    search_cache.set(cache_key, copy.deepcopy(results), ttl)
 
     # Apply pagination before capping so offset+limit always returns up to limit results
     if offset > 0 or limit > 0:

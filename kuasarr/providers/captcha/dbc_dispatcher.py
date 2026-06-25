@@ -51,6 +51,159 @@ MAX_BACKOFF_MULTIPLIER = 8
 PROCESSING_STATUS = "processing"  # job is actively being worked on this tick
 
 
+# --- Filecrypt Proof-of-Work captcha (ported from rix1337/Quasarr) ---
+# filecrypt.cc replaced reCAPTCHA/CutCaptcha with a custom PoW-captcha
+# (<div class="pow-captcha" data-challenge data-difficulty>) that needs
+# browser-side JS + fingerprinting. Solved via flaresolverr-next
+# (https://github.com/rix1337/flaresolverr-next) executeJs — DBC/2Captcha
+# cannot solve PoW.
+_FILECRYPT_TLDS = ("cc", "to", "co")
+_FLARESOLVERR_NEXT_URL = "https://github.com/rix1337/flaresolverr-next"
+
+
+def _get_pow_captcha(soup):
+    return soup.find("div", {"id": "pow-captcha", "class": "pow-captcha"})
+
+
+def _filecrypt_url_candidates(url):
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    parts = host.split(".")
+    if len(parts) < 2 or parts[-2] != "filecrypt":
+        return [url]
+    original_tld = parts[-1]
+    tlds = [original_tld] + [tld for tld in _FILECRYPT_TLDS if tld != original_tld]
+    urls = []
+    for tld in tlds:
+        candidate_host = ".".join([*parts[:-1], tld])
+        netloc = candidate_host
+        if parsed.port:
+            netloc = f"{candidate_host}:{parsed.port}"
+        urls.append(parsed._replace(netloc=netloc).geturl())
+    return urls
+
+
+def _cookies_for_target(session, target_url):
+    domain = urlparse(target_url).hostname or ""
+    cookies = []
+    for cookie in session.cookies:
+        cookie_domain = cookie.domain or domain
+        normalized = cookie_domain.lstrip(".")
+        if normalized != domain and not domain.endswith("." + normalized):
+            continue
+        cookies.append({
+            "name": cookie.name,
+            "value": cookie.value,
+            "domain": cookie_domain,
+            "path": cookie.path or "/",
+        })
+    return cookies
+
+
+def _flaresolverr_execute_js_get(shared_state, session, url, execute_js, wait=12):
+    """Sendet JS an flaresolverr-next executeJs, returned die gelöste Seite."""
+    flaresolverr_url = shared_state.values["config"]("FlareSolverr").get("url")
+    if not flaresolverr_url:
+        raise RuntimeError("FlareSolverr URL not configured (flaresolverr-next required for Filecrypt PoW).")
+
+    last_error = None
+    for candidate_url in _filecrypt_url_candidates(url):
+        payload = {
+            "cmd": "request.get",
+            "url": candidate_url,
+            "maxTimeout": HTTP_DEFAULT_TIMEOUT_SECONDS * 1000,
+            "waitInSeconds": wait,
+            "cookies": _cookies_for_target(session, candidate_url),
+            "executeJs": execute_js,
+        }
+        response = requests.post(
+            flaresolverr_url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS + 10),
+        )
+        response.raise_for_status()
+        result = response.json()
+
+        if result.get("status") != "ok" or "solution" not in result:
+            message = result.get("message", "<no message>")
+            last_error = message
+            if "dns rebinding detected" in message.lower():
+                continue
+            raise RuntimeError(f"flaresolverr-next failed: {message}")
+
+        solution = result["solution"]
+        for cookie in solution.get("cookies", []):
+            session.cookies.set(
+                cookie.get("name"),
+                cookie.get("value"),
+                domain=cookie.get("domain"),
+                path=cookie.get("path", "/"),
+            )
+        user_agent = solution.get("userAgent")
+        if user_agent and user_agent != shared_state.values.get("user_agent"):
+            shared_state.update("user_agent", user_agent)
+        return {
+            "url": solution.get("url", candidate_url),
+            "html": solution.get("response", ""),
+            "execute_js_result": solution.get("executeJsResult"),
+        }
+
+    raise RuntimeError(f"flaresolverr-next failed: {last_error}")
+
+
+def _solve_filecrypt_pow_if_present(shared_state, session, output, headers):
+    """Löst das Filecrypt PoW-Captcha via flaresolverr-next executeJs, falls vorhanden."""
+    soup = BeautifulSoup(output.text, "html.parser")
+    if not _get_pow_captcha(soup):
+        return output
+
+    info("Filecrypt proof-of-work detected. Solving with flaresolverr-next executeJs...")
+
+    click_js = """
+    const box = document.querySelector('#pow-captcha .pow-captcha__box');
+    if (!box) {
+        return 'missing';
+    }
+    box.dispatchEvent(new MouseEvent('click', {
+        bubbles: false,
+        cancelable: true,
+        view: window
+    }));
+    return 'clicked';
+    """
+
+    for _ in range(3):
+        result = _flaresolverr_execute_js_get(shared_state, session, output.url, click_js, wait=12)
+
+        execute_result = result.get("execute_js_result")
+        if execute_result in (None, "", "null"):
+            raise RuntimeError(
+                "Filecrypt proof-of-work requires flaresolverr-next executeJs support. "
+                f"Make sure you are using flaresolverr-next: {_FLARESOLVERR_NEXT_URL}"
+            )
+
+        execute_result = str(execute_result)
+        if execute_result.startswith("ERROR:"):
+            raise RuntimeError("Filecrypt proof-of-work browser click failed: " + execute_result)
+
+        if execute_result != "clicked":
+            info(f"Filecrypt proof-of-work click was not possible: {execute_result}")
+            continue
+
+        refreshed = session.get(
+            result.get("url") or output.url,
+            headers=headers,
+            timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+        )
+        refreshed_soup = BeautifulSoup(refreshed.text, "html.parser")
+        if not _get_pow_captcha(refreshed_soup):
+            return refreshed
+
+    info("Filecrypt proof-of-work solve did not finish.")
+    return output
+
+
 class PermanentLinkFailure(Exception):
     """Raised when a link permanently fails (e.g., offline) and should not be retried."""
     pass
@@ -471,6 +624,15 @@ class DBCDispatcher:
         
         if bool(soup.find_all("input", {"id": "p4assw0rt"})):
             info(f"Password was wrong or missing. Could not get links for {title}")
+            return None
+
+        # Filecrypt Proof-of-Work-Captcha lösen (falls vorhanden) via flaresolverr-next.
+        # Braucht flaresolverr-next mit executeJs — Standard-FlareSolverr kann PoW nicht.
+        try:
+            output = _solve_filecrypt_pow_if_present(self.shared_state, session, output, headers)
+            soup = BeautifulSoup(output.text, 'html.parser')
+        except RuntimeError as e:
+            info(f"Filecrypt PoW solve failed: {e}")
             return None
 
         # Check if captcha is needed

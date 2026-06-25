@@ -562,7 +562,9 @@ def delete_package(shared_state, package_id):
         for package_location in packages:
             for package in packages[package_location]:
                 if package.get("nzo_id") == package_id:
-                    if package["type"] == "linkgrabber":
+                    ptype = package.get("type")
+                    puuid = package.get("uuid")
+                    if ptype == "linkgrabber" and puuid:
                         ids = get_links_matching_package_uuid(package,
                                                               shared_state.get_device().linkgrabber.query_links())
                         if ids:
@@ -571,10 +573,10 @@ def delete_package(shared_state, package_id):
                                 "REMOVE_LINKS_AND_DELETE_FILES",
                                 "SELECTED",
                                 ids,
-                                [package["uuid"]]
+                                [puuid]
                             )
                             break
-                    elif package["type"] == "downloader":
+                    elif ptype == "downloader" and puuid:
                         ids = get_links_matching_package_uuid(package,
                                                               shared_state.get_device().downloads.query_links())
                         if ids:
@@ -583,7 +585,7 @@ def delete_package(shared_state, package_id):
                                 "REMOVE_LINKS_AND_DELETE_FILES",
                                 "SELECTED",
                                 ids,
-                                [package["uuid"]]
+                                [puuid]
                             )
                             break
 

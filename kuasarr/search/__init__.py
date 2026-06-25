@@ -397,7 +397,7 @@ def _enrich_with_xrel(shared_state, results):
     corrected = 0
     nuked = 0
 
-    info(f"xREL: enriching {total} releases...")
+    debug(f"xREL: enriching {total} releases...")
 
     # Fetch xREL info in PARALLEL, deduplicated by title (the same release
     # appears across multiple sources, so we fetch each title only once).
@@ -442,7 +442,7 @@ def _enrich_with_xrel(shared_state, results):
                 new_size = xrel_info["size_bytes"]
                 if old_size != new_size:
                     corrected += 1
-                    info(
+                    debug(
                         f"xREL: size corrected for '{title}' (source={hostname}): "
                         f"{old_size / (1024 * 1024):.1f} MB → {new_size / (1024 * 1024):.1f} MB"
                     )

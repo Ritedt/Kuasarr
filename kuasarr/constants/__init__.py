@@ -24,6 +24,10 @@ DOWNLOAD_REQUEST_TIMEOUT_SECONDS = 30
 SESSION_REQUEST_TIMEOUT_SECONDS = 30
 SEARCH_TIMEOUT_SECONDS = 15
 FEED_TIMEOUT_SECONDS = 30
+# Global search deadline: return partial results after this many seconds even
+# if some scrapers haven't finished (complements the per-search SearchCache).
+SEARCH_DEADLINE_SECONDS = 8
+SEARCH_MAX_WORKERS = 16
 
 # CAPTCHA solving timeouts
 CAPTCHA_SOLVE_TIMEOUT_SECONDS = 120
@@ -125,6 +129,11 @@ def get_flaresolverr_pow_timeout() -> int:
 def get_search_timeout() -> int:
     """Get search timeout with slow mode applied."""
     return get_timeout(SEARCH_TIMEOUT_SECONDS)
+
+
+def get_search_deadline() -> int:
+    """Get the global search deadline (partial-results cutoff) with slow mode."""
+    return get_timeout(SEARCH_DEADLINE_SECONDS)
 
 
 def get_download_timeout() -> int:

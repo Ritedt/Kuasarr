@@ -6,6 +6,7 @@ import traceback
 import xml.sax.saxutils as sax_utils
 from base64 import urlsafe_b64decode
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse, parse_qs
 from xml.etree import ElementTree
 
@@ -348,25 +349,70 @@ def setup_arr_routes(app):
                                 f'Ignoring search request from {request_from} - only imdbid searches are supported')
                             releases = []  # sonarr expects this but we will not support non-imdbid searches
 
+                    # Newznab <category> per search type — Radarr/Sonarr reject every
+                    # release whose category is absent or outside their configured range.
+                    # IDs must match the ones advertised in the caps response above.
+                    _newznab_category = {
+                        'movie': 2000, 'tvsearch': 5000, 'book': 7000, 'search': 7000,
+                    }.get(mode, 2000)
+                    _search_imdb_id = getattr(request.query, 'imdbid', '')
+
                     items = ""
                     for release in releases:
                         release = release.get("details", {})
 
-                        # Ensure clean XML output
-                        title = sax_utils.escape(release.get("title", ""))
-                        source = sax_utils.escape(release.get("source", ""))
+                        # Defensive layer: Radarr/Sonarr are strict Newznab/RSS parsers and
+                        # reject the ENTIRE feed (and disable the indexer via failure
+                        # retention) on a single malformed item. Validate/sanitise every
+                        # field rather than trusting the scrapers.
+                        _link = release.get("link") or ""
+                        if not _link.startswith(("http://", "https://")):
+                            debug(f"Skipping release without valid link: {release.get('title')!r}")
+                            continue
 
-                        if not "lazylibrarian" in request_from.lower():
-                            title = f'[{release.get("hostname", "").upper()}] {title}'
+                        _hostname = sax_utils.escape((release.get("hostname") or "unknown").upper())
+                        title = sax_utils.escape(release.get("title") or "Unknown Release")
+                        source = sax_utils.escape(release.get("source") or "")
+                        if "lazylibrarian" not in request_from.lower():
+                            title = f'[{_hostname}] {title}'
+
+                        # pubDate MUST be a valid RFC-822 date — Radarr throws
+                        # UnsupportedFeedException ("Rss feed must have a pubDate element
+                        # with a valid publish date") and disables the indexer otherwise.
+                        _pubdate = release.get("date")
+                        if _pubdate:
+                            try:
+                                parsedate_to_datetime(_pubdate)
+                            except (TypeError, ValueError):
+                                _pubdate = None
+                        if not _pubdate:
+                            _pubdate = datetime.now().strftime("%a, %d %b %Y %H:%M:%S +0000")
+
+                        # Radarr rejects size=0 releases (unless "Allow Zero Size" is set);
+                        # fall back to a plausible size so the release stays usable.
+                        try:
+                            _size = int(release.get("size") or 0)
+                        except (TypeError, ValueError):
+                            _size = 0
+                        if _size <= 0:
+                            _size = 500 * 1024 * 1024
+
+                        # Newznab attribute name is "imdb" (Radarr reads "imdb"
+                        # case-insensitively; "imdbid" does NOT match).
+                        _imdb = release.get("imdb_id") or _search_imdb_id
+                        _attr_imdb = f'<attr name="imdb" value="{sax_utils.escape(str(_imdb))}"/>' if _imdb else ''
 
                         items += f'''
                         <item>
                             <title>{title}</title>
-                            <guid isPermaLink="True">{release.get("link", "")}</guid>
-                            <link>{release.get("link", "")}</link>
+                            <guid isPermaLink="True">{_link}</guid>
+                            <link>{_link}</link>
                             <comments>{source}</comments>
-                            <pubDate>{release.get("date", datetime.now().strftime("%a, %d %b %Y %H:%M:%S +0000"))}</pubDate>
-                            <enclosure url="{release.get("link", "")}" length="{release.get("size", 0)}" type="application/x-nzb" />
+                            <pubDate>{_pubdate}</pubDate>
+                            <category>{_newznab_category}</category>
+                            <attr name="category" value="{_newznab_category}"/>
+                            {_attr_imdb}
+                            <enclosure url="{_link}" length="{_size}" type="application/x-nzb" />
                         </item>'''
 
                     is_feed_request = not getattr(request.query, 'imdbid', '') and not getattr(request.query, 'q', '')
@@ -382,8 +428,11 @@ def setup_arr_routes(app):
                         </item>'''
 
                     return f'''<?xml version="1.0" encoding="UTF-8"?>
-                                <rss>
+                                <rss version="2.0">
                                     <channel>
+                                        <title>kuasarr Indexer</title>
+                                        <link>https://kuasarr.indexer/</link>
+                                        <description>kuasarr Newznab Indexer API</description>
                                         {items}
                                     </channel>
                                 </rss>'''

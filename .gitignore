@@ -31,7 +31,7 @@ tests/
 .windsurf/workflows/*
 config/
 ARCHITECTURE*.md
-
+.mulch/
 # Docker
 docker/*
 */docker/
@@ -47,3 +47,13 @@ tmp-config/
 
 README_PYPI.md
 log.txt
+
+# Local artifacts
+kuasarr/webui/
+droid-wiki/
+.mulch/
+
+# Claude Code — local secrets (API keys, never commit)
+.claude/.secrets/
+.claude/.secrets/*
+.claude/local/

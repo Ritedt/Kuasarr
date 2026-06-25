@@ -44,6 +44,58 @@ _IMDB_TITLE_SUFFIXES = (' - IMDb', ' | IMDb')
 _IMDB_TITLE_PAREN_RE = re.compile(r'\s*\([^)]*\)\s*$')
 
 
+def _extract_title_from_html(raw_html):
+    """Extract the title from IMDb HTML using multiple fallback strategies.
+
+    Tries, in order:
+      1. JSON-LD  (<script type="application/ld+json">) — structured metadata
+      2. __NEXT_DATA__ React hydration blob — always present on modern IMDb
+      3. <title> tag — last resort, most fragile
+    """
+    soup = BeautifulSoup(raw_html, "html.parser")
+
+    # 1. JSON-LD (most reliable for title)
+    ld_script = soup.find("script", type="application/ld+json")
+    if ld_script and ld_script.string:
+        try:
+            ld_data = loads(ld_script.string)
+            name = ld_data.get("name")
+            if name:
+                return html.unescape(name).strip()
+        except (ValueError, KeyError):
+            pass
+
+    # 2. __NEXT_DATA__ React blob
+    next_script = soup.find("script", id="__NEXT_DATA__", type="application/json")
+    if next_script and next_script.string:
+        try:
+            nd = loads(next_script.string)
+            title_text = (nd
+                          .get("props", {})
+                          .get("pageProps", {})
+                          .get("aboveTheFoldData", {})
+                          .get("titleText", {}))
+            name = title_text.get("text")
+            if name:
+                return html.unescape(name).strip()
+        except (ValueError, KeyError):
+            pass
+
+    # 3. <title> tag (fragile — format changes often)
+    title_tag = soup.find("title")
+    if title_tag:
+        localized_title = title_tag.get_text()
+        for suffix in _IMDB_TITLE_SUFFIXES:
+            if localized_title.endswith(suffix):
+                localized_title = localized_title[: -len(suffix)]
+                break
+        localized_title = _IMDB_TITLE_PAREN_RE.sub('', localized_title).strip()
+        if localized_title:
+            return html.unescape(localized_title).strip()
+
+    return None
+
+
 def get_localized_title(shared_state, imdb_id, language='de'):
     # Cache localized title lookups to avoid parallel/repeated IMDb requests.
     # Successful hits: 24 h.  Not-found: 1 h so transient blocks don't persist.
@@ -73,28 +125,21 @@ def get_localized_title(shared_state, imdb_id, language='de'):
     except requests.exceptions.RequestException as e:
         info(f"Error loading IMDb metadata for {imdb_id}: {e}")
 
-    if response is None or response.status_code == 403:
+    needs_flaresolverr = (
+        response is None
+        or response.status_code in (403, 202)
+        or (response.status_code == 200 and not response.text.strip())
+        or "awsWafCookieDomainList" in (response.text if response.text else "")
+    )
+    if needs_flaresolverr:
         try:
-            info(f"IMDb request failed for {imdb_id}, retrying via FlareSolverr")
+            info(f"IMDb request blocked for {imdb_id} (status {getattr(response, 'status_code', 'none')}), retrying via FlareSolverr")
             response = flaresolverr_get(shared_state, imdb_url)
         except Exception as e:
             info(f"FlareSolverr fallback for IMDb {imdb_id} failed: {e}")
-            return None
 
-    # Use BeautifulSoup to extract the <title> tag — robust against attribute
-    # variations and avoids any regex-backtracking on the raw HTML string.
-    soup = BeautifulSoup(response.text, "html.parser")
-    title_tag = soup.find("title")
-    localized_title = title_tag.get_text() if title_tag else None
-
-    if localized_title:
-        # Strip " - IMDb" / " | IMDb" suffix
-        for suffix in _IMDB_TITLE_SUFFIXES:
-            if localized_title.endswith(suffix):
-                localized_title = localized_title[: -len(suffix)]
-                break
-        # Strip trailing year / type parenthetical: " (TV Series 2003–2010)"
-        localized_title = _IMDB_TITLE_PAREN_RE.sub('', localized_title).strip()
+    raw_html = response.text if response is not None else ""
+    localized_title = _extract_title_from_html(raw_html) if raw_html else None
 
     if not localized_title:
         debug(f"Could not get localized title for {imdb_id} in {language} from IMDb")
@@ -102,7 +147,6 @@ def get_localized_title(shared_state, imdb_id, language='de'):
         shared_state.update(context, recently_searched)
         return None
 
-    localized_title = html.unescape(localized_title)
     localized_title = _TITLE_SANITIZE_RE.sub(' ', localized_title).strip()
     localized_title = localized_title.replace(" - ", "-")
     localized_title = _MULTI_SPACE_RE.sub(' ', localized_title)

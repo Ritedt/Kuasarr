@@ -430,6 +430,9 @@ class DBCDispatcher:
             return None
         
         info(f"Filecrypt page loaded successfully (status={output.status_code}, {len(output.text)} bytes)")
+        # TEMP DIAGNOSIS (remove after filecrypt parser fix): dump raw HTML so the
+        # current filecrypt.cc structure (captcha/CNL selectors) becomes visible.
+        debug(f"FILECRYPT RAW HTML:\n{output.text[:4000]}")
 
         soup = BeautifulSoup(output.text, 'html.parser')
 

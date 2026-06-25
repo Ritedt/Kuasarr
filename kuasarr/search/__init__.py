@@ -272,10 +272,18 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
     if is_feed:
         try:
             from kuasarr.providers import radarr_api, sonarr_api
-            wanted = list(dict.fromkeys(
-                radarr_api.get_wanted_imdb_ids(shared_state)
-                + sonarr_api.get_wanted_imdb_ids(shared_state)
-            ))[:20]
+            # Only seed wanted IDs from the requesting *arr (Radarr feed ->
+            # Radarr movies; Sonarr feed -> Sonarr shows) to avoid cross-category
+            # waste. Capped low: 5 IDs x ~18 sources ~= 90 funcs within deadline.
+            lower_rf = (request_from or "").lower()
+            if "radarr" in lower_rf:
+                wanted = radarr_api.get_wanted_imdb_ids(shared_state)
+            elif "sonarr" in lower_rf:
+                wanted = sonarr_api.get_wanted_imdb_ids(shared_state)
+            else:
+                wanted = (radarr_api.get_wanted_imdb_ids(shared_state)
+                          + sonarr_api.get_wanted_imdb_ids(shared_state))
+            wanted = list(dict.fromkeys(wanted))[:5]
             for wid in wanted:
                 wf = _build_functions_from_registry(
                     shared_state, wid, "", request_from, allow_phrase_search,
@@ -331,7 +339,7 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
         seen = set()
         out = []
         for r in rels:
-            d = r.get("details") or {}
+            d = r.get("details") or r  # flat dict (he.py) or "details"-wrapped
             link = d.get("link") or ""
             key = link if link else (d.get("title", ""), d.get("hostname", ""))
             if key in seen:

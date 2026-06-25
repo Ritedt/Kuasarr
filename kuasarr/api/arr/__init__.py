@@ -237,9 +237,12 @@ def setup_arr_routes(app):
                 elif mode == "queue" or mode == "history":
                     if request.query.name and request.query.name == "delete":
                         package_id = request.query.value
-                        deleted = delete_package(shared_state, package_id)
+                        delete_package(shared_state, package_id)
+                        # Idempotent: report success regardless of whether the
+                        # package still existed in JDownloader — otherwise Radarr/
+                        # Sonarr re-probe missing (already imported/cleaned) IDs endlessly.
                         return {
-                            "status": deleted,
+                            "status": True,
                             "nzo_ids": [package_id]
                         }
 

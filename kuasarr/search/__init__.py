@@ -265,6 +265,29 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
     else:
         stype = "feed search"
 
+    # P3-A: Wanted-List-Seeding — for feed requests, additionally search the
+    # Radarr/Sonarr 'wanted' (missing + cutoff-unmet) IMDb IDs so the feed
+    # surfaces releases for wanted movies/shows WITHOUT needing imdb.com title
+    # resolution (bypasses the AWS WAF block). Capped to avoid ThreadPool load.
+    if is_feed:
+        try:
+            from kuasarr.providers import radarr_api, sonarr_api
+            wanted = list(dict.fromkeys(
+                radarr_api.get_wanted_imdb_ids(shared_state)
+                + sonarr_api.get_wanted_imdb_ids(shared_state)
+            ))[:20]
+            for wid in wanted:
+                wf = _build_functions_from_registry(
+                    shared_state, wid, "", request_from, allow_phrase_search,
+                    mirror, "", "", is_feed=False, start_time=start_time
+                )
+                if wf:
+                    functions.extend(wf)
+            if wanted:
+                info(f'Wanted-list seeding: added searches for {len(wanted)} wanted IMDb IDs ({len(functions)} total functions)')
+        except Exception as e:
+            debug(f'Wanted-list seeding failed (non-blocking): {e}')
+
     info(f'Starting {len(functions)} search functions for {stype}... This may take some time.')
 
     from kuasarr.constants import get_search_deadline, SEARCH_MAX_WORKERS
@@ -302,7 +325,23 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
 
     results.sort(key=_parse_date, reverse=True)
 
-    # Cache the FULL enriched+sorted set BEFORE pagination/cap so different
+    # Deduplicate by download link (the same release appears across multiple
+    # sources/mirrors); first occurrence wins, order (newest first) preserved.
+    def _dedupe(rels):
+        seen = set()
+        out = []
+        for r in rels:
+            d = r.get("details") or {}
+            link = d.get("link") or ""
+            key = link if link else (d.get("title", ""), d.get("hostname", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(r)
+        return out
+    results = _dedupe(results)
+
+    # Cache the FULL enriched+sorted+deduped set BEFORE pagination/cap so different
     # offset/limit requests share one cache entry. TTL is derived from the
     # pre-pagination length. Deep-copy to isolate the cache from any caller
     # mutation of the returned list/dicts.

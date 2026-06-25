@@ -370,7 +370,7 @@ def setup_arr_routes(app):
                             debug(f"Skipping release without valid link: {release.get('title')!r}")
                             continue
 
-                        _hostname = (release.get("hostname") or "unknown").upper()
+                        _hostname = sax_utils.escape((release.get("hostname") or "unknown").upper())
                         title = sax_utils.escape(release.get("title") or "Unknown Release")
                         source = sax_utils.escape(release.get("source") or "")
                         if "lazylibrarian" not in request_from.lower():
@@ -400,7 +400,7 @@ def setup_arr_routes(app):
                         # Newznab attribute name is "imdb" (Radarr reads "imdb"
                         # case-insensitively; "imdbid" does NOT match).
                         _imdb = release.get("imdb_id") or _search_imdb_id
-                        _attr_imdb = f'<attr name="imdb" value="{_imdb}"/>' if _imdb else ''
+                        _attr_imdb = f'<attr name="imdb" value="{sax_utils.escape(str(_imdb))}"/>' if _imdb else ''
 
                         items += f'''
                         <item>
@@ -428,8 +428,11 @@ def setup_arr_routes(app):
                         </item>'''
 
                     return f'''<?xml version="1.0" encoding="UTF-8"?>
-                                <rss>
+                                <rss version="2.0">
                                     <channel>
+                                        <title>kuasarr Indexer</title>
+                                        <link>https://kuasarr.indexer/</link>
+                                        <description>kuasarr Newznab Indexer API</description>
                                         {items}
                                     </channel>
                                 </rss>'''

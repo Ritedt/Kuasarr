@@ -267,14 +267,25 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
 
     info(f'Starting {len(functions)} search functions for {stype}... This may take some time.')
 
-    with ThreadPoolExecutor() as executor:
+    from kuasarr.constants import get_search_deadline, SEARCH_MAX_WORKERS
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+    deadline = get_search_deadline()
+    max_workers = min(SEARCH_MAX_WORKERS, len(functions)) or 1
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(func) for func in functions]
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-                results.extend(result)
-            except Exception as e:
-                error(f"An error occurred: {e}")
+        try:
+            for future in as_completed(futures, timeout=deadline):
+                try:
+                    result = future.result()
+                    results.extend(result)
+                except Exception as e:
+                    error(f"An error occurred: {e}")
+        except FuturesTimeoutError:
+            # Deadline reached: cancel not-yet-started, return what we have.
+            # (Running HTTP threads can't be killed — they finish/timeout on their own.)
+            for f in futures:
+                f.cancel()
+            info(f"Search deadline ({deadline}s) reached — returning {len(results)} partial results")
 
     elapsed_time = time.time() - start_time
     info(f"Providing {len(results)} releases to {request_from} for {stype}. Time taken: {elapsed_time:.2f} seconds")
@@ -341,13 +352,35 @@ def _enrich_with_xrel(shared_state, results):
 
     info(f"xREL: enriching {total} releases...")
 
+    # Fetch xREL info in PARALLEL, deduplicated by title (the same release
+    # appears across multiple sources, so we fetch each title only once).
+    # Was serial — N blocking HTTP calls; now bounded to 8 concurrent.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    unique_titles = list({
+        r.get("details", {}).get("title", "")
+        for r in results if r.get("details", {}).get("title", "")
+    })
+    xrel_map = {}
+    if unique_titles:
+        with ThreadPoolExecutor(max_workers=min(8, len(unique_titles))) as _ex:
+            future_to_title = {
+                _ex.submit(get_xrel_release_info, shared_state, t): t
+                for t in unique_titles
+            }
+            for fut in as_completed(future_to_title):
+                t = future_to_title[fut]
+                try:
+                    xrel_map[t] = fut.result()
+                except Exception:
+                    xrel_map[t] = None
+
     enriched = []
     for release in results:
         details = release.get("details", {})
         title = details.get("title", "")
         hostname = details.get("hostname", "?")
 
-        xrel_info = get_xrel_release_info(shared_state, title)
+        xrel_info = xrel_map.get(title)
 
         if xrel_info:
             matched += 1

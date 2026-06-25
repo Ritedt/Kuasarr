@@ -265,6 +265,10 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None,
             else:
                 data = response.json()
 
+        # TEMP DIAGNOSIS (remove after hide.cx parser fix): dump raw API response
+        # so the current link structure (field names / nesting) becomes visible.
+        debug(f"HIDE.CX RESPONSE ({container_id}): {str(data)[:3000]}")
+
         access_status = data.get("access_status", "unknown")
         if access_status in HIDE_DEAD_ACCESS_STATUSES:
             info(f"hide.cx: Container access_status is '{access_status}' - no retry needed")

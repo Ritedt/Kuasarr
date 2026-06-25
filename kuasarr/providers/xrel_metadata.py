@@ -353,12 +353,12 @@ def get_xrel_release_info(shared_state, dirname):
 
     if result:
         size_str = f"{result['size_mb']:.1f} MB" if result["size_mb"] is not None else "unknown size"
-        info(
+        debug(
             f"xREL [{result['source']}]: '{dirname}' → "
             f"size={size_str}, group={result['group_name']}, nuked={result['nuked']}"
         )
     else:
-        info(f"xREL: no match for '{dirname}' (exact + search)")
+        debug(f"xREL: no match for '{dirname}' (exact + search)")
 
     recently_searched[dirname] = {"result": result, "timestamp": datetime.now()}
     shared_state.update(context, recently_searched)

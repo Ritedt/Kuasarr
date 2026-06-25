@@ -11,7 +11,7 @@ radarr_api.get_wanted_imdb_ids; Kuasarr uses module functions over shared_state
 config ([Radarr] url/api_key). Unconfigured Radarr -> [] (feed must not block).
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
@@ -46,7 +46,7 @@ def get_wanted_imdb_ids(shared_state, max_pages=_WANTED_MAX_PAGES, cap=_WANTED_C
     if not client:
         return []
     base_url, headers = client
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     seen = set()
     ids = []
     try:

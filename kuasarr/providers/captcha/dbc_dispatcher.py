@@ -164,17 +164,57 @@ def _solve_filecrypt_pow_if_present(shared_state, session, output, headers):
 
     info("Filecrypt proof-of-work detected. Solving with flaresolverr-next executeJs...")
 
+    # Cubic-Bézier mouse path: filecrypt's s.js fingerprinting rejects a plain
+    # synthetic click (it returns 'clicked' but filecrypt doesn't solve the PoW).
+    # Simulate a realistic mouse movement — ~22 mousemove+pointermove events
+    # along a randomized cubic Bézier curve with timing delays — before the final
+    # click. Same approach rix1337/SponsorsHelper uses (cubic Bézier). Implemented
+    # as an async Promise so flaresolverr-next's waitInSeconds lets the motion
+    # play out before the result is read.
     click_js = """
     const box = document.querySelector('#pow-captcha .pow-captcha__box');
-    if (!box) {
-        return 'missing';
+    if (!box) return 'missing';
+    const r = box.getBoundingClientRect();
+    const tx = r.left + r.width / 2, ty = r.top + r.height / 2;
+    // Random start point offset to the upper-left of the box (realistic entry).
+    const sx = tx - (140 + Math.random() * 160);
+    const sy = ty - (60 + Math.random() * 140);
+    // Two random control points for a natural, non-linear curve.
+    const c1x = sx + (tx - sx) * (0.25 + Math.random() * 0.2) + (Math.random() - 0.5) * 70;
+    const c1y = sy + (ty - sy) * (0.15 + Math.random() * 0.2) + (Math.random() - 0.5) * 70;
+    const c2x = sx + (tx - sx) * (0.6 + Math.random() * 0.2) + (Math.random() - 0.5) * 70;
+    const c2y = sy + (ty - sy) * (0.7 + Math.random() * 0.2) + (Math.random() - 0.5) * 70;
+    function bez(t) {
+        const u = 1 - t;
+        return {
+            x: u*u*u*sx + 3*u*u*t*c1x + 3*u*t*t*c2x + t*t*t*tx,
+            y: u*u*u*sy + 3*u*u*t*c1y + 3*u*t*t*c2y + t*t*t*ty
+        };
     }
-    box.dispatchEvent(new MouseEvent('click', {
-        bubbles: false,
-        cancelable: true,
-        view: window
-    }));
-    return 'clicked';
+    function move(p) {
+        const opts = {bubbles: true, cancelable: true, view: window, clientX: p.x, clientY: p.y};
+        document.dispatchEvent(new MouseEvent('mousemove', opts));
+        if (typeof PointerEvent !== 'undefined') {
+            document.dispatchEvent(new PointerEvent('pointermove', opts));
+        }
+    }
+    return new Promise(function (resolve) {
+        const steps = 22;
+        let i = 1;
+        (function next() {
+            if (i > steps) {
+                const opts = {bubbles: true, cancelable: true, view: window, clientX: tx, clientY: ty};
+                box.dispatchEvent(new MouseEvent('mousedown', opts));
+                box.dispatchEvent(new MouseEvent('mouseup', opts));
+                box.dispatchEvent(new MouseEvent('click', opts));
+                resolve('clicked');
+                return;
+            }
+            move(bez(i / steps));
+            i++;
+            setTimeout(next, 14 + Math.floor(Math.random() * 8));  // ~14-22ms per step
+        })();
+    });
     """
 
     for _ in range(3):

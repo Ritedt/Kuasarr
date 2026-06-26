@@ -108,10 +108,14 @@ def _flaresolverr_execute_js_get(shared_state, session, url, execute_js, wait=12
 
     last_error = None
     for candidate_url in _filecrypt_url_candidates(url):
+        # maxTimeout must exceed CF-load (~10s) + JS-click + PoW-wait + reload;
+        # HTTP_DEFAULT_TIMEOUT_SECONDS (10s) is far too short for executeJs and
+        # makes flaresolverr-next abort with "Timeout after 10.0 seconds" → HTTP 500.
+        pow_timeout_ms = (wait + 45) * 1000
         payload = {
             "cmd": "request.get",
             "url": candidate_url,
-            "maxTimeout": HTTP_DEFAULT_TIMEOUT_SECONDS * 1000,
+            "maxTimeout": pow_timeout_ms,
             "waitInSeconds": wait,
             "cookies": _cookies_for_target(session, candidate_url),
             "executeJs": execute_js,
@@ -120,7 +124,7 @@ def _flaresolverr_execute_js_get(shared_state, session, url, execute_js, wait=12
             flaresolverr_url,
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS + 10),
+            timeout=get_timeout(wait + 60),
         )
         response.raise_for_status()
         result = response.json()

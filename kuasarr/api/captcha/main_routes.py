@@ -87,10 +87,16 @@ def setup_main_routes(app):
                 "mirror": desired_mirror,
                 "session": filecrypt_session,
                 "links": prioritized_links,
-                "original_url": original_url
+                "original_url": original_url,
+                "handoff_url": data.get("handoff_url")
             }
 
             encoded_payload = urlsafe_b64encode(json.dumps(payload).encode()).decode()
+
+            # Packages flagged needs_manual (filecrypt PoW that can't be auto-solved)
+            # → route to the manual solve page (browser solve + paste links).
+            if data.get("needs_manual"):
+                redirect(f"/captcha/filecrypt-manual?data={quote(encoded_payload)}")
 
             has_junkies_links = any(is_junkies_link(l) for l in prioritized_links)
             has_keeplinks_links = any(is_keeplinks_link(l) for l in prioritized_links)

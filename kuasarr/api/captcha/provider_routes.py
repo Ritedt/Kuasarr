@@ -23,6 +23,48 @@ from kuasarr.providers.log import info
 def setup_provider_routes(app):
     """Register provider-specific CAPTCHA routes."""
 
+    @app.get("/captcha/filecrypt-manual")
+    def serve_filecrypt_manual():
+        """Manual filecrypt solve page — for PoW that can't be auto-solved.
+
+        filecrypt's Proof-of-Work captcha needs browser fingerprinting that neither
+        DBC/2Captcha nor the executeJs click can provide. The user solves it in their
+        own browser (native fingerprint) and pastes the resulting download links back;
+        /captcha/bypass-submit dispatches them to JDownloader.
+        """
+        payload = decode_payload()
+        if "error" in payload:
+            return render_fail(payload["error"])
+
+        package_id = payload.get("package_id")
+        check_package_exists(package_id)
+        title = payload.get("title")
+        password = payload.get("password")
+        links = payload.get("links") or []
+
+        # Prefer the handoff_url the dispatcher recorded, else the first link URL.
+        url = payload.get("handoff_url")
+        if not url and links:
+            first = links[0]
+            url = first[0] if isinstance(first, (list, tuple)) else first
+        if not url:
+            return render_fail(f"No filecrypt URL available for package: {title}")
+
+        body = f'''<h1><img src="{images.logo}" type="image/png" alt="Kuasarr logo" class="logo"/>Kuasarr</h1>
+        <p><b>Package:</b> {title}</p>
+        <div class="info-box" style="background: #fff3cd; border: 1px solid #ffc107; padding: 1rem; border-radius: 8px; margin: 1rem 0;">
+            <h3 style="color: #856404; margin-top: 0;">⚠️ Manuelles Captcha-Lösen erforderlich</h3>
+            <p style="color: #856404; margin-bottom: 0;">
+                filecrypt nutzt ein Proof-of-Work-Captcha, das automatisch nicht gelöst
+                werden konnte. Bitte öffne den Link unten, löse das Captcha in deinem
+                Browser und füge die erhaltenen Download-Links anschließend in das
+                Eingabefeld ein.
+            </p>
+        </div>
+        {render_bypass_section(url, package_id, title, password)}'''
+
+        return render_centered_html(body)
+
     @app.get("/captcha/junkies")
     def serve_junkies_captcha():
         payload = decode_payload()

@@ -204,8 +204,8 @@ def _solve_filecrypt_pow_if_present(shared_state, session, output, headers):
         if not _get_pow_captcha(refreshed_soup):
             return refreshed
 
-    info("Filecrypt proof-of-work solve did not finish.")
-    return output
+    info("Filecrypt proof-of-work solve did not finish — needs manual browser solving.")
+    raise RuntimeError("PoW solve did not finish (needs browser fingerprint)")
 
 
 class PermanentLinkFailure(Exception):
@@ -376,6 +376,19 @@ class DBCDispatcher:
             if data.get("session"):
                 continue
 
+            # Skip packages awaiting manual captcha solving (filecrypt PoW etc.).
+            # TTL: after 7 days without a manual solve, fail the package for good
+            # (otherwise the queue fills up with packages no one ever solves).
+            if data.get("needs_manual"):
+                ts = data.get("manual_timestamp", 0)
+                try:
+                    if ts and (time.time() - float(ts) > 7 * 86400):
+                        self._mark_as_failed(package_id, data.get("title", package_id),
+                                             "Manual solve timeout (7d)")
+                except (TypeError, ValueError):
+                    pass
+                continue
+
             title = data.get("title", package_id)
             prioritized_links = self._filter_and_prioritize_links(data.get("links", []), package_id, title)
             if not prioritized_links:
@@ -448,7 +461,15 @@ class DBCDispatcher:
             
             try:
                 result = self._solve_link(title, link_url, mirror, password)
-                
+
+                # PoW/Captcha not auto-solvable → hand off to manual queue (keep package,
+                # flag it) instead of failing it.
+                if result and result.get("status") == "manual_required":
+                    self._mark_as_manual_required(
+                        package_id, title, result.get("reason", "PoW"), result.get("url")
+                    )
+                    return False
+
                 if result and result.get("status") == "success":
                     download_links = result.get("links", [])
                     if download_links:
@@ -636,7 +657,13 @@ class DBCDispatcher:
             output = _solve_filecrypt_pow_if_present(self.shared_state, session, output, headers)
             soup = BeautifulSoup(output.text, 'html.parser')
         except RuntimeError as e:
-            info(f"Filecrypt PoW solve failed: {e}")
+            msg = str(e)
+            # PoW-related failures → hand off to manual captcha queue (browser solve).
+            # Other RuntimeErrors (transient network etc.) → None → retry.
+            if "PoW" in msg or "proof-of-work" in msg or "needs browser" in msg:
+                info(f"Filecrypt PoW not auto-solvable — handing off to manual queue: {e}")
+                return {"status": "manual_required", "reason": "PoW needs browser solving", "url": url}
+            info(f"Filecrypt PoW solve failed (transient): {e}")
             return None
 
         # Check if captcha is needed
@@ -1507,6 +1534,32 @@ class DBCDispatcher:
             info(f"Misery Key error: {exc}")
         
         return ""
+
+    def _mark_as_manual_required(self, package_id: str, title: str, reason: str, url: Optional[str] = None) -> None:
+        """Flag a package as needing manual captcha solving (e.g. filecrypt PoW).
+
+        Unlike _mark_as_failed, the package stays in the protected-DB (so the WebUI
+        captcha page can pick it up) and is only removed from the dispatcher's job
+        queue (so it is not retried automatically). A timestamp enables TTL cleanup.
+        """
+        try:
+            db = self.shared_state.get_db("protected")
+            current = None
+            for pid, raw in (db.retrieve_all_titles() or []):
+                if pid == package_id:
+                    current = raw
+                    break
+            data = json.loads(current) if current else {}
+            data["needs_manual"] = True
+            data["handoff_url"] = url
+            data["manual_timestamp"] = time.time()
+            data["handoff_reason"] = reason
+            db.update_store(package_id, json.dumps(data))
+            send_discord_message(self.shared_state, title=title, case="captcha")
+        except Exception as exc:
+            debug(f"Error marking as manual_required: {exc}")
+        push_jobs.remove_job(package_id)
+        info(f"Package {title} needs manual solving (reason: {reason})")
 
     def _mark_as_failed(self, package_id: str, title: str, reason: str) -> None:
         """Mark a package as failed."""

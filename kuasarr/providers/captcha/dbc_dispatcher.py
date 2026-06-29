@@ -7,6 +7,7 @@ and integrates with the existing Filecrypt decryption logic.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import re
@@ -51,201 +52,150 @@ MAX_BACKOFF_MULTIPLIER = 8
 PROCESSING_STATUS = "processing"  # job is actively being worked on this tick
 
 
-# --- Filecrypt Proof-of-Work captcha (ported from rix1337/Quasarr) ---
+# --- Filecrypt Proof-of-Work captcha (own Python solver) ---
 # filecrypt.cc replaced reCAPTCHA/CutCaptcha with a custom PoW-captcha
-# (<div class="pow-captcha" data-challenge data-difficulty>) that needs
-# browser-side JS + fingerprinting. Solved via flaresolverr-next
-# (https://github.com/rix1337/flaresolverr-next) executeJs — DBC/2Captcha
-# cannot solve PoW.
-_FILECRYPT_TLDS = ("cc", "to", "co")
-_FLARESOLVERR_NEXT_URL = "https://github.com/rix1337/flaresolverr-next"
+# (<div class="pow-captcha" data-challenge data-difficulty>) that its own
+# JS worker solves by SHA-1 brute-force. We replicate the same algorithm
+# locally in Python — no browser, no fingerprinting, no flaresolverr.
+# Falls back to the manual-handoff path if filecrypt's server rejects the
+# token (e.g. it adds server-side fingerprinting beyond the SHA-1 PoW).
 
 
 def _get_pow_captcha(soup):
     return soup.find("div", {"id": "pow-captcha", "class": "pow-captcha"})
 
 
-def _filecrypt_url_candidates(url):
-    parsed = urlparse(url)
-    host = parsed.hostname or ""
-    parts = host.split(".")
-    if len(parts) < 2 or parts[-2] != "filecrypt":
-        return [url]
-    original_tld = parts[-1]
-    tlds = [original_tld] + [tld for tld in _FILECRYPT_TLDS if tld != original_tld]
-    urls = []
-    for tld in tlds:
-        candidate_host = ".".join([*parts[:-1], tld])
-        netloc = candidate_host
-        if parsed.port:
-            netloc = f"{candidate_host}:{parsed.port}"
-        urls.append(parsed._replace(netloc=netloc).geturl())
-    return urls
+def _sha1_hex(s):
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
 
-def _cookies_for_target(session, target_url):
-    domain = urlparse(target_url).hostname or ""
-    cookies = []
-    for cookie in session.cookies:
-        cookie_domain = cookie.domain or domain
-        normalized = cookie_domain.lstrip(".")
-        if normalized != domain and not domain.endswith("." + normalized):
-            continue
-        cookies.append({
-            "name": cookie.name,
-            "value": cookie.value,
-            "domain": cookie_domain,
-            "path": cookie.path or "/",
-        })
-    return cookies
+def _bruteforce_pow_sha1(challenge, difficulty_bits, max_seconds=180, nonce_prefix=""):
+    """Brute-force a SHA-1 PoW nonce for filecrypt.
 
+    Mirrors filecrypt's own worker: find a nonce string such that
+    `SHA1(challenge + nonce)` starts with `difficulty_bits` zero bits.
+    Stops early if the target time budget is exceeded and returns the best
+    (last) nonce attempted — same fallback behaviour as the JS worker when it
+    runs out of time.
 
-def _flaresolverr_execute_js_get(shared_state, session, url, execute_js, wait=12):
-    """Sendet JS an flaresolverr-next executeJs, returned die gelöste Seite."""
-    flaresolverr_url = shared_state.values["config"]("FlareSolverr").get("url")
-    if not flaresolverr_url:
-        raise RuntimeError("FlareSolverr URL not configured (flaresolverr-next required for Filecrypt PoW).")
+    `nonce_prefix` lets the server hint at a deterministic search start so multiple
+    parallel workers don't rediscover the same nonce — currently unused because
+    filecrypt's worker does NOT pin a prefix, but kept for parity.
+    """
+    deadline = time.time() + max_seconds
+    # Pre-compute the bit-prefix target so we can short-circuit the per-iteration
+    # cost. `prefix_hex` is the first `ceil(bits/4)` hex chars that must be zero;
+    # for non-multiple-of-4 bits we additionally mask the leading hex digit.
+    hex_chars = (difficulty_bits + 3) // 4
+    prefix_str = "0" * hex_chars
+    extra_bits = (4 - (difficulty_bits % 4)) % 4
+    need_extra = extra_bits > 0
+    # When we have leftover bits to check, the leading nibble of the next hex
+    # char must have its top `extra_bits` bits all zero (e.g. for 17-bit: top bit
+    # of the 5th hex char must be 0 ⇒ that nibble must be < 8).
+    extra_max = 1 << extra_bits
 
-    last_error = None
-    for candidate_url in _filecrypt_url_candidates(url):
-        # maxTimeout must exceed CF-load (~10s) + JS-click + PoW-wait + reload;
-        # HTTP_DEFAULT_TIMEOUT_SECONDS (10s) is far too short for executeJs and
-        # makes flaresolverr-next abort with "Timeout after 10.0 seconds" → HTTP 500.
-        pow_timeout_ms = (wait + 45) * 1000
-        payload = {
-            "cmd": "request.get",
-            "url": candidate_url,
-            "maxTimeout": pow_timeout_ms,
-            "waitInSeconds": wait,
-            "cookies": _cookies_for_target(session, candidate_url),
-            "executeJs": execute_js,
-        }
-        response = requests.post(
-            flaresolverr_url,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=get_timeout(wait + 60),
-        )
-        response.raise_for_status()
-        result = response.json()
-
-        if result.get("status") != "ok" or "solution" not in result:
-            message = result.get("message", "<no message>")
-            last_error = message
-            if "dns rebinding detected" in message.lower():
-                continue
-            raise RuntimeError(f"flaresolverr-next failed: {message}")
-
-        solution = result["solution"]
-        for cookie in solution.get("cookies", []):
-            session.cookies.set(
-                cookie.get("name"),
-                cookie.get("value"),
-                domain=cookie.get("domain"),
-                path=cookie.get("path", "/"),
-            )
-        user_agent = solution.get("userAgent")
-        if user_agent and user_agent != shared_state.values.get("user_agent"):
-            shared_state.update("user_agent", user_agent)
-        return {
-            "url": solution.get("url", candidate_url),
-            "html": solution.get("response", ""),
-            "execute_js_result": solution.get("executeJsResult"),
-        }
-
-    raise RuntimeError(f"flaresolverr-next failed: {last_error}")
+    nonce_int = 0
+    step = 0
+    last_nonce = ""
+    while time.time() < deadline:
+        nonce_str = f"{nonce_prefix}{nonce_int:x}"
+        digest = _sha1_hex(challenge + nonce_str)
+        if digest.startswith(prefix_str):
+            if not need_extra or int(digest[hex_chars], 16) < extra_max:
+                return nonce_str
+        last_nonce = nonce_str
+        nonce_int += 1
+        step += 1
+        if step % 50000 == 0:
+            # Yield to other dispatcher work + log progress so a slow solve is visible.
+            time.sleep(0)
+    return last_nonce
 
 
 def _solve_filecrypt_pow_if_present(shared_state, session, output, headers):
-    """Löst das Filecrypt PoW-Captcha via flaresolverr-next executeJs, falls vorhanden."""
+    """Solve filecrypt.cc's Proof-of-Work captcha locally.
+
+    filecrypt's PoW is a server-side SHA-1 nonce verification. The page exposes
+    `data-challenge` (challenge) + `data-difficulty` (target leading zero bits) +
+    `data-hash` (algorithm, default sha1). filecrypt's own JS worker brute-forces
+    a nonce and POSTs `POW.data` (=challenge+nonce) + `POW.x` (=nonce) to the
+    same URL. We replicate that here in pure Python — no browser fingerprinting
+    required, no flaresolverr. If the server adds server-side fingerprinting
+    beyond the SHA-1 PoW, the synthetic POST is rejected and the dispatcher
+    falls back to manual handoff (RuntimeError → needs_manual).
+    """
     soup = BeautifulSoup(output.text, "html.parser")
-    if not _get_pow_captcha(soup):
+    pow_div = _get_pow_captcha(soup)
+    if not pow_div:
         return output
 
-    info("Filecrypt proof-of-work detected. Solving with flaresolverr-next executeJs...")
+    challenge = pow_div.get("data-challenge", "")
+    difficulty = pow_div.get("data-difficulty", "")
+    hash_algo = (pow_div.get("data-hash") or "sha1").lower()
+    if not challenge or not difficulty:
+        info("Filecrypt PoW markup missing data-challenge/data-difficulty — falling back to manual.")
+        raise RuntimeError("Filecrypt PoW markup incomplete — needs manual browser solving")
 
-    # Cubic-Bézier mouse path: filecrypt's s.js fingerprinting rejects a plain
-    # synthetic click (it returns 'clicked' but filecrypt doesn't solve the PoW).
-    # Simulate a realistic mouse movement — ~22 mousemove+pointermove events
-    # along a randomized cubic Bézier curve with timing delays — before the final
-    # click. Same approach rix1337/SponsorsHelper uses (cubic Bézier). Implemented
-    # as an async Promise so flaresolverr-next's waitInSeconds lets the motion
-    # play out before the result is read.
-    click_js = """
-    const box = document.querySelector('#pow-captcha .pow-captcha__box');
-    if (!box) return 'missing';
-    const r = box.getBoundingClientRect();
-    const tx = r.left + r.width / 2, ty = r.top + r.height / 2;
-    // Random start point offset to the upper-left of the box (realistic entry).
-    const sx = tx - (140 + Math.random() * 160);
-    const sy = ty - (60 + Math.random() * 140);
-    // Two random control points for a natural, non-linear curve.
-    const c1x = sx + (tx - sx) * (0.25 + Math.random() * 0.2) + (Math.random() - 0.5) * 70;
-    const c1y = sy + (ty - sy) * (0.15 + Math.random() * 0.2) + (Math.random() - 0.5) * 70;
-    const c2x = sx + (tx - sx) * (0.6 + Math.random() * 0.2) + (Math.random() - 0.5) * 70;
-    const c2y = sy + (ty - sy) * (0.7 + Math.random() * 0.2) + (Math.random() - 0.5) * 70;
-    function bez(t) {
-        const u = 1 - t;
-        return {
-            x: u*u*u*sx + 3*u*u*t*c1x + 3*u*t*t*c2x + t*t*t*tx,
-            y: u*u*u*sy + 3*u*u*t*c1y + 3*u*t*t*c2y + t*t*t*ty
-        };
-    }
-    function move(p) {
-        const opts = {bubbles: true, cancelable: true, view: window, clientX: p.x, clientY: p.y};
-        document.dispatchEvent(new MouseEvent('mousemove', opts));
-        if (typeof PointerEvent !== 'undefined') {
-            document.dispatchEvent(new PointerEvent('pointermove', opts));
-        }
-    }
-    return new Promise(function (resolve) {
-        const steps = 22;
-        let i = 1;
-        (function next() {
-            if (i > steps) {
-                const opts = {bubbles: true, cancelable: true, view: window, clientX: tx, clientY: ty};
-                box.dispatchEvent(new MouseEvent('mousedown', opts));
-                box.dispatchEvent(new MouseEvent('mouseup', opts));
-                box.dispatchEvent(new MouseEvent('click', opts));
-                resolve('clicked');
-                return;
-            }
-            move(bez(i / steps));
-            i++;
-            setTimeout(next, 14 + Math.floor(Math.random() * 8));  // ~14-22ms per step
-        })();
-    });
-    """
+    try:
+        difficulty_bits = int(difficulty)
+    except ValueError:
+        raise RuntimeError("Filecrypt PoW difficulty not a number — needs manual browser solving")
 
-    for _ in range(3):
-        result = _flaresolverr_execute_js_get(shared_state, session, output.url, click_js, wait=12)
-
-        execute_result = result.get("execute_js_result")
-        if execute_result in (None, "", "null"):
-            raise RuntimeError(
-                "Filecrypt proof-of-work requires flaresolverr-next executeJs support. "
-                f"Make sure you are using flaresolverr-next: {_FLARESOLVERR_NEXT_URL}"
-            )
-
-        execute_result = str(execute_result)
-        if execute_result.startswith("ERROR:"):
-            raise RuntimeError("Filecrypt proof-of-work browser click failed: " + execute_result)
-
-        if execute_result != "clicked":
-            info(f"Filecrypt proof-of-work click was not possible: {execute_result}")
-            continue
-
-        refreshed = session.get(
-            result.get("url") or output.url,
-            headers=headers,
-            timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+    if hash_algo != "sha1":
+        raise RuntimeError(
+            f"Filecrypt PoW hash algorithm {hash_algo!r} not yet supported — manual solving required"
         )
-        refreshed_soup = BeautifulSoup(refreshed.text, "html.parser")
-        if not _get_pow_captcha(refreshed_soup):
-            return refreshed
 
-    info("Filecrypt proof-of-work solve did not finish — needs manual browser solving.")
-    raise RuntimeError("PoW solve did not finish (needs browser fingerprint)")
+    info(
+        f"Filecrypt PoW detected (challenge={challenge[:12]}..., difficulty={difficulty_bits} bits)."
+    )
+
+    solution = _bruteforce_pow_sha1(challenge, difficulty_bits)
+    if not solution:
+        raise RuntimeError(
+            f"Filecrypt PoW: could not find SHA-1 nonce for {difficulty_bits}-bit target within budget"
+        )
+
+    info(f"Filecrypt PoW solved (nonce={solution}, sha1={_sha1_hex(challenge + solution)[:12]}...)")
+
+    # Submit the solution via the same form field names filecrypt's own worker uses
+    # (`POW.data` = combined challenge+nonce, `POW.x` = nonce). If those names change
+    # upstream we surface a clear error and fall back to manual handoff.
+    submit_url = output.url
+    submit_data = {
+        "POW.data": challenge + solution,
+        "POW.x": solution,
+    }
+    headers_post = {**headers, "Content-Type": "application/x-www-form-urlencoded"}
+    try:
+        response = session.post(submit_url, data=submit_data, headers=headers_post,
+                                timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+                                allow_redirects=True)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Filecrypt PoW POST failed: {exc}")
+
+    refreshed_soup = BeautifulSoup(response.text, "html.parser")
+    if _get_pow_captcha(refreshed_soup):
+        # filecrypt still asking for PoW ⇒ either token format wrong or server-side
+        # fingerprinting blocks the synthetic POST. Surface a clear reason so the
+        # dispatcher can hand off to manual handoff. Capture the raw response so
+        # debugging what the server actually saw is easy from the log.
+        snippet = response.text[:300].replace("\n", " ")
+        info(
+            f"Filecrypt still shows pow-captcha after SHA-1 POST "
+            f"(status={response.status_code}, url={response.url!r}, head={snippet!r})"
+        )
+        # Try to discover the JS worker URL so future revisions can load it
+        # for offline reverse-engineering if the simple SHA-1 path keeps failing.
+        worker_script = refreshed_soup.find("script", src=re.compile(r"\.js"))
+        if worker_script and worker_script.get("src"):
+            info(f"Filecrypt worker script on rejected page: {worker_script['src']}")
+        raise RuntimeError(
+            "Filecrypt rejected the PoW solution token — likely needs server-side fingerprint"
+        )
+
+    return response
 
 
 class PermanentLinkFailure(Exception):
@@ -691,8 +641,9 @@ class DBCDispatcher:
             info(f"Password was wrong or missing. Could not get links for {title}")
             return None
 
-        # Filecrypt Proof-of-Work-Captcha lösen (falls vorhanden) via flaresolverr-next.
-        # Braucht flaresolverr-next mit executeJs — Standard-FlareSolverr kann PoW nicht.
+        # Filecrypt Proof-of-Work-Captcha lösen (falls vorhanden) via lokalem
+        # Python-Solver (SHA-1 brute-force, kein Browser, kein Fingerprinting).
+        # RuntimeError → hand-off to manual handoff (Dispatcher fängt das ab).
         try:
             output = _solve_filecrypt_pow_if_present(self.shared_state, session, output, headers)
             soup = BeautifulSoup(output.text, 'html.parser')

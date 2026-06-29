@@ -19,7 +19,9 @@ RUN apk add --no-cache \
     linux-headers \
     tzdata \
     py3-numpy \
-    py3-opencv
+    py3-opencv \
+    nodejs \
+    npm
 
 # Create venv with system packages (for py3-opencv) and install local package
 ENV VIRTUAL_ENV=/opt/venv
@@ -30,6 +32,10 @@ COPY dist/*.whl /tmp/
 RUN uv pip install /tmp/*.whl --no-deps && rm /tmp/*.whl && \
     uv pip install beautifulsoup4 bottle deathbycaptcha-official dukpy numpy pillow pycryptodomex requests urllib3 && \
     apk del build-base python3-dev
+
+# Copy the filecrypt PoW sidecar script (Node.js sandbox runner for m.js/s.js)
+COPY scripts/filecrypt_pow_sidecar.js /usr/local/share/kuasarr/filecrypt_pow_sidecar.js
+RUN chmod 0644 /usr/local/share/kuasarr/filecrypt_pow_sidecar.js
 
 # runtime defaults
 VOLUME /config

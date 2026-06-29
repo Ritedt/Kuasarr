@@ -185,6 +185,7 @@ def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
 
         here = os.path.dirname(os.path.abspath(__file__))
         sidecar_candidates = [
+            "/usr/local/share/kuasarr/filecrypt_pow_sidecar.js",  # installed location (Docker)
             os.path.normpath(os.path.join(here, "..", "..", "..", "scripts", "filecrypt_pow_sidecar.js")),
             os.path.normpath(os.path.join(here, "..", "..", "scripts", "filecrypt_pow_sidecar.js")),
         ]

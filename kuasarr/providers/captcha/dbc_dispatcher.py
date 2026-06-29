@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import base64
 import json
-import random
 import re
 import threading
 import time
@@ -661,36 +660,15 @@ class DBCDispatcher:
         # Check if captcha is needed
         no_captcha_present = bool(soup.find("form", {"class": "cnlform"}))
         info(f"Captcha check: CNL form present={no_captcha_present}")
-        
+
         if not no_captcha_present:
-            # Handle Circle-Captcha first (try to skip with fake coords)
-            circle_captcha = bool(soup.find_all("div", {"class": "circle_captcha"}))
-            i = 0
-            while circle_captcha and i < 3:
-                random_x = str(random.randint(100, 200))
-                random_y = str(random.randint(100, 200))
-                try:
-                    output = session.post(url, data=f"buttonx.x={random_x}&buttonx.y={random_y}",
-                                          headers={'User-Agent': self.shared_state.values["user_agent"],
-                                                   'Content-Type': 'application/x-www-form-urlencoded'},
-                                          timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
-                except requests.RequestException as e:
-                    # Ohne Timeout blockiert dieser POST unbegrenzt. Der Dispatcher
-                    # läuft single-threaded (max_concurrent = 1), ein hängender POST
-                    # friert also die komplette Queue ein - daher bricht der Loop
-                    # kontrolliert ab, statt den Fehler weiterzugeben.
-                    info(f"Filecrypt circle-captcha skip failed: {e}")
-                    break
-                url = output.url
-                soup = BeautifulSoup(output.text, 'html.parser')
-                circle_captcha = bool(soup.find_all("div", {"class": "circle_captcha"}))
-                i += 1
+
 
             # Now solve the main captcha (CutCaptcha or reCAPTCHA) via DBC
             info(f"Attempting to solve Filecrypt captcha '{captcha_type}' via captcha service...")
             token = self._get_captcha_token(url, soup, captcha_type)
             info(f"Captcha token received: {bool(token)}")
-            
+
             if token:
                 # filecrypt uses different field names for different captcha
                 # types. Detect from the page which field name to send the

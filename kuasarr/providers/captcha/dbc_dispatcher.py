@@ -202,6 +202,7 @@ def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
                 # Real JS starts with `function`, `const`, `;`, `//`, etc. — never `<`.
                 # If it starts with `<`, it's a CF challenge page or other HTML.
                 cache[url] = resp.text
+                info(f"Filecrypt PoW: script {url.split('/')[-1]} fetched via session GET ({len(resp.text)} bytes)")
                 return resp.text
             info(f"Filecrypt PoW: session GET {url} returned status={resp.status_code}, "
                  f"body_len={len(resp.text or '')}, head={(resp.text or '')[:60]!r} — re-bypassing CF")
@@ -222,11 +223,13 @@ def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
                     for cookie in bypass_session.cookies:
                         session.cookies.set_cookie(cookie)
                 cache[url] = bypass_output.text
+                info(f"Filecrypt PoW: script {url.split('/')[-1]} fetched via FS-bypass ({len(bypass_output.text)} bytes)")
                 return bypass_output.text
+            head = (bypass_output.text or '')[:60] if bypass_output else ''
             info(f"Filecrypt PoW: CF-bypass for {url} returned status="
                  f"{bypass_output.status_code if bypass_output else 'none'}, "
                  f"body_len={len(bypass_output.text) if bypass_output and bypass_output.text else 0}, "
-                 f"head={(bypass_output.text or '')[:60]!r}")
+                 f"head={head!r}")
         except Exception as exc:
             info(f"Filecrypt PoW: failed to CF-bypass {url}: {exc}")
         return ""

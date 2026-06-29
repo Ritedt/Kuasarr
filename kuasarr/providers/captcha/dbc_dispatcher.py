@@ -676,9 +676,21 @@ class DBCDispatcher:
             info(f"Captcha token received: {bool(token)}")
             
             if token:
-                output = session.post(url, data=f"cap_token={token}",
-                                      headers={'User-Agent': self.shared_state.values["user_agent"],
-                                               'Content-Type': 'application/x-www-form-urlencoded'})
+                # filecrypt uses different field names for different captcha
+                # types. Detect from the page which field name to send the
+                # captcha response back as.
+                recaptcha_field = soup.find("textarea", {"name": "g-recaptcha-response"})
+                field_name = recaptcha_field.get("name") if recaptcha_field else "cap_token"
+                info(f"Filecrypt: posting captcha response as field '{field_name}'")
+                output = session.post(
+                    url,
+                    data={field_name: token},
+                    headers={
+                        **self._build_post_headers(url),
+                        "Origin": urlparse(url).scheme + "://" + urlparse(url).netloc,
+                        "Referer": url,
+                    },
+                )
                 url = output.url
             else:
                 info("No captcha token received, trying to continue without token...")
@@ -699,6 +711,13 @@ class DBCDispatcher:
 
         # Extract links using existing logic
         return self._extract_filecrypt_links(session, soup, url, title, headers)
+
+    def _build_post_headers(self, url):
+        """Build default POST headers for captcha submission."""
+        return {
+            'User-Agent': self.shared_state.values["user_agent"],
+            'Content-Type': 'application/x-www-form-urlencoded',
+        }
 
     def _get_captcha_token(self, url: str, soup: BeautifulSoup,
                            captcha_type: str = 'unknown') -> Optional[str]:

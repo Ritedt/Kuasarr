@@ -257,10 +257,20 @@ def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
         with open(s_path, "w") as f:
             f.write(s_js)
 
+        # Pass the user-agent the parent session is currently using so the
+        # sandbox reports the same browser identity to m.js/s.js that
+        # FlareSolverr presented to filecrypt.cc. Otherwise the server
+        # detects the fingerprint mismatch and rejects the PoW token.
+        sidecar_env = {
+            "SIDECAR_USER_AGENT": shared_state.values.get("user_agent", ""),
+            "SIDECAR_LANGUAGE": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+            "SIDECAR_PLATFORM": "Win32",
+        }
         try:
             result = subprocess.run(
                 ["node", sidecar, m_path, s_path],
                 capture_output=True, text=True, timeout=30,
+                env={**os.environ, **sidecar_env},
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             info(f"Filecrypt PoW sidecar failed: {exc}")

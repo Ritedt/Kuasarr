@@ -10,12 +10,15 @@
 const fs = require('fs');
 const vm = require('vm');
 
-function buildSandbox() {
+function buildSandbox(overrides = {}) {
+    const ua = overrides.userAgent || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+    const lang = overrides.language || 'en-US';
+    const plat = overrides.platform || 'Linux x86_64';
     const fakeNavigator = {
-        userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        platform: 'Linux x86_64',
-        language: 'en-US',
-        languages: ['en-US', 'en'],
+        userAgent: ua,
+        platform: plat,
+        language: lang,
+        languages: [lang, lang.split('-')[0]],
         hardwareConcurrency: 8,
         deviceMemory: 8,
         webdriver: false,
@@ -134,15 +137,51 @@ async function callExport(sb, basename) {
         console.error('Usage: filecrypt_pow_sidecar.js <m.js|s.js> [<m.js|s.js> ...]');
         process.exit(2);
     }
+    // Optional environment overrides (set by Kuasarr):
+    //   SIDECAR_USER_AGENT – UA string the sandbox should report (matches the
+    //                        one FlareSolverr presented to filecrypt.cc so the
+    //                        fingerprint lines up server-side)
+    //   SIDECAR_LANGUAGE   – primary language (defaults to en-US)
+    //   SIDECAR_PLATFORM   – "Win32" or "Linux x86_64"
+    const overrides = {
+        userAgent: process.env.SIDECAR_USER_AGENT,
+        language: process.env.SIDECAR_LANGUAGE,
+        platform: process.env.SIDECAR_PLATFORM,
+    };
     try {
         const tokens = {};
         for (const arg of args) {
             const basename = require('path').basename(arg);
             const raw = fs.readFileSync(arg, 'utf-8');
             const js = cleanScript(raw);
-            const sb = buildSandbox();
+            const sb = buildSandbox(overrides);
             vm.createContext(sb);
             vm.runInContext(js, sb, { timeout: 10000 });
+            // For s.js, emit a small mouse sequence so the signal sampler
+            // has non-empty state when collect() runs (filecrypt's server
+            // validates that the signature contains at least one click).
+            if (/s\.js$/.test(basename) && sb.S && typeof sb.S.start === 'function') {
+                try { sb.S.start(); } catch (_) {}
+                for (let i = 0; i < 6; i++) {
+                    try {
+                        sb.S.recordPointer({
+                            clientX: 120 + i * 6,
+                            clientY: 220 + (i % 3) * 8,
+                            timeStamp: Date.now() + i * 30,
+                            pointerType: 'mouse',
+                            target: { tagName: 'DIV' },
+                        });
+                    } catch (_) {}
+                }
+                try {
+                    sb.S.recordClick({
+                        clientX: 156, clientY: 232,
+                        timeStamp: Date.now() + 200,
+                        target: { tagName: 'DIV' },
+                    });
+                } catch (_) {}
+                await new Promise(r => setTimeout(r, 50));
+            }
             const token = await callExport(sb, basename);
             if (/m\.js$/.test(basename)) tokens.pow_x = token;
             else if (/s\.js$/.test(basename)) tokens.pow_data = token;

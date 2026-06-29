@@ -353,10 +353,13 @@ def _solve_filecrypt_pow_if_present(shared_state, session, output, headers):
     pow_x, pow_data = _compute_pow_sidecars(
         shared_state, session, output.url, ext_url, sig_url
     )
+    info(f"Filecrypt PoW: sidecar tokens: pow_x={len(pow_x)} chars, pow_data={len(pow_data)} chars")
     if not pow_x and not pow_data:
         # Sidecars unavailable (no Node, no network, …) — still try to submit with
         # empty fields so we at least prove the SHA-1 part is wired correctly.
         info("Filecrypt PoW: sidecar fingerprinting unavailable — submitting SHA-1 only")
+    elif not pow_x or not pow_data:
+        info(f"Filecrypt PoW: sidecar returned only one of pow_x/pow_data — server will likely reject")
 
     submit_data = {
         "pow_id": pow_id,
@@ -928,9 +931,21 @@ class DBCDispatcher:
                 token = self._get_captcha_token(url, soup)
                 info(f"Captcha token received: {bool(token)}")
                 if token:
-                    output = session.post(url, data=f"cap_token={token}",
-                                          headers={'User-Agent': self.shared_state.values["user_agent"],
-                                                   'Content-Type': 'application/x-www-form-urlencoded'})
+                    # filecrypt uses different field names for different captcha
+                    # types. Detect from the page which field name to send the
+                    # captcha response back as.
+                    recaptcha_field = soup.find("textarea", {"name": "g-recaptcha-response"})
+                    field_name = recaptcha_field.get("name") if recaptcha_field else "cap_token"
+                    info(f"Filecrypt: posting captcha response as field '{field_name}'")
+                    output = session.post(
+                        url,
+                        data={field_name: token},
+                        headers={
+                            **self._build_post_headers(url),
+                            "Origin": urlparse(url).scheme + "://" + urlparse(url).netloc,
+                            "Referer": url,
+                        },
+                    )
                     url = output.url
                 else:
                     info("No captcha token received — nothing to submit")
@@ -951,6 +966,13 @@ class DBCDispatcher:
 
         # Extract links using existing logic
         return self._extract_filecrypt_links(session, soup, url, title, headers)
+
+    def _build_post_headers(self, url):
+        """Build default POST headers for captcha submission."""
+        return {
+            'User-Agent': self.shared_state.values["user_agent"],
+            'Content-Type': 'application/x-www-form-urlencoded',
+        }
 
     def _get_captcha_token(self, url: str, soup: BeautifulSoup) -> Optional[str]:
         """Get captcha token by solving via DBC."""

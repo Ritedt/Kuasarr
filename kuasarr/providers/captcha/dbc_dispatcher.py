@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 import re
 import threading
@@ -69,61 +70,171 @@ def _sha1_hex(s):
     return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
 
-def _bruteforce_pow_sha1(challenge, difficulty_bits, max_seconds=180, nonce_prefix=""):
+def _sha1_leading_zero_bits(s):
+    """Return how many leading zero bits the SHA-1 digest of s has.
+
+    Mirrors filecrypt's own `sha1lz(prefix + nonce) >= difficulty` check in
+    pow_captcha_worker.js (which counts zero bits via `Math.clz32`).
+    """
+    digest_bytes = hashlib.sha1(s.encode("utf-8")).digest()
+    return _leading_zero_bits_of_bytes(digest_bytes)
+
+
+def _leading_zero_bits_of_bytes(b):
+    """Count leading zero bits in a bytes object."""
+    bits = 0
+    for byte in b:
+        if byte == 0:
+            bits += 8
+        else:
+            # Position of highest set bit (1..8)
+            bits += 8 - byte.bit_length()
+            return bits
+    return bits
+
+
+def _bruteforce_pow_sha1(challenge, difficulty_bits, max_seconds=180):
     """Brute-force a SHA-1 PoW nonce for filecrypt.
 
-    Mirrors filecrypt's own worker: find a nonce string such that
-    `SHA1(challenge + nonce)` starts with `difficulty_bits` zero bits.
-    Stops early if the target time budget is exceeded and returns the best
-    (last) nonce attempted — same fallback behaviour as the JS worker when it
-    runs out of time.
-
-    `nonce_prefix` lets the server hint at a deterministic search start so multiple
-    parallel workers don't rediscover the same nonce — currently unused because
-    filecrypt's worker does NOT pin a prefix, but kept for parity.
+    Replicates the algorithm from filecrypt's pow_captcha_worker.js:
+      prefix = challenge + ':'
+      find nonce (as decimal int) with SHA1(prefix + nonce) having at least
+      `difficulty_bits` leading zero bits.
     """
     deadline = time.time() + max_seconds
-    # Pre-compute the bit-prefix target so we can short-circuit the per-iteration
-    # cost. `prefix_hex` is the first `ceil(bits/4)` hex chars that must be zero;
-    # for non-multiple-of-4 bits we additionally mask the leading hex digit.
-    hex_chars = (difficulty_bits + 3) // 4
-    prefix_str = "0" * hex_chars
-    extra_bits = (4 - (difficulty_bits % 4)) % 4
-    need_extra = extra_bits > 0
-    # When we have leftover bits to check, the leading nibble of the next hex
-    # char must have its top `extra_bits` bits all zero (e.g. for 17-bit: top bit
-    # of the 5th hex char must be 0 ⇒ that nibble must be < 8).
-    extra_max = 1 << extra_bits
-
+    prefix = challenge + ":"
     nonce_int = 0
-    step = 0
     last_nonce = ""
+    step = 0
     while time.time() < deadline:
-        nonce_str = f"{nonce_prefix}{nonce_int:x}"
-        digest = _sha1_hex(challenge + nonce_str)
-        if digest.startswith(prefix_str):
-            if not need_extra or int(digest[hex_chars], 16) < extra_max:
-                return nonce_str
+        # JS worker uses decimal: `prefix + nonce` (where nonce is incremented int)
+        nonce_str = str(nonce_int)
+        if _sha1_leading_zero_bits(prefix + nonce_str) >= difficulty_bits:
+            return nonce_str
         last_nonce = nonce_str
         nonce_int += 1
         step += 1
         if step % 50000 == 0:
-            # Yield to other dispatcher work + log progress so a slow solve is visible.
             time.sleep(0)
     return last_nonce
+
+
+def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
+    """Run filecrypt's m.js.R() and s.js.S.collect() in a Node.js sidecar.
+
+    filecrypt's PoW response needs a `pow_x` token (browser-capability fingerprint
+    from m.js.R()) and a `pow_data` token (mouse/timing signature from
+    s.js.S.collect()). Both run in a sandboxed browser-like environment in Node.js
+    because the JS is too dense to port by hand.
+
+    Scripts are fetched once and cached per URL; the sidecar also writes them to
+    a temp dir (so the sidecar's basename regex picks them up) and invokes Node
+    with both files in one call. Returns (pow_x, pow_data); either may be empty
+    if Node is missing, the sidecar is missing, or the network is unavailable.
+    """
+    if not ext_url or not sig_url:
+        info("Filecrypt PoW: missing data-ext/data-sig URLs — cannot compute sidecar tokens")
+        return "", ""
+
+    parsed = urlparse(output_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    if ext_url.startswith("/"):
+        ext_url = origin + ext_url
+    if sig_url.startswith("/"):
+        sig_url = origin + sig_url
+
+    cache = shared_state.values.setdefault("filecrypt_pow_scripts", {})
+
+    def _get_script(url):
+        if url in cache:
+            return cache[url]
+        try:
+            resp = session.get(url, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            info(f"Filecrypt PoW: failed to fetch {url}: {exc}")
+            return ""
+        text = resp.text
+        # Cloudflare sometimes returns the script inside an HTML <pre> block when
+        # the request bypasses its normal path; strip the wrapper if present.
+        m = re.search(r"<pre[^>]*>(.*?)</pre>", text, re.DOTALL)
+        if m:
+            text = (m.group(1).replace("&lt;", "<").replace("&gt;", ">")
+                              .replace("&amp;", "&").replace("&quot;", '"')
+                              .replace("&#39;", "'"))
+        cache[url] = text
+        return text
+
+    m_js = _get_script(ext_url)
+    s_js = _get_script(sig_url)
+    if not m_js or not s_js:
+        return "", ""
+
+    import subprocess
+    import tempfile
+    import shutil
+
+    tmpdir = tempfile.mkdtemp(prefix="filecrypt_pow_")
+    try:
+        m_path = os.path.join(tmpdir, "m.js")
+        s_path = os.path.join(tmpdir, "s.js")
+        with open(m_path, "w") as f:
+            f.write(m_js)
+        with open(s_path, "w") as f:
+            f.write(s_js)
+
+        here = os.path.dirname(os.path.abspath(__file__))
+        sidecar_candidates = [
+            os.path.normpath(os.path.join(here, "..", "..", "..", "scripts", "filecrypt_pow_sidecar.js")),
+            os.path.normpath(os.path.join(here, "..", "..", "scripts", "filecrypt_pow_sidecar.js")),
+        ]
+        sidecar = next((p for p in sidecar_candidates if os.path.exists(p)), None)
+        if not sidecar:
+            info(f"Filecrypt PoW sidecar not found in: {sidecar_candidates}")
+            return "", ""
+
+        try:
+            result = subprocess.run(
+                ["node", sidecar, m_path, s_path],
+                capture_output=True, text=True, timeout=30,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            info(f"Filecrypt PoW sidecar failed: {exc}")
+            return "", ""
+        if result.returncode != 0:
+            info(f"Filecrypt PoW sidecar exit {result.returncode}: {result.stderr.strip()[:200]}")
+            return "", ""
+
+        try:
+            tokens = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            info(f"Filecrypt PoW sidecar output not JSON: {exc}: {result.stdout[:200]}")
+            return "", ""
+        return tokens.get("pow_x", ""), tokens.get("pow_data", "")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _solve_filecrypt_pow_if_present(shared_state, session, output, headers):
     """Solve filecrypt.cc's Proof-of-Work captcha locally.
 
-    filecrypt's PoW is a server-side SHA-1 nonce verification. The page exposes
-    `data-challenge` (challenge) + `data-difficulty` (target leading zero bits) +
-    `data-hash` (algorithm, default sha1). filecrypt's own JS worker brute-forces
-    a nonce and POSTs `POW.data` (=challenge+nonce) + `POW.x` (=nonce) to the
-    same URL. We replicate that here in pure Python — no browser fingerprinting
-    required, no flaresolverr. If the server adds server-side fingerprinting
-    beyond the SHA-1 PoW, the synthetic POST is rejected and the dispatcher
-    falls back to manual handoff (RuntimeError → needs_manual).
+    filecrypt's PoW markup (`<div class="pow-captcha" data-challenge data-difficulty>`)
+    has a hidden form with these inputs that are filled and submitted together:
+        pow_id       - container identifier (constant for this page)
+        pow_nonce    - SHA-1 nonce (decimal int) found by pow_captcha_worker.js
+        pow_elapsed  - milliseconds spent solving
+        pow_pauses   - how often the worker paused (window blur)
+        pow_data     - signature from s.js.collect()
+        pow_x        - fingerprint from m.js.R()
+
+    This implementation:
+      1. Reads pow_id from the hidden <input>
+      2. Brute-forces pow_nonce (SHA-1 with `challenge + ':' + nonce`)
+      3. Calls `m.js.R()` via Node.js sidecar to get pow_x
+      4. Calls `s.js.collect()` via Node.js sidecar to get pow_data
+      5. POSTs the form to the container URL
+
+    Falls back to the manual handoff if any step fails (RuntimeError → needs_manual).
     """
     soup = BeautifulSoup(output.text, "html.parser")
     pow_div = _get_pow_captcha(soup)
@@ -132,7 +243,9 @@ def _solve_filecrypt_pow_if_present(shared_state, session, output, headers):
 
     challenge = pow_div.get("data-challenge", "")
     difficulty = pow_div.get("data-difficulty", "")
-    hash_algo = (pow_div.get("data-hash") or "sha1").lower()
+    worker_url = pow_div.get("data-worker", "") or None
+    ext_url = pow_div.get("data-ext", "") or None
+    sig_url = pow_div.get("data-sig", "") or None
     if not challenge or not difficulty:
         info("Filecrypt PoW markup missing data-challenge/data-difficulty — falling back to manual.")
         raise RuntimeError("Filecrypt PoW markup incomplete — needs manual browser solving")
@@ -142,36 +255,59 @@ def _solve_filecrypt_pow_if_present(shared_state, session, output, headers):
     except ValueError:
         raise RuntimeError("Filecrypt PoW difficulty not a number — needs manual browser solving")
 
-    if hash_algo != "sha1":
-        raise RuntimeError(
-            f"Filecrypt PoW hash algorithm {hash_algo!r} not yet supported — manual solving required"
-        )
+    # pow_id comes from the hidden input rendered by filecrypt's templating
+    pow_id_input = pow_div.find("input", {"name": "pow_id"})
+    pow_id = pow_id_input.get("value", "") if pow_id_input else ""
 
     info(
-        f"Filecrypt PoW detected (challenge={challenge[:12]}..., difficulty={difficulty_bits} bits)."
+        f"Filecrypt PoW detected (challenge={challenge[:12]}..., difficulty={difficulty_bits} bits, pow_id={pow_id!r})."
     )
 
-    solution = _bruteforce_pow_sha1(challenge, difficulty_bits)
-    if not solution:
+    t0 = time.time()
+    pow_nonce = _bruteforce_pow_sha1(challenge, difficulty_bits)
+    elapsed_ms = int((time.time() - t0) * 1000)
+    if not pow_nonce:
         raise RuntimeError(
             f"Filecrypt PoW: could not find SHA-1 nonce for {difficulty_bits}-bit target within budget"
         )
 
-    info(f"Filecrypt PoW solved (nonce={solution}, sha1={_sha1_hex(challenge + solution)[:12]}...)")
+    sha1_prefix = _sha1_hex(challenge + ":" + pow_nonce)
+    info(f"Filecrypt PoW solved (nonce={pow_nonce}, sha1={sha1_prefix[:12]}..., {elapsed_ms}ms)")
 
-    # Submit the solution via the same form field names filecrypt's own worker uses
-    # (`POW.data` = combined challenge+nonce, `POW.x` = nonce). If those names change
-    # upstream we surface a clear error and fall back to manual handoff.
-    submit_url = output.url
+    # Compute pow_x via m.js.R() sidecar and pow_data via s.js.collect() sidecar.
+    # Both run in Node.js because the JS is too dense to port by hand.
+    pow_x, pow_data = _compute_pow_sidecars(
+        shared_state, session, output.url, ext_url, sig_url
+    )
+    if not pow_x and not pow_data:
+        # Sidecars unavailable (no Node, no network, …) — still try to submit with
+        # empty fields so we at least prove the SHA-1 part is wired correctly.
+        info("Filecrypt PoW: sidecar fingerprinting unavailable — submitting SHA-1 only")
+
     submit_data = {
-        "POW.data": challenge + solution,
-        "POW.x": solution,
+        "pow_id": pow_id,
+        "pow_nonce": pow_nonce,
+        "pow_elapsed": str(elapsed_ms),
+        "pow_pauses": "0",
+        "pow_data": pow_data or "",
+        "pow_x": pow_x or "",
     }
-    headers_post = {**headers, "Content-Type": "application/x-www-form-urlencoded"}
+
+    submit_url = output.url
+    headers_post = {
+        **headers,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Origin": urlparse(submit_url).scheme + "://" + urlparse(submit_url).netloc,
+        "Referer": submit_url,
+    }
     try:
-        response = session.post(submit_url, data=submit_data, headers=headers_post,
-                                timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
-                                allow_redirects=True)
+        response = session.post(
+            submit_url,
+            data=submit_data,
+            headers=headers_post,
+            timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+            allow_redirects=True,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(f"Filecrypt PoW POST failed: {exc}")
 
@@ -186,11 +322,11 @@ def _solve_filecrypt_pow_if_present(shared_state, session, output, headers):
             f"Filecrypt still shows pow-captcha after SHA-1 POST "
             f"(status={response.status_code}, url={response.url!r}, head={snippet!r})"
         )
-        # Try to discover the JS worker URL so future revisions can load it
-        # for offline reverse-engineering if the simple SHA-1 path keeps failing.
-        worker_script = refreshed_soup.find("script", src=re.compile(r"\.js"))
-        if worker_script and worker_script.get("src"):
-            info(f"Filecrypt worker script on rejected page: {worker_script['src']}")
+        # Discover any extra JS that filecrypt may load on the rejected page so we
+        # can identify new scripts that need to be ported next iteration.
+        scripts = refreshed_soup.find_all("script", src=re.compile(r"\.(?:js|mjs)"))
+        for s in scripts:
+            info(f"Filecrypt script on rejected page: {s.get('src')}")
         raise RuntimeError(
             "Filecrypt rejected the PoW solution token — likely needs server-side fingerprint"
         )

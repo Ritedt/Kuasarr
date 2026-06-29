@@ -119,6 +119,44 @@ def _bruteforce_pow_sha1(challenge, difficulty_bits, max_seconds=180):
     return last_nonce
 
 
+def _find_pow_sidecar(shared_state):
+    """Locate (or extract) the Node.js sidecar script used for m.js / s.js tokens.
+
+    Looks in this order:
+      1. Path previously extracted to disk (cached in shared_state).
+      2. Co-located next to the package (development installs).
+      3. Legacy Docker `/usr/local/share/kuasarr/` location.
+      4. Fall back to extracting from the installed wheel via importlib.resources.
+    """
+    cached = shared_state.values.get("filecrypt_pow_sidecar_path")
+    if cached and os.path.exists(cached):
+        return cached
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.normpath(os.path.join(here, "..", "scripts", "filecrypt_pow_sidecar.js")),
+        "/usr/local/share/kuasarr/filecrypt_pow_sidecar.js",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            shared_state.values["filecrypt_pow_sidecar_path"] = p
+            return p
+
+    try:
+        from importlib.resources import files
+        src = files("kuasarr.scripts").joinpath("filecrypt_pow_sidecar.js")
+        extracted_dir = os.path.join(tempfile.gettempdir(), "kuasarr_sidecar")
+        os.makedirs(extracted_dir, exist_ok=True)
+        extracted = os.path.join(extracted_dir, "filecrypt_pow_sidecar.js")
+        if not os.path.exists(extracted):
+            with open(extracted, "wb") as f:
+                f.write(src.read_bytes())
+        shared_state.values["filecrypt_pow_sidecar_path"] = extracted
+        return extracted
+    except Exception:
+        return None
+
+
 def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
     """Run filecrypt's m.js.R() and s.js.S.collect() in a Node.js sidecar.
 
@@ -170,6 +208,11 @@ def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
     if not m_js or not s_js:
         return "", ""
 
+    sidecar = _find_pow_sidecar(shared_state)
+    if not sidecar:
+        info("Filecrypt PoW sidecar script not available — cannot compute pow_x/pow_data")
+        return "", ""
+
     import subprocess
     import tempfile
     import shutil
@@ -182,17 +225,6 @@ def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
             f.write(m_js)
         with open(s_path, "w") as f:
             f.write(s_js)
-
-        here = os.path.dirname(os.path.abspath(__file__))
-        sidecar_candidates = [
-            "/usr/local/share/kuasarr/filecrypt_pow_sidecar.js",  # installed location (Docker)
-            os.path.normpath(os.path.join(here, "..", "..", "..", "scripts", "filecrypt_pow_sidecar.js")),
-            os.path.normpath(os.path.join(here, "..", "..", "scripts", "filecrypt_pow_sidecar.js")),
-        ]
-        sidecar = next((p for p in sidecar_candidates if os.path.exists(p)), None)
-        if not sidecar:
-            info(f"Filecrypt PoW sidecar not found in: {sidecar_candidates}")
-            return "", ""
 
         try:
             result = subprocess.run(

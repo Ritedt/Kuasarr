@@ -198,18 +198,23 @@ def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
         # First try the existing session (cookie may already cover this URL)
         try:
             resp = session.get(url, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
-            if resp.status_code == 200 and len(resp.text) < 50_000 and not resp.text.startswith("<html"):
+            if resp.status_code == 200 and resp.text and not resp.text.lstrip().startswith("<"):
+                # Real JS starts with `function`, `const`, `;`, `//`, etc. — never `<`.
+                # If it starts with `<`, it's a CF challenge page or other HTML.
                 cache[url] = resp.text
                 return resp.text
-        except requests.RequestException:
-            pass
+            info(f"Filecrypt PoW: session GET {url} returned status={resp.status_code}, "
+                 f"body_len={len(resp.text or '')}, head={(resp.text or '')[:60]!r} — re-bypassing CF")
+        except requests.RequestException as exc:
+            info(f"Filecrypt PoW: session GET {url} failed: {exc}")
         # Otherwise (or if response is a CF HTML challenge), re-bypass CF on this URL
         try:
             from kuasarr.providers.network.cloudflare import ensure_session_cf_bypassed
             bypass_session, _, bypass_output = ensure_session_cf_bypassed(
                 info, shared_state, session, url, {"User-Agent": shared_state.values["user_agent"]}
             )
-            if bypass_output and bypass_output.status_code == 200:
+            if bypass_output and bypass_output.status_code == 200 and bypass_output.text \
+                    and not bypass_output.text.lstrip().startswith("<"):
                 # Merge the bypassed session's cookies into our session so the
                 # parent request (which happens in the same Python session) keeps
                 # working without re-challenges.
@@ -218,6 +223,10 @@ def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
                         session.cookies.set_cookie(cookie)
                 cache[url] = bypass_output.text
                 return bypass_output.text
+            info(f"Filecrypt PoW: CF-bypass for {url} returned status="
+                 f"{bypass_output.status_code if bypass_output else 'none'}, "
+                 f"body_len={len(bypass_output.text) if bypass_output and bypass_output.text else 0}, "
+                 f"head={(bypass_output.text or '')[:60]!r}")
         except Exception as exc:
             info(f"Filecrypt PoW: failed to CF-bypass {url}: {exc}")
         return ""

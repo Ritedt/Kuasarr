@@ -184,24 +184,42 @@ def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
     cache = shared_state.values.setdefault("filecrypt_pow_scripts", {})
 
     def _get_script(url):
+        """Fetch a filecrypt script, transparently bypassing CF if needed.
+
+        Plain session.get() can return 403 on filecrypt.cc/js/* even when the
+        parent container page loaded successfully — Cloudflare challenges
+        individual paths independently. Reuse the same Cloudflare-bypass helper
+        the parent dispatcher uses (`ensure_session_cf_bypassed`), which falls
+        back to FlareSolverr when the cookie isn't sufficient.
+        """
         if url in cache:
             return cache[url]
+        # First try the existing session (cookie may already cover this URL)
         try:
             resp = session.get(url, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
-            resp.raise_for_status()
-        except requests.RequestException as exc:
-            info(f"Filecrypt PoW: failed to fetch {url}: {exc}")
-            return ""
-        text = resp.text
-        # Cloudflare sometimes returns the script inside an HTML <pre> block when
-        # the request bypasses its normal path; strip the wrapper if present.
-        m = re.search(r"<pre[^>]*>(.*?)</pre>", text, re.DOTALL)
-        if m:
-            text = (m.group(1).replace("&lt;", "<").replace("&gt;", ">")
-                              .replace("&amp;", "&").replace("&quot;", '"')
-                              .replace("&#39;", "'"))
-        cache[url] = text
-        return text
+            if resp.status_code == 200 and len(resp.text) < 50_000 and not resp.text.startswith("<html"):
+                cache[url] = resp.text
+                return resp.text
+        except requests.RequestException:
+            pass
+        # Otherwise (or if response is a CF HTML challenge), re-bypass CF on this URL
+        try:
+            from kuasarr.providers.network.cloudflare import ensure_session_cf_bypassed
+            bypass_session, _, bypass_output = ensure_session_cf_bypassed(
+                info, shared_state, session, url, {"User-Agent": shared_state.values["user_agent"]}
+            )
+            if bypass_output and bypass_output.status_code == 200:
+                # Merge the bypassed session's cookies into our session so the
+                # parent request (which happens in the same Python session) keeps
+                # working without re-challenges.
+                if bypass_session is not session:
+                    for cookie in bypass_session.cookies:
+                        session.cookies.set_cookie(cookie)
+                cache[url] = bypass_output.text
+                return bypass_output.text
+        except Exception as exc:
+            info(f"Filecrypt PoW: failed to CF-bypass {url}: {exc}")
+        return ""
 
     m_js = _get_script(ext_url)
     s_js = _get_script(sig_url)

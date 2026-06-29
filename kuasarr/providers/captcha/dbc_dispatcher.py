@@ -829,34 +829,70 @@ class DBCDispatcher:
         # Check if captcha is needed
         no_captcha_present = bool(soup.find("form", {"class": "cnlform"}))
         info(f"Captcha check: CNL form present={no_captcha_present}")
-        
-        if not no_captcha_present:
-            # Handle Circle-Captcha first (try to skip with fake coords)
-            circle_captcha = bool(soup.find_all("div", {"class": "circle_captcha"}))
-            i = 0
-            while circle_captcha and i < 3:
-                random_x = str(random.randint(100, 200))
-                random_y = str(random.randint(100, 200))
-                output = session.post(url, data=f"buttonx.x={random_x}&buttonx.y={random_y}",
-                                      headers={'User-Agent': self.shared_state.values["user_agent"],
-                                               'Content-Type': 'application/x-www-form-urlencoded'})
-                url = output.url
-                soup = BeautifulSoup(output.text, 'html.parser')
-                circle_captcha = bool(soup.find_all("div", {"class": "circle_captcha"}))
-                i += 1
 
-            # Now solve the main captcha (CutCaptcha or reCAPTCHA) via DBC
-            info("Attempting to solve captcha via DBC...")
-            token = self._get_captcha_token(url, soup)
-            info(f"Captcha token received: {bool(token)}")
-            
-            if token:
-                output = session.post(url, data=f"cap_token={token}",
-                                      headers={'User-Agent': self.shared_state.values["user_agent"],
-                                               'Content-Type': 'application/x-www-form-urlencoded'})
-                url = output.url
+        if not no_captcha_present:
+            # Circle-Captcha: filecrypt now uses an image captcha where the user has
+            # to click inside an open circle. We send the image to DBC
+            # (solve_coordinates_captcha), which returns the (x, y) of the open circle
+            # — then submit those exact coordinates instead of random ones.
+            circle_captcha_div = soup.find("div", {"class": "circle_captcha"})
+            if circle_captcha_div and self._client:
+                info("Circle-Captcha detected, solving via DBC image solver...")
+                # The captcha image is served at /captcha/circle.php relative to the
+                # page origin. Fetch it with the same session so the PHPSESSID cookie
+                # binds the answer to this page load.
+                origin = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+                img_resp = session.get(
+                    f"{origin}/captcha/circle.php",
+                    headers={
+                        **headers,
+                        "Referer": url,
+                        "Accept": "image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5",
+                    },
+                    timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+                )
+                img_resp.raise_for_status()
+                info(f"Circle-Captcha image fetched ({len(img_resp.content)} bytes)")
+
+                coords = self._client.solve_coordinates_captcha(img_resp.content)
+                if coords:
+                    click_x, click_y = coords
+                    info(f"Circle-Captcha coordinates: x={click_x}, y={click_y}")
+                    output = session.post(
+                        url,
+                        data=f"button.x={click_x}&button.y={click_y}",
+                        headers={
+                            **headers,
+                            "Content-Type": "application/x-www-form-urlencoded",
+                            "Origin": origin,
+                            "Referer": url,
+                        },
+                        timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+                    )
+                    url = output.url
+                    soup = BeautifulSoup(output.text, 'html.parser')
+                    # If we still see circle_captcha, the answer was wrong — fall
+                    # through to the rest of the loop and let DBC retry on the
+                    # next package attempt.
+                    if soup.find("div", {"class": "circle_captcha"}):
+                        info("Circle-Captcha still present after DBC click — coordinates were wrong")
+                else:
+                    info("DBC returned no coordinates for Circle-Captcha")
             else:
-                info("No captcha token received, trying to continue without token...")
+                # No circle captcha — try CutCaptcha/reCAPTCHA/image via DBC.
+                # The previous fallback (random coords then POST without token)
+                # was a no-op that produced the 'Token rejected' message in the log;
+                # we skip that path entirely to avoid the wasted POST.
+                info("Attempting to solve captcha via DBC...")
+                token = self._get_captcha_token(url, soup)
+                info(f"Captcha token received: {bool(token)}")
+                if token:
+                    output = session.post(url, data=f"cap_token={token}",
+                                          headers={'User-Agent': self.shared_state.values["user_agent"],
+                                                   'Content-Type': 'application/x-www-form-urlencoded'})
+                    url = output.url
+                else:
+                    info("No captcha token received — nothing to submit")
         else:
             info("No CAPTCHA present. Skipping token!")
 

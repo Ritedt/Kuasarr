@@ -389,7 +389,7 @@ jobs:
           node-version: '20'
 
       - name: Cache npm dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-${{ hashFiles('kuasarr/webui/package-lock.json') }}
@@ -570,7 +570,7 @@ jobs:
           enable-cache: true
 
       - name: Cache PyInstaller Analysis
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             build

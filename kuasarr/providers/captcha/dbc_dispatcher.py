@@ -879,15 +879,30 @@ class DBCDispatcher:
             # to click inside an open circle. We send the image to DBC
             # (solve_coordinates_captcha), which returns the (x, y) of the open circle
             # — then submit those exact coordinates instead of random ones.
-            circle_captcha_div = soup.find("div", {"class": "circle_captcha"})
-            if circle_captcha_div and self._client:
+            #
+            # Detection is strict: the page must have BOTH a <div class="circle_captcha">
+            # AND an <input type="image" src="/captcha/circle.php name="button">. The
+            # CSS class alone is not enough because filecrypt's main captcha UI also
+            # contains the substring "circle_captcha" in inline styles (false positive).
+            circle_captcha_img = soup.find(
+                "input",
+                {"type": "image", "src": re.compile(r"/captcha/circle\.php")},
+            )
+            if circle_captcha_img and self._client:
                 info("Circle-Captcha detected, solving via DBC image solver...")
                 # The captcha image is served at /captcha/circle.php relative to the
                 # page origin. Fetch it with the same session so the PHPSESSID cookie
                 # binds the answer to this page load.
                 origin = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+                img_src = circle_captcha_img.get("src", "")
+                if img_src.startswith("/"):
+                    img_url = origin + img_src
+                elif img_src.startswith("http"):
+                    img_url = img_src
+                else:
+                    img_url = f"{origin}/captcha/circle.php"
                 img_resp = session.get(
-                    f"{origin}/captcha/circle.php",
+                    img_url,
                     headers={
                         **headers,
                         "Referer": url,

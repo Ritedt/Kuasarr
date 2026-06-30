@@ -158,6 +158,177 @@ def _find_pow_sidecar(shared_state):
         return None
 
 
+# JavaScript that runs inside flaresolverr-next's Chrome browser via executeJs.
+# It loads /js/m.js and /js/s.js into the same browser context that holds the
+# cf_clearance cookie, so the resulting fingerprint tokens (pow_x, pow_data)
+# match what filecrypt's server recorded when it issued the cookie.
+#
+# We strip the `export const` keyword so the assignments land on globalThis
+# instead of an ES module record — that's what the inline filecrypt worker
+# does in the page context.
+_FS_POW_EXECJS = """
+(async function() {
+  const out = {ok: false};
+  try {
+    const powDiv = document.getElementById('pow-captcha');
+    if (!powDiv) { out.error = 'no pow-captcha div'; return JSON.stringify(out); }
+    out.challenge = powDiv.getAttribute('data-challenge');
+    out.difficulty = parseInt(powDiv.getAttribute('data-difficulty'), 10);
+    out.pow_id = (powDiv.querySelector('input[name="pow_id"]') || {}).value || '';
+
+    async function loadGlobal(path) {
+      const r = await fetch(path, {credentials: 'same-origin'});
+      if (!r.ok) throw new Error('fetch ' + path + ' -> ' + r.status);
+      const txt = await r.text();
+      const cleaned = txt
+        .replace(/\\\\bexport\\\\s+const\\\\s+/g, 'globalThis.')
+        .replace(/\\\\bexport\\\\s+default\\\\s+/g, 'globalThis.__default = ')
+        .replace(/\\\\bexport\\\\s*\\\\{[^}]+\\\\}\\\\s*;?/g, '');
+      new Function(cleaned)();
+    }
+
+    await loadGlobal('/js/m.js?v=0f174e67');
+    await loadGlobal('/js/s.js?v=82c3f32b');
+
+    // Wait for both globals to be available (poll up to 3s)
+    let waits = 0;
+    while (typeof globalThis.R !== 'function' ||
+           typeof globalThis.S !== 'object' ||
+           typeof globalThis.S.collect !== 'function') {
+      await new Promise(r => setTimeout(r, 100));
+      if (++waits > 30) break;
+    }
+
+    const powBox = powDiv.querySelector('.pow-captcha__box');
+    try { if (typeof globalThis.S.start === 'function') globalThis.S.start(); } catch (e) {}
+    try {
+      if (powBox && typeof globalThis.S.recordClick === 'function') {
+        globalThis.S.recordClick({
+          clientX: 200, clientY: 220,
+          timeStamp: performance.now(),
+          target: powBox, bubbles: true
+        });
+      }
+    } catch (e) {}
+    await new Promise(r => setTimeout(r, 250));
+
+    let pow_x = '';
+    try { if (typeof globalThis.R === 'function') pow_x = String(await globalThis.R()); } catch (e) { out.r_err = e.message; }
+    let pow_data = '';
+    try { if (typeof globalThis.S.collect === 'function') pow_data = String(await globalThis.S.collect()); } catch (e) { out.s_err = e.message; }
+
+    out.pow_x = pow_x;
+    out.pow_data = pow_data;
+    out.ok = true;
+  } catch (e) {
+    out.error = e.message;
+    out.stack = (e.stack || '').slice(0, 500);
+  }
+  return JSON.stringify(out);
+})();
+""".strip()
+
+
+def _create_or_get_pow_session(shared_state):
+    """Get or create a flaresolverr-next session id for filecrypt PoW work.
+
+    Reusing a session keeps the same cf_clearance cookie + Chrome browser
+    instance across the PoW-solve and the SHA-1 POST, so the fingerprint
+    tokens match what filecrypt's server recorded.
+    """
+    sid = shared_state.values.get("filecrypt_pow_session")
+    if sid:
+        return sid
+    flaresolverr_url = shared_state.values["config"]("FlareSolverr").get("url")
+    if not flaresolverr_url:
+        return ""
+    session_name = f"kuasarr_filecrypt_pow_{int(time.time())}"
+    try:
+        resp = requests.post(
+            flaresolverr_url, json={"cmd": "sessions.create", "session": session_name},
+            headers={"Content-Type": "application/json"},
+            timeout=get_timeout(15),
+        )
+        resp.raise_for_status()
+        sid = resp.json().get("session")
+        if sid:
+            shared_state.values["filecrypt_pow_session"] = sid
+            info(f"Filecrypt PoW: created flaresolverr session {sid}")
+            return sid
+    except Exception as exc:
+        info(f"Filecrypt PoW: failed to create flaresolverr session: {exc}")
+    return ""
+
+
+def _compute_pow_via_flaresolverr(shared_state, page_url):
+    """Use flaresolverr-next's persistent browser to compute the PoW tokens.
+
+    Creates a session (or reuses one) so the cf_clearance cookie + Chrome
+    fingerprint from the parent CF bypass match the browser that runs m.js
+    and s.js. The executeJs snippet loads the two scripts into the live
+    page, calls S.start() / recordClick() / R() / S.collect(), and
+    returns the resulting pow_x + pow_data in JSON.
+
+    Returns (pow_id, pow_x, pow_data) — any element may be empty if the
+    session couldn't be created or the executeJs returned an error.
+    """
+    flaresolverr_url = shared_state.values["config"]("FlareSolverr").get("url")
+    if not flaresolverr_url:
+        return "", "", ""
+
+    sid = _create_or_get_pow_session(shared_state)
+    if not sid:
+        return "", "", ""
+
+    payload = {
+        "cmd": "request.get",
+        "url": page_url,
+        "session": sid,
+        "maxTimeout": 60000,
+        "executeJs": _FS_POW_EXECJS,
+        "waitInSeconds": 20,
+    }
+    try:
+        resp = requests.post(
+            flaresolverr_url, json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=get_timeout(90),
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        info(f"Filecrypt PoW: flaresolverr executeJs HTTP error: {exc}")
+        return "", "", ""
+
+    result = resp.json()
+    if result.get("status") != "ok":
+        info(f"Filecrypt PoW: flaresolverr status={result.get('status')}: {result.get('message', '<no msg>')[:200]}")
+        return "", "", ""
+
+    exec_result = result["solution"].get("executeJsResult", "")
+    if not exec_result:
+        info("Filecrypt PoW: flaresolverr returned empty executeJsResult")
+        return "", "", ""
+
+    try:
+        parsed = json.loads(exec_result)
+    except json.JSONDecodeError as exc:
+        info(f"Filecrypt PoW: executeJs result not JSON: {exc}: {exec_result[:200]}")
+        return "", "", ""
+
+    if not parsed.get("ok"):
+        info(f"Filecrypt PoW: executeJs inner-script failed: {parsed.get('error', '<no err>')[:200]}")
+        return "", "", ""
+
+    pow_id = parsed.get("pow_id", "")
+    pow_x = parsed.get("pow_x", "")
+    pow_data = parsed.get("pow_data", "")
+    info(
+        f"Filecrypt PoW: flaresolverr tokens pow_id={pow_id!r} "
+        f"pow_x={len(pow_x)} chars pow_data={len(pow_data)} chars"
+    )
+    return pow_id, pow_x, pow_data
+
+
 def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
     """Run filecrypt's m.js.R() and s.js.S.collect() in a Node.js sidecar.
 
@@ -348,18 +519,28 @@ def _solve_filecrypt_pow_if_present(shared_state, session, output, headers):
     sha1_prefix = _sha1_hex(challenge + ":" + pow_nonce)
     info(f"Filecrypt PoW solved (nonce={pow_nonce}, sha1={sha1_prefix[:12]}..., {elapsed_ms}ms)")
 
-    # Compute pow_x via m.js.R() sidecar and pow_data via s.js.collect() sidecar.
-    # Both run in Node.js because the JS is too dense to port by hand.
-    pow_x, pow_data = _compute_pow_sidecars(
-        shared_state, session, output.url, ext_url, sig_url
+    # Compute pow_x and pow_data in filecrypt's own browser via flaresolverr-next's
+    # persistent session + executeJs. The Node sidecar produces tokens whose browser
+    # fingerprint doesn't match the cf_clearance cookie FlareSolverr obtained, so
+    # filecrypt's server always rejects them. Running the same scripts inside the
+    # same Chrome session that solved the CF challenge produces matching tokens.
+    fs_pow_id, pow_x, pow_data = _compute_pow_via_flaresolverr(
+        shared_state, output.url
     )
-    info(f"Filecrypt PoW: sidecar tokens: pow_x={len(pow_x)} chars, pow_data={len(pow_data)} chars")
+    if fs_pow_id and fs_pow_id != pow_id:
+        # The server may rotate pow_id between requests; prefer the one the JS
+        # observed to be current.
+        info(f"Filecrypt PoW: pow_id updated from {pow_id!r} to {fs_pow_id!r} (live page)")
+        pow_id = fs_pow_id
     if not pow_x and not pow_data:
-        # Sidecars unavailable (no Node, no network, …) — still try to submit with
-        # empty fields so we at least prove the SHA-1 part is wired correctly.
-        info("Filecrypt PoW: sidecar fingerprinting unavailable — submitting SHA-1 only")
-    elif not pow_x or not pow_data:
-        info(f"Filecrypt PoW: sidecar returned only one of pow_x/pow_data — server will likely reject")
+        # Fall back to the Node sidecar (no Node, no flaresolverr, …).
+        info("Filecrypt PoW: flaresolverr tokens unavailable — falling back to Node sidecar")
+        pow_x, pow_data = _compute_pow_sidecars(
+            shared_state, session, output.url, ext_url, sig_url
+        )
+    info(f"Filecrypt PoW: final tokens pow_x={len(pow_x)} chars, pow_data={len(pow_data)} chars")
+    if not pow_x and not pow_data:
+        info("Filecrypt PoW: no tokens generated — submitting SHA-1 only (server will reject)")
 
     submit_data = {
         "pow_id": pow_id,

@@ -41,7 +41,7 @@ include = ["kuasarr*"]
 
 [tool.setuptools.package-data]
 kuasarr = ["static/*.png", "static/*.js", "static/*.html", "static/*.webmanifest", "version.json", "webui/dist/**/*"]
-"kuasarr.scripts" = ["filecrypt_pow_sidecar.js"]
+"kuasarr.scripts" = ["filecrypt_pow_sidecar.js", "filecrypt_pow_probe.js"]
 
 [tool.uv]
 package = true

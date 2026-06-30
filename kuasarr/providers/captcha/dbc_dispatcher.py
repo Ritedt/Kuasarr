@@ -120,113 +120,78 @@ def _bruteforce_pow_sha1(challenge, difficulty_bits, max_seconds=180):
     return last_nonce
 
 
-def _find_pow_sidecar(shared_state):
-    """Locate (or extract) the Node.js sidecar script used for m.js / s.js tokens.
+def _ensure_sidecar_extracted(shared_state, name):
+    """Locate a JavaScript asset in the wheel; cache its on-disk path.
 
-    Looks in this order:
-      1. Path previously extracted to disk (cached in shared_state).
-      2. Co-located next to the package (development installs).
-      3. Legacy Docker `/usr/local/share/kuasarr/` location.
-      4. Fall back to extracting from the installed wheel via importlib.resources.
+    Resolution order:
+      1. previously cached path (shared_state)
+      2. sibling of this file in source-tree: kuasarr/scripts/<name>
+      3. system-wide install dir: /usr/local/share/kuasarr/<name>
+      4. Extract from the installed wheel via importlib.resources into
+         $TMPDIR/kuasarr_sidecar/<name>.
     """
-    cached = shared_state.values.get("filecrypt_pow_sidecar_path")
+    cache_key = f"kuasarr_asset_path::{name}"
+    cached = shared_state.values.get(cache_key)
     if cached and os.path.exists(cached):
         return cached
 
     here = os.path.dirname(os.path.abspath(__file__))
     candidates = [
-        os.path.normpath(os.path.join(here, "..", "scripts", "filecrypt_pow_sidecar.js")),
-        "/usr/local/share/kuasarr/filecrypt_pow_sidecar.js",
+        os.path.normpath(os.path.join(here, "..", "scripts", name)),
+        os.path.join("/usr/local/share/kuasarr", name),
     ]
     for p in candidates:
         if os.path.exists(p):
-            shared_state.values["filecrypt_pow_sidecar_path"] = p
+            shared_state.values[cache_key] = p
             return p
 
     try:
         from importlib.resources import files
-        src = files("kuasarr.scripts").joinpath("filecrypt_pow_sidecar.js")
+        src = files("kuasarr.scripts").joinpath(name)
         extracted_dir = os.path.join(tempfile.gettempdir(), "kuasarr_sidecar")
         os.makedirs(extracted_dir, exist_ok=True)
-        extracted = os.path.join(extracted_dir, "filecrypt_pow_sidecar.js")
+        extracted = os.path.join(extracted_dir, name)
         if not os.path.exists(extracted):
             with open(extracted, "wb") as f:
                 f.write(src.read_bytes())
-        shared_state.values["filecrypt_pow_sidecar_path"] = extracted
+        shared_state.values[cache_key] = extracted
         return extracted
     except Exception:
         return None
 
 
+def _find_pow_sidecar(shared_state):
+    return _ensure_sidecar_extracted(shared_state, "filecrypt_pow_sidecar.js")
+
+
+def _find_pow_probe(shared_state):
+    return _ensure_sidecar_extracted(shared_state, "filecrypt_pow_probe.js")
+
+
 # JavaScript that runs inside flaresolverr-next's Chrome browser via executeJs.
-# It loads /js/m.js and /js/s.js into the same browser context that holds the
-# cf_clearance cookie, so the resulting fingerprint tokens (pow_x, pow_data)
-# match what filecrypt's server recorded when it issued the cookie.
+# We load the script body from disk (filecrypt_pow_probe.js) instead of inlining
+# it as a Python triple-quoted string. That eliminates the multi-pass JSON-escape
+# pipeline that was corrupting `\\\\b` regex tokens and making the previous
+# executeJs come back as an empty string.
 #
-# We strip the `export const` keyword so the assignments land on globalThis
-# instead of an ES module record — that's what the inline filecrypt worker
-# does in the page context.
-_FS_POW_EXECJS = """
-(async function() {
-  const out = {ok: false};
-  try {
-    const powDiv = document.getElementById('pow-captcha');
-    if (!powDiv) { out.error = 'no pow-captcha div'; return JSON.stringify(out); }
-    out.challenge = powDiv.getAttribute('data-challenge');
-    out.difficulty = parseInt(powDiv.getAttribute('data-difficulty'), 10);
-    out.pow_id = (powDiv.querySelector('input[name="pow_id"]') || {}).value || '';
+# The script itself reports every step (DOM, fetch, load, eval, R/S, collect)
+# in `out.steps` so the dispatcher can log exactly what failed — the previous
+# version only said "empty executeJsResult" with no detail.
+def _load_fs_execjs(shared_state):
+    """Read the executeJs snippet from disk and return its raw text.
 
-    async function loadGlobal(path) {
-      const r = await fetch(path, {credentials: 'same-origin'});
-      if (!r.ok) throw new Error('fetch ' + path + ' -> ' + r.status);
-      const txt = await r.text();
-      const cleaned = txt
-        .replace(/\\\\bexport\\\\s+const\\\\s+/g, 'globalThis.')
-        .replace(/\\\\bexport\\\\s+default\\\\s+/g, 'globalThis.__default = ')
-        .replace(/\\\\bexport\\\\s*\\\\{[^}]+\\\\}\\\\s*;?/g, '');
-      new Function(cleaned)();
-    }
-
-    await loadGlobal('/js/m.js?v=0f174e67');
-    await loadGlobal('/js/s.js?v=82c3f32b');
-
-    // Wait for both globals to be available (poll up to 3s)
-    let waits = 0;
-    while (typeof globalThis.R !== 'function' ||
-           typeof globalThis.S !== 'object' ||
-           typeof globalThis.S.collect !== 'function') {
-      await new Promise(r => setTimeout(r, 100));
-      if (++waits > 30) break;
-    }
-
-    const powBox = powDiv.querySelector('.pow-captcha__box');
-    try { if (typeof globalThis.S.start === 'function') globalThis.S.start(); } catch (e) {}
-    try {
-      if (powBox && typeof globalThis.S.recordClick === 'function') {
-        globalThis.S.recordClick({
-          clientX: 200, clientY: 220,
-          timeStamp: performance.now(),
-          target: powBox, bubbles: true
-        });
-      }
-    } catch (e) {}
-    await new Promise(r => setTimeout(r, 250));
-
-    let pow_x = '';
-    try { if (typeof globalThis.R === 'function') pow_x = String(await globalThis.R()); } catch (e) { out.r_err = e.message; }
-    let pow_data = '';
-    try { if (typeof globalThis.S.collect === 'function') pow_data = String(await globalThis.S.collect()); } catch (e) { out.s_err = e.message; }
-
-    out.pow_x = pow_x;
-    out.pow_data = pow_data;
-    out.ok = true;
-  } catch (e) {
-    out.error = e.message;
-    out.stack = (e.stack || '').slice(0, 500);
-  }
-  return JSON.stringify(out);
-})();
-""".strip()
+    If the probe file can't be located, fall back to a minimal inline snippet
+    so the dispatcher still has *something* to send.
+    """
+    path = _find_pow_probe(shared_state)
+    if path and os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as exc:
+            info(f"Filecrypt PoW: could not read probe from {path}: {exc}")
+    # Last-resort inline fallback (kept tiny on purpose: no regex backrefs).
+    return "(async function(){return JSON.stringify({ok:false,error:'probe missing'});})();"
 
 
 def _create_or_get_pow_session(shared_state):
@@ -285,7 +250,7 @@ def _compute_pow_via_flaresolverr(shared_state, page_url):
         "url": page_url,
         "session": sid,
         "maxTimeout": 60000,
-        "executeJs": _FS_POW_EXECJS,
+        "executeJs": _load_fs_execjs(shared_state),
         "waitInSeconds": 20,
     }
     try:
@@ -314,6 +279,17 @@ def _compute_pow_via_flaresolverr(shared_state, page_url):
     except json.JSONDecodeError as exc:
         info(f"Filecrypt PoW: executeJs result not JSON: {exc}: {exec_result[:200]}")
         return "", "", ""
+
+    # Diagnostic dump — log every step the probe recorded so we can see exactly
+    # where the script bailed (escape bug, sandbox limit, race condition, etc.).
+    if isinstance(parsed, dict) and parsed.get("steps"):
+        for step in parsed["steps"]:
+            info(f"Filecrypt PoW probe: {step}")
+    if isinstance(parsed, dict) and parsed.get("errors"):
+        for err in parsed["errors"]:
+            info(f"Filecrypt PoW probe error: {err}")
+    if parsed.get("reason"):
+        info(f"Filecrypt PoW probe reason: {parsed['reason']}")
 
     if not parsed.get("ok"):
         info(f"Filecrypt PoW: executeJs inner-script failed: {parsed.get('error', '<no err>')[:200]}")

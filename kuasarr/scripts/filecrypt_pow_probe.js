@@ -4,8 +4,15 @@
 // the canonical way to inject a script body into the page from executeJs — we
 // keep that one call site and use eval-via-script-element injection for m.js
 // and s.js themselves.
+//
+// IMPORTANT — Promise-Return-Konvention (Versuch 7):
+// flaresolverr-next wrappt das Snippet als `(() => { <script> })()` (Block-Body
+// Arrow) und führt es via CDP `Runtime.evaluate` mit `awaitPromise: True` aus.
+// Damit der outer Arrow das Promise explizit zurückgibt, MUSS das Snippet
+// mit `return __kuasarr_pow_solve();` enden (statt eines `(async function()
+// { ... })();`-Statement-Calls). Sonst ist `executeJsResult` ein leerer String.
 
-(async function() {
+async function __kuasarr_pow_solve() {
     const out = {steps: [], errors: []};
     const log = (step, payload) => out.steps.push({step, ...payload});
 
@@ -163,4 +170,5 @@
                          stack: (e && e.stack ? String(e.stack).slice(0, 500) : '')});
     }
     return JSON.stringify(out);
-})();
+}
+return __kuasarr_pow_solve();

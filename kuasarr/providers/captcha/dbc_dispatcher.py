@@ -271,7 +271,22 @@ def _compute_pow_via_flaresolverr(shared_state, page_url):
 
     exec_result = result["solution"].get("executeJsResult", "")
     if not exec_result:
-        info("Filecrypt PoW: flaresolverr returned empty executeJsResult")
+        # Empty result is the historical symptom of the Promise-Return-Bug fixed
+        # in Versuch 7: the probe wrapped its body in `(async function(){...})();`
+        # which is a statement-call, so the outer FlareSolverr-IIFE returned
+        # undefined instead of the inner Promise. `awaitPromise: True` then
+        # resolved to undefined → empty string. The fix lives in
+        # `kuasarr/scripts/filecrypt_pow_probe.js` (must end with
+        # `return __kuasarr_pow_solve();`). If you still see this message after
+        # the fix, check the importlib.resources tempfile cache for an outdated
+        # copy of the probe script.
+        info(
+            "Filecrypt PoW: flaresolverr returned empty executeJsResult — "
+            "Probe-Snippet-Promise-Return-Fix (Versuch 7) wahrscheinlich nicht aktiv. "
+            "Prüfe: (1) rix1337/flaresolverr-next Image aktiv, "
+            "(2) __kuasarr_pow_solve() returnt explizit, "
+            "(3) tempfile-Cache unter /tmp/kuasarr_sidecar/filecrypt_pow_probe.js aktuell."
+        )
         return "", "", ""
 
     try:
@@ -300,7 +315,8 @@ def _compute_pow_via_flaresolverr(shared_state, page_url):
     pow_data = parsed.get("pow_data", "")
     info(
         f"Filecrypt PoW: flaresolverr tokens pow_id={pow_id!r} "
-        f"pow_x={len(pow_x)} chars pow_data={len(pow_data)} chars"
+        f"pow_x={len(pow_x)} chars pow_data={len(pow_data)} chars "
+        f"pow_x_head={pow_x[:30]!r} pow_data_head={pow_data[:30]!r}"
     )
     return pow_id, pow_x, pow_data
 

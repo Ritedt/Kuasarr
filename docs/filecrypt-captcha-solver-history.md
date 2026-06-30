@@ -147,15 +147,130 @@ Kuasarr-Subprocess-Aufruf kommt aber nichts zurück.
 
 ---
 
+## Versuch 7: Promise-Return-Bug + Maglev-Anforderung (2026-06-30)
+
+**Kernidee**: Der "Snippet-Bug noch offen" aus Versuch 6 ist ein konkret
+identifizierter Promise-Return-Fehler im executeJs-Snippet. Plus die fehlende
+Berücksichtigung des Chromium-V8-Maglev-JIT, der in Chromium 138+ die
+filecrypt-SHA-1-Worker ausbremst.
+
+### Bug-Diagnose
+
+Per Code-Review von `rix1337/flaresolverr-next/src/flaresolverr_service.py`
+verifiziert: FlareSolverr-next wrappt eingehende Snippets als
+`(() => { <script> })()` (Block-Body Arrow) und führt sie via CDP
+`Runtime.evaluate` mit `awaitPromise: True` aus.
+
+Der **bisherige Snippet-Builder** in Kuasarr schrieb das Script als
+`(async function(){ ... })();` — das ist ein Statement-Call, dessen
+Promise-Return-Wert vom outer Arrow **nicht** zurückgegeben wird. Der outer
+Arrow returnt implizit `undefined`. `awaitPromise: True` awaitet dann
+`undefined` → Resultat ist leerer String. Genau das Symptom, das in Versuch 6
+dokumentiert ist.
+
+### Fix
+
+Snippet-Builder auf das Pattern umstellen, bei dem die letzte Expression des
+outer Arrows ein Promise ist:
+
+```javascript
+async function __kuasarr_pow_solve() {
+    // ... bisheriger Body unverändert ...
+    return JSON.stringify(out);
+}
+return __kuasarr_pow_solve();   // outer IIFE returnt Promise
+```
+
+### Zweite Voraussetzung: Maglev deaktivieren
+
+Ab Chromium 138 aktiviert V8 standardmäßig Maglev als Mid-Tier JIT. Für
+integer-/typed-array-lastigen SHA-1-Code (filecrypts Web-Worker) ist Maglev
+**deutlich** langsamer als TurboFan — von ~3.5 M auf ~70 k Hashes/Sekunde
+(Commit `rix1337/flaresolverr-next#41691a4`). Der Worker schafft es nicht
+mehr innerhalb des `maxTimeout` (60 s).
+
+**Fix**: `--js-flags=--no-maglev` ist im `rix1337/flaresolverr-next`-Image
+**fest im Source** (`src/utils.py` → `get_webdriver()`) eingebaut. Es ist
+**kein** zusätzliches Docker-Argument oder ENV-Variable nötig. Voraussetzung
+ist nur das richtige Image. Siehe [docs/flaresolverr-setup.md](flaresolverr-setup.md).
+
+### Code-Änderungen
+
+- `kuasarr/scripts/filecrypt_pow_probe.js` (Z. 8 + Z. 166) — Snippet-Wrapper
+  auf `async function __kuasarr_pow_solve(){...}; return __kuasarr_pow_solve();`
+  umgebaut.
+- `kuasarr/providers/captcha/dbc_dispatcher.py`:
+  - `_load_fs_execjs()` lädt das Probe-Script (zwischen Versuch 6 und 7
+    aus dem Inline-Python-String ausgelagert, damit kein JSON-Escape-Pipeline-
+    Bug die Skripte korrumpiert).
+  - `_compute_pow_via_flaresolverr()` Logging erweitert: leerer
+    `executeJsResult` triggert `awaitPromise`-Hinweis mit Troubleshooting-
+    Checkliste; erfolgreiche Tokens werden mit `pow_x_head` und
+    `pow_data_head` geloggt.
+
+### Test-Plan
+
+**Vorbereitung (einmalig):**
+
+1. Sicherstellen, dass FlareSolverr-Container auf
+   `ghcr.io/rix1337/flaresolverr-next:latest` läuft (nicht
+   `flaresolverr/flaresolverr`).
+2. Kuasarr-Container neu starten mit den geänderten Snippets.
+
+**Minimaler FS-Smoke-Test (vor dem ersten filecrypt-Versuch):**
+
+```bash
+curl -s -X POST http://flaresolverr:8191/v1 \
+  -H 'Content-Type: application/json' \
+  -d '{"cmd":"request.get","url":"https://example.com","executeJs":"return \"hello\""}'
+```
+
+Antwort muss `"executeJsResult": "hello"` enthalten. Bestätigt, dass
+FlareSolverr grundsätzlich Snippets ausführt und `awaitPromise` korrekt
+konfiguriert ist.
+
+**Manueller Live-Test gegen filecrypt-Container:**
+
+1. Über die WebUI oder via API-Aufruf einen filecrypt-Container-Link mit
+   PoW triggern (z. B. einen Test-Release in Radarr/Sonarr).
+2. Kuasarr-Logs beobachten:
+   - **Erwartet nach Fix:** `Filecrypt PoW: flaresolverr tokens pow_id='...'
+     pow_x=N chars pow_data=M chars pow_x_head='...' pow_data_head='...'`
+     mit `N, M > 0` (typisch: N ≈ 90, M ≈ 1100).
+   - **Falls weiterhin leer:** Der neue Hinweis-Text in
+     `_compute_pow_via_flaresolverr()` zeigt die Troubleshooting-Checkliste
+     (Image-Version, Snippet-Cache).
+3. **Akzeptanztest:** Wenn Tokens gefüllt sind UND filecrypt den SHA-1-POST
+   akzeptiert (kein erneutes pow-captcha im Response-Body), ist das Problem
+   gelöst.
+4. **Falls filecrypt die Tokens ablehnt:** cf_clearance-Fingerprinting-
+   Hypothese ist bestätigt → Playwright-Micro-Service (Plan B) als nächster
+   Schritt.
+
+**Probe-Script isoliert testen:** Den Inhalt von
+`filecrypt_pow_probe.js` (nach dem Fix) als `executeJs` an FlareSolverr
+schicken — Antwort zeigt `out.steps` mit `surface`, `pow-div`, `fetch-m`,
+`fetch-s`, `load-m`, `load-s`, `wait-globals`, idealerweise alle
+`ok: true`.
+
+### Ergebnis
+
+Wenn `executeJsResult` nicht mehr leer ist, ist das **strukturelle** Problem
+behoben. Die verbleibende Variable ist, ob filecrypt die berechneten Tokens
+serverseitig akzeptiert (cf_clearance-Fingerprinting). Das wissen wir erst
+nach dem ersten Live-Test gegen einen echten filecrypt-Container.
+
+---
+
 ## Aktueller Stand (30.06.2026)
 
 | Captcha-Typ | Pfad | Status |
-|---|---|---|
+| --- | --- | --- |
 | hide.cx API | `dbc_dispatcher._solve_hide_cx` | ✅ läuft (Post #67) |
 | filecrypt CNL | `dbc_dispatcher._extract_filecrypt_links` | ✅ läuft |
 | filecrypt reCAPTCHA-v2 | `dbc_dispatcher._solve_filecrypt_with_dbc` mit `g-recaptcha-response`-Field (`c2f31be`) | ✅ läuft |
 | filecrypt Circle-Captcha | `dbc_dispatcher._solve_filecrypt_with_dbc` mit DBC/2Captcha-`CoordinatesTask` (`a73be2b`, `71191f5`) | ⚠️ 2Captcha gibt `ERROR_CAPTCHA_UNSOLVABLE` zurück (Worker-Problem) |
-| filecrypt PoW | `dbc_dispatcher._solve_filecrypt_pow_if_present` | ❌ Auto-Solve scheitert (FS-executeJs Snippet-Bug offen) |
+| filecrypt PoW | `dbc_dispatcher._solve_filecrypt_pow_if_present` | ⚠️ Versuch 7 — Promise-Return-Fix + Maglev-Anforderung implementiert, Live-Test ausstehend |
 | filecrypt manueller Handoff | `kuasarr/api/captcha/provider_routes.py:serve_filecrypt_manual` | ✅ läuft (Browser-basierte Lösung durch User) |
 
 ---
@@ -178,7 +293,7 @@ Kuasarr-Subprocess-Aufruf kommt aber nichts zurück.
 ## Wichtige Commits (chronologisch)
 
 | Hash | Inhalt |
-|---|---|
+| --- | --- |
 | `ee6e942` | feat(filecrypt): Python SHA-1 PoW solver (no flaresolverr, no browser) |
 | `85f83a3` | feat(filecrypt): cubic-Béziers mouse path for PoW (replace synthetic click) |
 | `98a6b49` | feat(filecrypt): manual captcha handoff for PoW (no SponsorsHelper) |
@@ -193,6 +308,7 @@ Kuasarr-Subprocess-Aufruf kommt aber nichts zurück.
 | `39d6545` | feat(filecrypt-pow): sidecar gets parent UA + emits mouse sequence |
 | `13cf0a3` | fix(filecrypt-pow): log CF-bypass status + tighten JS-detection |
 | `ba36ad1` | feat(filecrypt-pow): compute tokens in flaresolverr-next executeJs |
+| _(ausstehend)_ | fix(filecrypt-pow): Promise-Return-Pattern im Probe-Snippet (Versuch 7) |
 
 ---
 

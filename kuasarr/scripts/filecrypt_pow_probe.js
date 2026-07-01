@@ -211,6 +211,12 @@ async function __kuasarr_pow_solve() {
             log('S-collect', {ok: false, error: 'S.collect is not a function'});
         }
 
+        // Full token values — the dispatcher reads out.pow_x / out.pow_data
+        // (NOT pow_x_len). The earlier probe only stored lengths + heads, so the
+        // tokens were computed correctly (R() len=19, S.collect() len=1365 in the
+        // live test) but never reached the POST → empty pow_x/pow_data → fallback.
+        out.pow_x = pow_x;
+        out.pow_data = pow_data;
         out.pow_x_len = pow_x.length;
         out.pow_data_len = pow_data.length;
         out.pow_x_head = pow_x.slice(0, 30);

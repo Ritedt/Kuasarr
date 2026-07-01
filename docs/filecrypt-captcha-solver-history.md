@@ -342,8 +342,24 @@ Live-Test vom 30.06.2026 14:53 (Batman.v.Superman Container):
 
 ### Versuch-8-Ergebnis
 
-Ausstehend — der Live-Test muss die Hypothese bestätigen, dass die 250 ms
-Sleep + 250 ms `recordPointer`-loser Pfad die Hauptursache war.
+Live-Test 01.07.2026 16:47 (Batman IMAX Remux UHD) hat die Race-Condition-
+Hypothese **widerlegt** — und stattdessen einen trivialeren Bug aufgedeckt:
+
+```text
+[16:47:21] Filecrypt PoW probe: {'step': 'R-call', 'ok': True, 'r_call_ms': 82, 'len': 19}
+[16:47:21] Filecrypt PoW probe: {'step': 'S-collect', 'ok': True, 's_collect_ms': 21, 'len': 1365}
+[16:47:21] Filecrypt PoW: flaresolverr tokens pow_id='6EF561D888' pow_x=0 chars pow_data=0 chars
+```
+
+`R()` war in **82 ms** fertig (nicht gehängt!), lieferte ein 19-Zeichen-Token
+(dasselbe `pow_x_len=19` aus dem manuellen FS-Test der Recherche).
+`S.collect()` lieferte 1365 Zeichen. **Aber** der Dispatcher las
+`pow_x=0 chars` — ein **Feldnamen-Bug**: die Probe speicherte nur
+`out.pow_x_len`/`out.pow_x_head`, nie `out.pow_x`. Der Dispatcher sucht aber
+nach `pow_x`/`pow_data`. Tokens wurden korrekt berechnet, aber nie ans
+Dispatcher-JSON durchgereicht → leer → Node-Sidecar-Fallback.
+
+Gefixt in Versuch 8c (Probe speichert jetzt die vollen Token-Strings).
 
 ---
 
@@ -413,6 +429,60 @@ Client-Parsing-Bug.
 
 ---
 
+## Versuch 8c: PoW-Token-Feldname-Bug (01.07.2026)
+
+**Kernidee**: Versuch 8s Race-Condition-Hypothese war falsch — `R()` ist in
+82 ms fertig, nicht gehängt. Der echte Bug war trivial: die Probe berechnete
+die Tokens korrekt, speicherte aber nur die Längen/Heads, nicht die
+Vollstrings. Der Dispatcher las `pow_x`/`pow_data` → leer → Fallback.
+
+### Versuch-8c-Bug-Diagnose
+
+Live-Log (01.07.2026 16:47, Batman IMAX Remux):
+
+```text
+[16:47:21] Filecrypt PoW probe: {'step': 'R-call', 'ok': True, 'r_call_ms': 82, 'len': 19}
+[16:47:21] Filecrypt PoW probe: {'step': 'S-collect', 'ok': True, 's_collect_ms': 21, 'len': 1365}
+[16:47:21] Filecrypt PoW: flaresolverr tokens pow_id='6EF561D888' pow_x=0 chars pow_data=0 chars
+```
+
+`R()` lieferte 19 Zeichen (exakt das `pow_x_len=19` aus dem manuellen
+FS-Test der Versuch-7-Recherche). `S.collect()` lieferte 1365 Zeichen.
+Aber der Dispatcher las `pow_x=0 chars`.
+
+Root Cause: `filecrypt_pow_probe.js` speicherte nur `out.pow_x_len`,
+`out.pow_data_len`, `out.pow_x_head`, `out.pow_data_head` — aber **niemals**
+`out.pow_x` / `out.pow_data`. Der Dispatcher in
+`_compute_pow_via_flaresolverr` (Z. 324-326) sucht aber nach genau
+`pow_id`/`pow_x`/`pow_data`. Feldnamen-Mismatch → leere Tokens →
+Node-Sidecar-Fallback → filecrypt lehnt ab (cf_clearance-Mismatch des
+Sidecars).
+
+### Versuch-8c-Fix
+
+Probe speichert jetzt die vollen Token-Strings:
+
+```javascript
+out.pow_x = pow_x;
+out.pow_data = pow_data;
+out.pow_x_len = pow_x.length;
+out.pow_data_len = pow_data.length;
+// heads bleiben für Diagnostik
+```
+
+Damit fließen die im echten Chrome erzeugten Tokens (mit zum cf_clearance
+passendem Fingerprint) erstmals zum SHA-1-POST durch — statt die Node-Sidecar-
+Tokens zu nehmen, deren Fingerprint nie passte.
+
+### Versuch-8c-Ergebnis
+
+Ausstehend — der nächste PoW-Live-Test muss zeigen, dass die FS-Tokens
+durchkommen (`pow_x=19 chars pow_data=1365 chars`) UND filecrypt den SHA-1-POST
+akzeptiert. Falls filecrypt die FS-Tokens ablehnt, wäre die cf_clearance-
+Hypothese endgültig bestätigt → Playwright-Plan B.
+
+---
+
 ## Aktueller Stand (30.06.2026)
 
 | Captcha-Typ | Pfad | Status |
@@ -421,7 +491,7 @@ Client-Parsing-Bug.
 | filecrypt CNL | `dbc_dispatcher._extract_filecrypt_links` | ✅ läuft |
 | filecrypt reCAPTCHA-v2 | `dbc_dispatcher._solve_filecrypt_with_dbc` mit `g-recaptcha-response`-Field (`c2f31be`) | ✅ läuft |
 | filecrypt Circle-Captcha | `dbc_dispatcher._solve_filecrypt_with_dbc` mit DBC/2Captcha-`CoordinatesTask` (`a73be2b`, `71191f5`) | ✅ läuft nach Parsing-Fix (Versuch 8b: `_get_task_result` extrahiert jetzt `coordinates`-Solution) |
-| filecrypt PoW | `dbc_dispatcher._solve_filecrypt_pow_if_present` | ⚠️ Versuch 8 — Race-Condition + Pointer-Sequenz implementiert, Live-Test ausstehend |
+| filecrypt PoW | `dbc_dispatcher._solve_filecrypt_pow_if_present` | ⚠️ Versuch 8c — Token-Feldname-Fix implementiert, FS-Tokens fließen jetzt zum POST; Live-Test ausstehend |
 | filecrypt manueller Handoff | `kuasarr/api/captcha/provider_routes.py:serve_filecrypt_manual` | ✅ läuft (Browser-basierte Lösung durch User) |
 
 ---
@@ -516,6 +586,7 @@ vereinbar.
 | *(ausstehend)* | fix(filecrypt-pow): race-condition on R()/S.collect() in probe (Versuch 8) |
 | *(ausstehend)* | docs(filecrypt): note on SponsorsHelper as known third-party solver (not adopted) |
 | *(ausstehend)* | fix(twocaptcha): parse CoordinatesTask solution (Circle-Captcha "ready but no token") (Versuch 8b) |
+| *(ausstehend)* | fix(filecrypt-pow): probe stores full pow_x/pow_data token strings (Versuch 8c) |
 
 ---
 

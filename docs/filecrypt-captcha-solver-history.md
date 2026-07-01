@@ -476,10 +476,149 @@ Tokens zu nehmen, deren Fingerprint nie passte.
 
 ### Versuch-8c-Ergebnis
 
-Ausstehend — der nächste PoW-Live-Test muss zeigen, dass die FS-Tokens
-durchkommen (`pow_x=19 chars pow_data=1365 chars`) UND filecrypt den SHA-1-POST
-akzeptiert. Falls filecrypt die FS-Tokens ablehnt, wäre die cf_clearance-
-Hypothese endgültig bestätigt → Playwright-Plan B.
+**Bestätigt am 01.07.2026 16:57** (Batman EXTENDED BLURAY-GMB): Der
+Feldname-Fix greift. Die im echten FlareSolverr-Chrome erzeugten Tokens
+fließen erstmals zum SHA-1-POST durch — kein Node-Sidecar-Fallback mehr:
+
+```text
+[16:57:30] R-call ok: True r_call_ms: 85 len: 19
+[16:57:30] S-collect ok: True s_collect_ms: 23 len: 1365
+[16:57:30] Filecrypt PoW: flaresolverr tokens pow_id='F7D96ADED6'
+           pow_x=19 chars pow_data=1365 chars
+           pow_x_head='2.0.63.W1s2MDVdXQ==' pow_data_head='signal_Qfi4mI6IyboJCLi4mI6ICdw'
+[16:57:30] Filecrypt still shows pow-captcha after SHA-1 POST
+```
+
+**Aber filecrypt lehnt weiterhin ab.** Damit ist die Pipeline-Seite
+(Snippet, Token-Extraktion, Feldübergabe, POST) vollständig korrekt —
+das verbleibende Problem ist **serverseitige Detection**, siehe Versuch 8d.
+
+---
+
+## Versuch 8d: Token-Decoding → Code 605 = headless-Chrome-Detection (01.07.2026)
+
+**Kernidee**: Da die FS-Tokens jetzt sichtbar sind, können wir sie decodieren
+und sehen **exakt**, warum filecrypt ablehnt. Die Tokens liefern einen
+buchstäblichen Beweis statt einer Hypothese.
+
+### pow_x-Decoding
+
+`pow_x`-Format ist **keine Semver-Version**, sondern
+`<const '2'>.<wJ>.<wx>.<base64(detectionCodes)>`:
+
+- `wJ` = Success-Bitmask (Dezimal): Bit N gesetzt wenn Detection-Funktion #N
+  Anomalien fand (sowhat=true).
+- `wx` = Fail-Bitmask (Dezimal): Bit N gesetzt wenn Funktion #N keine
+  Anomalie fand (sowhat=false) oder warf.
+- 6 Detection-Funktionen (Bits 0-5): Window-Dims, screen-Mismatch,
+  UA/WebGL-Konsistenz, Browser-Identität, languages, Bot/Headless.
+
+Live-Token decodiert:
+
+```text
+pow_x = "2.0.63.W1s2MDVdXQ=="
+  version-prefix = '2'   (konstant)
+  wJ = 0                 → KEINE Funktion fand Anomalien
+  wx = 63  (= 0b111111)  → ALLE 6 Funktionen "sauber"
+  base64-payload = btoa("[[605]]")
+```
+
+Echter Desktop-Chrome (Referenz aus der Versuch-7-Recherche):
+
+```text
+pow_x = "2.8.55.<…>"
+  wJ = 8   (0b001000) → Funktion #3 (Browser-Identität) fand Anomalien
+  wx = 55  (0b110111)
+  payload = [[402,"","chrome"],[403,""],[408,"chrome"],[604]]   (4 Codes)
+```
+
+### Code 605 entschlüsselt
+
+`m.js` definiert 6 Detection-Funktionen mit Codes 100er–600er-Serie.
+**Code 605** (0x25d, in der Bot/Headless-Funktion #5):
+
+```javascript
+if ("chrome" in window && !window.chrome.runtime && !window.chrome.webstore)
+    wd.push([605]);   // HEADLESS CHROME DETECTED
+```
+
+Echter Chrome (mit GUI) hat `window.chrome.runtime` (mit `.connect()`,
+`.sendMessage()` etc.) und `window.chrome.webstore`. **Headless Chrome /
+FlareSolverr-Chrome** hat nur einen leeren `window.chrome`-Stub (damit die
+grobe Prüfung `!!window.chrome` besteht) — die feingranulare Prüfung auf
+`.runtime`/`.webstore` schlägt fehl → Code 605 feuert.
+
+Das ist einer der bekanntesten Headless-Chrome-Indikatoren. Der Live-Test
+bestätigt exakt: `window.chrome` existiert (sonst käme Code 408), aber
+`.runtime` und `.webstore` fehlen.
+
+### pow_data-Decoding (Teil)
+
+`s.js.S.collect()` liefert `signal_` + custom-encoded base64 (reversed,
+`a→@`, `e→.`, ohne Padding). Wire-Head decodiert zum JSON-**Tail**:
+
+```text
+pow_data_head = "signal_Qfi4mI6IyboJCLi4mI6ICdw"
+  → tail: "t\":\"n\",\"ho\":\"n\"}"
+  = …"pt":"n","ho":"n"}    (Feldanfang abgeschnitten)
+```
+
+`pt`/`ho` kommen aus `window.matchMedia`:
+
+- `pt` = `matchMedia('(pointer)')` → Wert `"n"` (none). Echter Desktop-Chrome
+  meldet `"fine"` → `"f"`.
+- `ho` = `matchMedia('(hover)')` → Wert `"n"` (none). Echter Desktop-Chrome
+  meldet `"hover"` → `"h"`.
+
+Beide sind **weitere Automatisierungs-Signale**: Der FS-Chrome läuft in
+einem Modus (headless / ohne interaktives Display), in dem `matchMedia` keine
+Pointer-/Hover-Fähigkeit meldet. Die entscheidenden Cross-Check-Felder
+(`workerData.webGLVendor`, `workerData.webdriver`, `workerData.cdpCheck1`,
+`workerData.canvasFp`, `audioFp`, `pframes`-Phantom-Detects) sitzen im
+JSON-**Head** und benötigen `pow_data.slice(-60)`-Logging, um sichtbar zu
+werden (siehe offene TODOs).
+
+### Fazit Versuch 8d
+
+**Die FlareSolverr-executeJs-Pipeline ist vollständig korrekt und
+vollständig diagnostiziert.** Tokens werden im echten Chrome erzeugt und
+korrekt zum POST durchgereicht. filecrypt lehnt ab, weil der FS-Chrome
+**mehrere Headless-/Automatisierungs-Signale** sendet:
+
+1. **Code 605** (headless, primär): `window.chrome.runtime`/`.webstore` fehlen.
+2. **`pt/ho = none/none`** (sekundär): `matchMedia` ohne Pointer/Hover.
+3. Vermutlich weitere Felder im un-decodeten JSON-Head (`webGLVendor="NA"`,
+   `webdriver`, `cdpCheck1`, `pframes`).
+
+Das ist **kein Kuasarr-Bug mehr** — es ist die inhärente Grenze des
+headless-Browser-Ansatzes. filecrypt hat bewusst mehrere Schichten
+Bot-Detection eingebaut, und der FS-executeJs-Chrome durchschlägt keine davon
+zuverlässig.
+
+### Offene TODOs (nicht blockierend)
+
+- `pow_data.slice(-60)`-Logging in der Probe ergänzen, um `workerData.*` und
+  die weiteren Cross-Check-Felder sichtbar zu machen (vollständiges Bild,
+  falls der Pfad jemals wieder aktiv verfolgt wird).
+- Detection-Code-Vollständigkeit in m.js dokumentieren (402/403/408/604/605
+  sind entschlüsselt; die 100er/200er/300er/500er-Serien sind in der
+  Recherche erfasst, aber nicht alle im Live-Test aufgetaucht).
+
+### Status
+
+PoW-Auto-Solve ist mit der aktuellen Architektur (FlareSolverr-next headless)
+**nicht zuverlässig erreichbar**, weil die Headless-Detection von filecrypt
+das konzeptionelle Limit dieses Pfades ist. Der PoW-Pfad bleibt auf dem
+**manuellen Handoff** (`/captcha`-Route) stehen, bis entweder:
+
+1. FlareSolverr in einem **headed**-Modus (Xvfb/Virtual-Display) läuft, der
+   `window.chrome.runtime`/`matchMedia` korrekt meldet — oder
+2. Ein **echter** Browser (Playwright mit `Input.dispatchMouseEvent` +
+   Anti-Detection-Hardening, oder headed Camoufox) den PoW löst.
+
+Beide sind erhebliche Architektur-Änderungen und stehen unter dem
+Kuasarr-Constraint `linux/arm/v7` (Playwright/Camoufox unterstützen kein
+arm/v7 nativ).
 
 ---
 
@@ -491,7 +630,7 @@ Hypothese endgültig bestätigt → Playwright-Plan B.
 | filecrypt CNL | `dbc_dispatcher._extract_filecrypt_links` | ✅ läuft |
 | filecrypt reCAPTCHA-v2 | `dbc_dispatcher._solve_filecrypt_with_dbc` mit `g-recaptcha-response`-Field (`c2f31be`) | ✅ läuft |
 | filecrypt Circle-Captcha | `dbc_dispatcher._solve_filecrypt_with_dbc` mit DBC/2Captcha-`CoordinatesTask` (`a73be2b`, `71191f5`) | ✅ läuft nach Parsing-Fix (Versuch 8b: `_get_task_result` extrahiert jetzt `coordinates`-Solution) |
-| filecrypt PoW | `dbc_dispatcher._solve_filecrypt_pow_if_present` | ⚠️ Versuch 8c — Token-Feldname-Fix implementiert, FS-Tokens fließen jetzt zum POST; Live-Test ausstehend |
+| filecrypt PoW | `dbc_dispatcher._solve_filecrypt_pow_if_present` | ❌ Auto-Solve nicht zuverlässig möglich (Versuch 8d: headless-Detection Code 605 + `pt/ho=none/none`); Pipeline korrekt, Limit ist headless-Browser; manueller Handoff aktiv |
 | filecrypt manueller Handoff | `kuasarr/api/captcha/provider_routes.py:serve_filecrypt_manual` | ✅ läuft (Browser-basierte Lösung durch User) |
 
 ---
@@ -564,6 +703,53 @@ vereinbar.
 
 ---
 
+## Geprüfte Alternative: Real-Debrid (löst PoW nicht, aber Hoster-Paywall)
+
+Real-Debrid (`real-debrid.com`) wurde am 01.07.2026 als möglicher Weg
+evaluiert, das filecrypt-PoW-Problem zu umgehen. **Ergebnis: RD löst das
+PoW-Problem nicht**, ist aber als separate Stufe für Hoster-Downloads
+nutzbar.
+
+### Warum RD filecrypt-PoW nicht löst
+
+- RD entschlüsselt **keine** filecrypt.cc-Container (weder als URL noch als
+  Format). filecrypt ist kein unterstützter Hoster und kein unterstütztes
+  Container-Format.
+- `PUT /unrestrict/containerFile` akzeptiert nur **RSDF, CCF, CCF3, DLC**
+  als Datei-Upload — und der DLC-Download bei filecrypt hängt ebenfalls
+  hinter dem PoW-Captcha.
+- RD greift **zu spät**: Kuasarr scheitert bereits daran, die Container-Seite
+  zu öffnen und die Hoster-Links zu extrahieren. Wenn das geschafft ist, ist
+  das PoW-Hindernis bereits überwunden.
+
+### Wo RD trotzdem nützlich wäre (separate Stufe, separater Feature-Wunsch)
+
+- RD unterstützt **11 von 12 Kuasarr-Standardhostern** (rapidgator,
+  ddownload, turbobit, katfile, 1fichier, filefactory, keep2share, filer,
+  nitroflare, uptobox, mediafire, mega — nur `uploaded` nicht).
+- Für **direkte** Hoster-Links (nicht über filecrypt) könnte RD die
+  Hoster-Paywall eliminieren: `/unrestrict/link` → unrestricted
+  Download-URL → an JDownloader. JD bräuchte keinen Hoster-Account und kein
+  Warten mehr.
+- API: `POST https://api.real-debrid.com/rest/1.0/unrestrict/link`,
+  Header `Authorization: Bearer <TOKEN>`, Body `link=<url>`. Response-Feld
+  `download` ist die unrestricted URL.
+- Multi-Arch: kein Problem (nur HTTP-Calls), funktioniert auf amd64/arm64/arm/v7.
+
+### Möglicher Einfügepunkt (falls je gewünscht)
+
+[`shared_state.py:download_package()`](../kuasarr/providers/shared_state.py)
+— nach `filter_blocked_hosters()`, vor `device.linkgrabber.add_links()`.
+Pro URL prüfen: RD-supported Hoster? → `/unrestrict/link` → `download`-URL
+statt Original an JD senden. Neue `kuasarr/providers/debrid.py`, Config-Section
+`[RealDebrid]`, ENV `REAL_DEBRID_API_TOKEN`.
+
+**Status**: nicht integriert. RD-Abo nicht extra für filecrypt abschließen;
+erst relevant, wenn das PoW-Problem anderweitig gelöst ist oder für direkte
+Links als Download-Beschleuniger.
+
+---
+
 ## Wichtige Commits (chronologisch)
 
 | Hash | Inhalt |
@@ -587,6 +773,7 @@ vereinbar.
 | *(ausstehend)* | docs(filecrypt): note on SponsorsHelper as known third-party solver (not adopted) |
 | *(ausstehend)* | fix(twocaptcha): parse CoordinatesTask solution (Circle-Captcha "ready but no token") (Versuch 8b) |
 | *(ausstehend)* | fix(filecrypt-pow): probe stores full pow_x/pow_data token strings (Versuch 8c) |
+| *(ausstehend)* | docs(filecrypt): Versuch 8d token-decoding (Code 605 = headless detection) + Real-Debrid note |
 
 ---
 

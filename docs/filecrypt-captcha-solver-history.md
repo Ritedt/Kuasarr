@@ -630,7 +630,7 @@ arm/v7 nativ).
 | filecrypt CNL | `dbc_dispatcher._extract_filecrypt_links` | ✅ läuft |
 | filecrypt reCAPTCHA-v2 | `dbc_dispatcher._solve_filecrypt_with_dbc` mit `g-recaptcha-response`-Field (`c2f31be`) | ✅ läuft |
 | filecrypt Circle-Captcha | `dbc_dispatcher._solve_filecrypt_with_dbc` mit DBC/2Captcha-`CoordinatesTask` (`a73be2b`, `71191f5`) | ✅ läuft nach Parsing-Fix (Versuch 8b: `_get_task_result` extrahiert jetzt `coordinates`-Solution) |
-| filecrypt PoW | `dbc_dispatcher._solve_filecrypt_pow_if_present` | ❌ Auto-Solve nicht zuverlässig möglich (Versuch 8d: headless-Detection Code 605 + `pt/ho=none/none`); Pipeline korrekt, Limit ist headless-Browser; manueller Handoff aktiv |
+| filecrypt PoW | `dbc_dispatcher._solve_filecrypt_pow_if_present` | ⚠️ Versuch 10 — Pipeline auf click-and-let-page-solve umgebaut (flaresolverr-next executeJs, Bézier-Klick → filecrypt-eigene JS rechnet + POST); erstes diagnose-fähiges Live-Test-Resultat ausstehend |
 | filecrypt manueller Handoff | `kuasarr/api/captcha/provider_routes.py:serve_filecrypt_manual` | ✅ läuft (Browser-basierte Lösung durch User) |
 
 ---
@@ -750,6 +750,77 @@ Links als Download-Beschleuniger.
 
 ---
 
+## Versuch 10: click-and-let-page-solve (01.07.2026)
+
+**Kernidee**: Versuch 8d schloss, dass FlareSolverr-next `[[605]]` zeigte
+und headless Chrome die Signale grundsätzlich nicht löst. Daraufhin FS-next
+am Source gelesen (`utils.py`, `flaresolverr_service.py`) — **Korrektur**: auf
+Linux/Docker läuft FS-next via `start_xvfb_display()` **headed** (echtes
+`window.chrome.runtime`), nicht headless. Code 605 war deshalb ein **Artefakt
+unseres Snippets**: das Probe-Skript injizierte `m.js`/`s.js` per
+`<script textContent>` in die executeJs-isolierte Welt, wo der echte
+Chromium-Fingerprint fehlte. Wir haben filecrypts main-world PoW-Logik
+nie ausgeführt.
+
+**Lösung** (reverse-engineered aus `rix1337/sponsors-helper`, dokumentiert in
+`filecrypt-pow-reverse-engineering.md`): die executeJs-Snippet klickt
+filecrypts PoW-Box (cubic-Bézier Pointer-Glide + Click) und überlässt filecrypts
+eigener `m.js`/`s.js` das Rechnen + Submitten. filecrypt holt sich den Token
+im echten headed-Chrome und POSTet ihn selbst — nichts wird extrahiert,
+kein SHA-1-Bruteforce nötig.
+
+```text
+# Ablauf im Browser (gleicherheaded-Xvfb-Chromium wie CF-Bypass):
+
+  1. wait-globals  (data-state="done" + pow_data Hidden-Input, max 6s)
+  2. cubik-Bezier-Mauspfad zum .pow-captcha__box
+  3. click-Sequenz: pointerover/enter, mouseover,
+     pointerdown/mousedown, pointerup/mouseup, box.click()
+  4. fetch(form.action, {credentials:'include', …}) — re-Submit im Browser
+  5. Return {status, code, url, haspow, html}
+```
+
+### Code-Änderungen (jüngst, chronologisch)
+
+- `kuasarr/scripts/filecrypt_pow_probe.js` — komplett neu: Bézier-Glide,
+  Form-Submit-Intercept und `fetch`-POST im Browser, plus
+  Fingerprint-Diagnostik (`hasChromeRuntime`, `pointer`, `hover`).
+- `kuasarr/providers/captcha/dbc_dispatcher.py`:
+  - `_compute_pow_via_flaresolverr` — neuer Returntyp:
+    `_PowSolvedResponse | None` (statt `(pow_id, pow_x, pow_data)`).
+    Parst die `executeJsResult`-JSON und surfaced die Diagnostik.
+  - `_solve_filecrypt_pow_if_present` — Retry-Loop (3 Versuche) auf
+    `haspow`/`status`, kein SHA-1-Bruteforce mehr.
+  - **Gelöscht**: `_sha1_hex`, `_sha1_leading_zero_bits`,
+    `_leading_zero_bits_of_bytes`, `_bruteforce_pow_sha1`,
+    `_find_pow_sidecar`, `_compute_pow_sidecars` (Node-Fallback tot).
+- `kuasarr/scripts/filecrypt_pow_sidecar.js` — gelöscht (Node-Sidecar tot).
+- `scripts/poc_camoufox_filecrypt.py` — gelöscht (Camoufox-Pfad
+  verworfen, da FS-next mit korrektem Snippet reicht).
+- `pyproject.toml` — `kuasarr.scripts` listet jetzt nur noch den
+  Probe-Snippet.
+
+### Versuch-10-Ergebnis
+
+**Erstes Live-Test-Resultat ausstehend.** Beim nächsten filecrypt-PoW-Live-Test
+sollte der Dispatcher-Log einen `probe diag`-Eintrag zeigen, der die
+605-Frage ein für alle Mal beantwortet:
+
+- `hasChromeRuntime=True` + `pointer='fine'` + `hover='hover'`
+  → Code 605 war tatsächlich nur unser Re-Injection-Artefakt →
+  click-and-let-page-solve löst filecrypts PoW im headed-Xvfb-Chrome.
+
+- `hasChromeRuntime=False` + `pointer='none'` + `hover='none'`
+  → FS-next läuft NICHT headed oder Headless-Container bleibt
+  Headless-Modus → der gepatchte Bin-Patch reicht nicht → Playwright o.Ä.
+  nötig, manueller Handoff.
+
+- `haspow=True` oder `status≠'ok'` nach Retry-Loop →
+  filecrypt-Re-Submit-Regeln (wahrscheinlich isTrusted oder zusätzliche
+  Signale, die wir noch nicht erkennen) → weitere Diagnostik nötig.
+
+---
+
 ## Wichtige Commits (chronologisch)
 
 | Hash | Inhalt |
@@ -774,6 +845,7 @@ Links als Download-Beschleuniger.
 | *(ausstehend)* | fix(twocaptcha): parse CoordinatesTask solution (Circle-Captcha "ready but no token") (Versuch 8b) |
 | *(ausstehend)* | fix(filecrypt-pow): probe stores full pow_x/pow_data token strings (Versuch 8c) |
 | *(ausstehend)* | docs(filecrypt): Versuch 8d token-decoding (Code 605 = headless detection) + Real-Debrid note |
+| *(ausstehend)* | refactor(filecrypt-pow): click-and-let-page-solve pipeline (Bézier + fetch-POST, retry-loop, dead-code removal) (Versuch 10) |
 
 ---
 

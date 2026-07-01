@@ -7,7 +7,6 @@ and integrates with the existing Filecrypt decryption logic.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import random
@@ -54,73 +53,44 @@ MAX_BACKOFF_MULTIPLIER = 8
 PROCESSING_STATUS = "processing"  # job is actively being worked on this tick
 
 
-# --- Filecrypt Proof-of-Work captcha (own Python solver) ---
-# filecrypt.cc replaced reCAPTCHA/CutCaptcha with a custom PoW-captcha
-# (<div class="pow-captcha" data-challenge data-difficulty>) that its own
-# JS worker solves by SHA-1 brute-force. We replicate the same algorithm
-# locally in Python — no browser, no fingerprinting, no flaresolverr.
-# Falls back to the manual-handoff path if filecrypt's server rejects the
-# token (e.g. it adds server-side fingerprinting beyond the SHA-1 PoW).
+# --- Filecrypt Proof-of-Work captcha (click-and-let-page-solve) ---
+# filecrypt.cc's PoW (<div id="pow-captcha" data-challenge data-difficulty>) is
+# solved by filecrypt's OWN JS worker (SHA-1 brute-force + browser fingerprint).
+# Earlier Kuasarr attempts replicated the SHA-1 in Python and POSTed self-built
+# pow_x/pow_data tokens — filecrypt rejected them (the re-injected fingerprint
+# flagged Code 605). The working mechanic (reverse-engineered from rix1337's
+# sponsors-helper, see docs/filecrypt-pow-reverse-engineering.md): send a JS
+# snippet to flaresolverr-next's executeJs that CLICKS filecrypt's PoW box
+# (cubic-Bezier pointer glide + click), lets filecrypt's main-world JS compute
+# the clean token, then re-submits the form via in-browser fetch() and returns
+# the unlocked page HTML. No token is extracted, no nonce brute-forced, no
+# fingerprint touched — pure browser automation of filecrypt's own UI flow.
 
 
 def _get_pow_captcha(soup):
     return soup.find("div", {"id": "pow-captcha", "class": "pow-captcha"})
 
 
-def _sha1_hex(s):
-    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+class _PowSolvedResponse:
+    """Minimal response-like returned when PoW is solved via executeJs.
 
-
-def _sha1_leading_zero_bits(s):
-    """Return how many leading zero bits the SHA-1 digest of s has.
-
-    Mirrors filecrypt's own `sha1lz(prefix + nonce) >= difficulty` check in
-    pow_captcha_worker.js (which counts zero bits via `Math.clz32`).
+    Quacks like requests.Response for the downstream CNL/DLC extraction: carries
+    the unlocked-page HTML (.text), the final URL (.url) and the HTTP status
+    (.status_code). Built from the JSON the in-browser fetch() in the probe
+    returns, so the rest of the pipeline can parse it with BeautifulSoup exactly
+    like a normal page GET.
     """
-    digest_bytes = hashlib.sha1(s.encode("utf-8")).digest()
-    return _leading_zero_bits_of_bytes(digest_bytes)
+
+    __slots__ = ("text", "url", "status_code", "content")
+
+    def __init__(self, text: str, url: str, status_code: int):
+        self.text = text
+        self.url = url
+        self.status_code = status_code
+        self.content = text.encode("utf-8", "replace") if isinstance(text, str) else text
 
 
-def _leading_zero_bits_of_bytes(b):
-    """Count leading zero bits in a bytes object."""
-    bits = 0
-    for byte in b:
-        if byte == 0:
-            bits += 8
-        else:
-            # Position of highest set bit (1..8)
-            bits += 8 - byte.bit_length()
-            return bits
-    return bits
-
-
-def _bruteforce_pow_sha1(challenge, difficulty_bits, max_seconds=180):
-    """Brute-force a SHA-1 PoW nonce for filecrypt.
-
-    Replicates the algorithm from filecrypt's pow_captcha_worker.js:
-      prefix = challenge + ':'
-      find nonce (as decimal int) with SHA1(prefix + nonce) having at least
-      `difficulty_bits` leading zero bits.
-    """
-    deadline = time.time() + max_seconds
-    prefix = challenge + ":"
-    nonce_int = 0
-    last_nonce = ""
-    step = 0
-    while time.time() < deadline:
-        # JS worker uses decimal: `prefix + nonce` (where nonce is incremented int)
-        nonce_str = str(nonce_int)
-        if _sha1_leading_zero_bits(prefix + nonce_str) >= difficulty_bits:
-            return nonce_str
-        last_nonce = nonce_str
-        nonce_int += 1
-        step += 1
-        if step % 50000 == 0:
-            time.sleep(0)
-    return last_nonce
-
-
-def _ensure_sidecar_extracted(shared_state, name):
+def _ensure_script_path(shared_state, name):
     """Locate a JavaScript asset in the wheel; cache its on-disk path.
 
     Resolution order:
@@ -160,12 +130,8 @@ def _ensure_sidecar_extracted(shared_state, name):
         return None
 
 
-def _find_pow_sidecar(shared_state):
-    return _ensure_sidecar_extracted(shared_state, "filecrypt_pow_sidecar.js")
-
-
 def _find_pow_probe(shared_state):
-    return _ensure_sidecar_extracted(shared_state, "filecrypt_pow_probe.js")
+    return _ensure_script_path(shared_state, "filecrypt_pow_probe.js")
 
 
 # JavaScript that runs inside flaresolverr-next's Chrome browser via executeJs.
@@ -226,32 +192,37 @@ def _create_or_get_pow_session(shared_state):
 
 
 def _compute_pow_via_flaresolverr(shared_state, page_url):
-    """Use flaresolverr-next's persistent browser to compute the PoW tokens.
+    """Drive filecrypt's PoW box via flaresolverr-next executeJs (click-and-let-page-solve).
 
-    Creates a session (or reuses one) so the cf_clearance cookie + Chrome
-    fingerprint from the parent CF bypass match the browser that runs m.js
-    and s.js. The executeJs snippet loads the two scripts into the live
-    page, calls S.start() / recordClick() / R() / S.collect(), and
-    returns the resulting pow_x + pow_data in JSON.
+    Loads the JS snippet from kuasarr/scripts/filecrypt_pow_probe.js, sends it to
+    flaresolverr-next's persistent session (which holds the cf_clearance cookie +
+    headed-Xvfb Chrome fingerprint from the CF bypass). The snippet clicks filecrypt's
+    PoW box (cubic-Bezier pointer glide + click), lets filecrypt's main-world JS
+    compute the clean PoW token, then re-submits the form via in-browser fetch()
+    and returns the unlocked-page HTML. We do NOT extract pow_x/pow_data ourselves.
 
-    Returns (pow_id, pow_x, pow_data) — any element may be empty if the
-    session couldn't be created or the executeJs returned an error.
+    Returns a `_PowSolvedResponse` (.text + .url + .status_code) on success, or
+    `None` on any failure (no session, executeJs error, timeout, haspow=true, etc.).
+    The caller (in _solve_filecrypt_pow_if_present) treats None as "retry/hand-off".
     """
     flaresolverr_url = shared_state.values["config"]("FlareSolverr").get("url")
     if not flaresolverr_url:
-        return "", "", ""
+        return None
 
     sid = _create_or_get_pow_session(shared_state)
     if not sid:
-        return "", "", ""
+        return None
 
     payload = {
         "cmd": "request.get",
         "url": page_url,
         "session": sid,
         "maxTimeout": 60000,
+        # Small waitInSeconds: the JS self-terminates by resolving its promise
+        # with the final {status,code,url,haspow,html} payload. We only need
+        # the post-JS settle delay for any post-resolution cleanup (rare).
+        "waitInSeconds": 3,
         "executeJs": _load_fs_execjs(shared_state),
-        "waitInSeconds": 20,
     }
     try:
         resp = requests.post(
@@ -262,337 +233,110 @@ def _compute_pow_via_flaresolverr(shared_state, page_url):
         resp.raise_for_status()
     except requests.RequestException as exc:
         info(f"Filecrypt PoW: flaresolverr executeJs HTTP error: {exc}")
-        return "", "", ""
+        return None
 
     result = resp.json()
     if result.get("status") != "ok":
         info(f"Filecrypt PoW: flaresolverr status={result.get('status')}: {result.get('message', '<no msg>')[:200]}")
-        return "", "", ""
+        return None
 
     exec_result = result["solution"].get("executeJsResult", "")
     if not exec_result:
-        # Empty result is the historical symptom of the Promise-Return-Bug fixed
-        # in Versuch 7: the probe wrapped its body in `(async function(){...})();`
-        # which is a statement-call, so the outer FlareSolverr-IIFE returned
-        # undefined instead of the inner Promise. `awaitPromise: True` then
-        # resolved to undefined → empty string. The fix lives in
-        # `kuasarr/scripts/filecrypt_pow_probe.js` (must end with
-        # `return __kuasarr_pow_solve();`). If you still see this message after
-        # the fix, check the importlib.resources tempfile cache for an outdated
-        # copy of the probe script.
+        # Empty executeJsResult means the probe script did not return a promise
+        # (Promise-Return-Bug from Versuch 7, already fixed — but if it recurs,
+        # check the probe source ends with `return new Promise(...)`).
         info(
             "Filecrypt PoW: flaresolverr returned empty executeJsResult — "
-            "Probe-Snippet-Promise-Return-Fix (Versuch 7) wahrscheinlich nicht aktiv. "
-            "Prüfe: (1) rix1337/flaresolverr-next Image aktiv, "
-            "(2) __kuasarr_pow_solve() returnt explizit, "
-            "(3) tempfile-Cache unter /tmp/kuasarr_sidecar/filecrypt_pow_probe.js aktuell."
+            "Probe-Snippet-Promise-Return (Versuch 7) nicht aktiv. Prüfe: "
+            "(1) rix1337/flaresolverr-next Image aktiv, "
+            "(2) filecrypt_pow_probe.js endet mit `return new Promise(...)`, "
+            "(3) tempfile-Cache /tmp/kuasarr_sidecar/filecrypt_pow_probe.js aktuell."
         )
-        return "", "", ""
+        return None
 
     try:
         parsed = json.loads(exec_result)
     except json.JSONDecodeError as exc:
         info(f"Filecrypt PoW: executeJs result not JSON: {exc}: {exec_result[:200]}")
-        return "", "", ""
+        return None
 
-    # Diagnostic dump — log every step the probe recorded so we can see exactly
-    # where the script bailed (escape bug, sandbox limit, race condition, etc.).
-    if isinstance(parsed, dict) and parsed.get("steps"):
-        for step in parsed["steps"]:
-            info(f"Filecrypt PoW probe: {step}")
-        # Versuch 8: Wenn R() gegen den 30s-Timeout gerannt ist, ist der m.js
-        # SHA-1 Web Worker ge-throttled. Das ist ein Hinweis, dass die Worker-
-        # Konfiguration (Background-Throttling, Maglev) nicht stimmt ODER die
-        # filecrypt-Difficulty so hoch ist, dass 30s nicht reichen.
-        for step in parsed["steps"]:
-            if isinstance(step, dict) and step.get("r_call_ms", 0) >= 29000:
-                info("Filecrypt PoW: R() raced against the 30s timeout — "
-                     "m.js SHA-1 web worker is throttled or difficulty too high. "
-                     "Consider bumping EXECUTE_JS_TIMEOUT in FlareSolverr to 90s+ "
-                     "or waiting longer inside the probe.")
-                break
-    if isinstance(parsed, dict) and parsed.get("errors"):
-        for err in parsed["errors"]:
-            info(f"Filecrypt PoW probe error: {err}")
-    if parsed.get("reason"):
-        info(f"Filecrypt PoW probe reason: {parsed['reason']}")
-
-    if not parsed.get("ok"):
-        info(f"Filecrypt PoW: executeJs inner-script failed: {parsed.get('error', '<no err>')[:200]}")
-        return "", "", ""
-
-    pow_id = parsed.get("pow_id", "")
-    pow_x = parsed.get("pow_x", "")
-    pow_data = parsed.get("pow_data", "")
+    # Diagnostic dump — log the diag payload (which carries the fingerprint
+    # diagnostics: hasChromeRuntime, pointer, hover) so we can SEE on run one
+    # whether the headed-Xvfb FS-next browser actually carries the expected
+    # fingerprint. This settles the Code-605 question once and for all.
+    diag = parsed.get("diag") or {}
     info(
-        f"Filecrypt PoW: flaresolverr tokens pow_id={pow_id!r} "
-        f"pow_x={len(pow_x)} chars pow_data={len(pow_data)} chars "
-        f"pow_x_head={pow_x[:30]!r} pow_data_head={pow_data[:30]!r}"
+        f"Filecrypt PoW probe diag: hasChrome={diag.get('hasChrome')} "
+        f"hasChromeRuntime={diag.get('hasChromeRuntime')} "
+        f"hasChromeWebstore={diag.get('hasChromeWebstore')} "
+        f"pointer={diag.get('pointer')} hover={diag.get('hover')}"
     )
-    return pow_id, pow_x, pow_data
 
+    status = parsed.get("status")
+    if status != "ok":
+        info(f"Filecrypt PoW: probe not ok — status={status!r} state={parsed.get('state')!r} "
+             f"error={parsed.get('error')!r}")
+        return None
 
-def _compute_pow_sidecars(shared_state, session, output_url, ext_url, sig_url):
-    """Run filecrypt's m.js.R() and s.js.S.collect() in a Node.js sidecar.
+    if parsed.get("haspow"):
+        # filecrypt re-showed the PoW in the response → token was rejected. Caller
+        # should retry; if all retries fail, fall back to the manual handoff.
+        info("Filecrypt PoW: probe returned haspow=true — filecrypt rejected the submission")
+        return None
 
-    filecrypt's PoW response needs a `pow_x` token (browser-capability fingerprint
-    from m.js.R()) and a `pow_data` token (mouse/timing signature from
-    s.js.S.collect()). Both run in a sandboxed browser-like environment in Node.js
-    because the JS is too dense to port by hand.
+    info(
+        f"Filecrypt PoW: solved via FS-next executeJs "
+        f"(code={parsed.get('code')}, haspow=False, html_len={len(parsed.get('html') or '')})"
+    )
+    return _PowSolvedResponse(
+        text=parsed.get("html", "") or "",
+        url=parsed.get("url", page_url),
+        status_code=int(parsed.get("code") or 200),
+    )
 
-    Scripts are fetched once and cached per URL; the sidecar also writes them to
-    a temp dir (so the sidecar's basename regex picks them up) and invokes Node
-    with both files in one call. Returns (pow_x, pow_data); either may be empty
-    if Node is missing, the sidecar is missing, or the network is unavailable.
-    """
-    if not ext_url or not sig_url:
-        info("Filecrypt PoW: missing data-ext/data-sig URLs — cannot compute sidecar tokens")
-        return "", ""
-
-    parsed = urlparse(output_url)
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-    if ext_url.startswith("/"):
-        ext_url = origin + ext_url
-    if sig_url.startswith("/"):
-        sig_url = origin + sig_url
-
-    cache = shared_state.values.setdefault("filecrypt_pow_scripts", {})
-
-    def _get_script(url):
-        """Fetch a filecrypt script, transparently bypassing CF if needed.
-
-        Plain session.get() can return 403 on filecrypt.cc/js/* even when the
-        parent container page loaded successfully — Cloudflare challenges
-        individual paths independently. Reuse the same Cloudflare-bypass helper
-        the parent dispatcher uses (`ensure_session_cf_bypassed`), which falls
-        back to FlareSolverr when the cookie isn't sufficient.
-        """
-        if url in cache:
-            return cache[url]
-        # First try the existing session (cookie may already cover this URL)
-        try:
-            resp = session.get(url, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
-            if resp.status_code == 200 and resp.text and not resp.text.lstrip().startswith("<"):
-                # Real JS starts with `function`, `const`, `;`, `//`, etc. — never `<`.
-                # If it starts with `<`, it's a CF challenge page or other HTML.
-                cache[url] = resp.text
-                info(f"Filecrypt PoW: script {url.split('/')[-1]} fetched via session GET ({len(resp.text)} bytes)")
-                return resp.text
-            info(f"Filecrypt PoW: session GET {url} returned status={resp.status_code}, "
-                 f"body_len={len(resp.text or '')}, head={(resp.text or '')[:60]!r} — re-bypassing CF")
-        except requests.RequestException as exc:
-            info(f"Filecrypt PoW: session GET {url} failed: {exc}")
-        # Otherwise (or if response is a CF HTML challenge), re-bypass CF on this URL
-        try:
-            from kuasarr.providers.network.cloudflare import ensure_session_cf_bypassed
-            bypass_session, _, bypass_output = ensure_session_cf_bypassed(
-                info, shared_state, session, url, {"User-Agent": shared_state.values["user_agent"]}
-            )
-            if bypass_output and bypass_output.status_code == 200 and bypass_output.text \
-                    and not bypass_output.text.lstrip().startswith("<"):
-                # Merge the bypassed session's cookies into our session so the
-                # parent request (which happens in the same Python session) keeps
-                # working without re-challenges.
-                if bypass_session is not session:
-                    for cookie in bypass_session.cookies:
-                        session.cookies.set_cookie(cookie)
-                cache[url] = bypass_output.text
-                info(f"Filecrypt PoW: script {url.split('/')[-1]} fetched via FS-bypass ({len(bypass_output.text)} bytes)")
-                return bypass_output.text
-            head = (bypass_output.text or '')[:60] if bypass_output else ''
-            info(f"Filecrypt PoW: CF-bypass for {url} returned status="
-                 f"{bypass_output.status_code if bypass_output else 'none'}, "
-                 f"body_len={len(bypass_output.text) if bypass_output and bypass_output.text else 0}, "
-                 f"head={head!r}")
-        except Exception as exc:
-            info(f"Filecrypt PoW: failed to CF-bypass {url}: {exc}")
-        return ""
-
-    m_js = _get_script(ext_url)
-    s_js = _get_script(sig_url)
-    if not m_js or not s_js:
-        return "", ""
-
-    sidecar = _find_pow_sidecar(shared_state)
-    if not sidecar:
-        info("Filecrypt PoW sidecar script not available — cannot compute pow_x/pow_data")
-        return "", ""
-
-    import subprocess
-    import tempfile
-    import shutil
-
-    tmpdir = tempfile.mkdtemp(prefix="filecrypt_pow_")
-    try:
-        m_path = os.path.join(tmpdir, "m.js")
-        s_path = os.path.join(tmpdir, "s.js")
-        with open(m_path, "w") as f:
-            f.write(m_js)
-        with open(s_path, "w") as f:
-            f.write(s_js)
-
-        # Pass the user-agent the parent session is currently using so the
-        # sandbox reports the same browser identity to m.js/s.js that
-        # FlareSolverr presented to filecrypt.cc. Otherwise the server
-        # detects the fingerprint mismatch and rejects the PoW token.
-        sidecar_env = {
-            "SIDECAR_USER_AGENT": shared_state.values.get("user_agent", ""),
-            "SIDECAR_LANGUAGE": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
-            "SIDECAR_PLATFORM": "Win32",
-        }
-        try:
-            result = subprocess.run(
-                ["node", sidecar, m_path, s_path],
-                capture_output=True, text=True, timeout=30,
-                env={**os.environ, **sidecar_env},
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            info(f"Filecrypt PoW sidecar failed: {exc}")
-            return "", ""
-        if result.returncode != 0:
-            info(f"Filecrypt PoW sidecar exit {result.returncode}: {result.stderr.strip()[:200]}")
-            return "", ""
-
-        try:
-            tokens = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
-            info(f"Filecrypt PoW sidecar output not JSON: {exc}: {result.stdout[:200]}")
-            return "", ""
-        return tokens.get("pow_x", ""), tokens.get("pow_data", "")
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _solve_filecrypt_pow_if_present(shared_state, session, output, headers):
-    """Solve filecrypt.cc's Proof-of-Work captcha locally.
+    """Solve filecrypt.cc's PoW captcha via flaresolverr-next executeJs (click-and-let-page-solve).
 
-    filecrypt's PoW markup (`<div class="pow-captcha" data-challenge data-difficulty>`)
-    has a hidden form with these inputs that are filled and submitted together:
-        pow_id       - container identifier (constant for this page)
-        pow_nonce    - SHA-1 nonce (decimal int) found by pow_captcha_worker.js
-        pow_elapsed  - milliseconds spent solving
-        pow_pauses   - how often the worker paused (window blur)
-        pow_data     - signature from s.js.collect()
-        pow_x        - fingerprint from m.js.R()
+    The probe script (kuasarr/scripts/filecrypt_pow_probe.js) drives filecrypt's
+    own PoW box: cubic-Bezier pointer glide + click on `.pow-captcha__box`, lets
+    filecrypt's m.js/s.js/SHA-1 worker compute the clean token in the main-world
+    page context, then re-submits the form via in-browser fetch() and returns
+    the unlocked-page HTML.
 
-    This implementation:
-      1. Reads pow_id from the hidden <input>
-      2. Brute-forces pow_nonce (SHA-1 with `challenge + ':' + nonce`)
-      3. Calls `m.js.R()` via Node.js sidecar to get pow_x
-      4. Calls `s.js.collect()` via Node.js sidecar to get pow_data
-      5. POSTs the form to the container URL
+    This dispatcher up to 3 times (filecrypt sometimes requires a re-solve on
+    a fresh pow_id rotation). On success, returns a _PowSolvedResponse that the
+    downstream CNL/DLC extraction can parse. On total failure, raises
+    RuntimeError so the caller hands the captcha off to the manual /captcha route.
 
-    Falls back to the manual handoff if any step fails (RuntimeError → needs_manual).
+    Why this works (and the earlier extract-and-POST did not):
+    earlier attempts re-injected m.js/s.js via <script textContent> inside the
+    executeJs isolated world; m.js there saw an empty `window.chrome.runtime`
+    and reported Code 605. The current approach NEVER re-injects — it only
+    dispatches a click, letting filecrypt's page-loaded m.js (which runs in the
+    main world with the real headed-Xvfb-Chrome fingerprint from
+    flaresolverr-next) compute the token.
     """
-    soup = BeautifulSoup(output.text, "html.parser")
-    pow_div = _get_pow_captcha(soup)
-    if not pow_div:
+    if not _get_pow_captcha(BeautifulSoup(output.text, "html.parser")):
         return output
 
-    challenge = pow_div.get("data-challenge", "")
-    difficulty = pow_div.get("data-difficulty", "")
-    worker_url = pow_div.get("data-worker", "") or None
-    ext_url = pow_div.get("data-ext", "") or None
-    sig_url = pow_div.get("data-sig", "") or None
-    if not challenge or not difficulty:
-        info("Filecrypt PoW markup missing data-challenge/data-difficulty — falling back to manual.")
-        raise RuntimeError("Filecrypt PoW markup incomplete — needs manual browser solving")
+    MAX_ATTEMPTS = 3
 
-    try:
-        difficulty_bits = int(difficulty)
-    except ValueError:
-        raise RuntimeError("Filecrypt PoW difficulty not a number — needs manual browser solving")
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        info(f"Filecrypt PoW: click-and-let-page-solve attempt {attempt}/{MAX_ATTEMPTS}")
+        solved = _compute_pow_via_flaresolverr(shared_state, output.url)
+        if solved is None:
+            info(f"Filecrypt PoW: attempt {attempt} returned no solved-response (see prior log line)")
+            continue
+        return solved
 
-    # pow_id comes from the hidden input rendered by filecrypt's templating
-    pow_id_input = pow_div.find("input", {"name": "pow_id"})
-    pow_id = pow_id_input.get("value", "") if pow_id_input else ""
-
-    info(
-        f"Filecrypt PoW detected (challenge={challenge[:12]}..., difficulty={difficulty_bits} bits, pow_id={pow_id!r})."
+    # All attempts exhausted. Surface a clear reason so the caller hands the
+    # captcha off to the manual /captcha route instead of looping forever.
+    raise RuntimeError(
+        "Filecrypt PoW: failed after "
+        f"{MAX_ATTEMPTS} click-and-let-page-solve attempts — handing off to manual"
     )
-
-    t0 = time.time()
-    pow_nonce = _bruteforce_pow_sha1(challenge, difficulty_bits)
-    elapsed_ms = int((time.time() - t0) * 1000)
-    if not pow_nonce:
-        raise RuntimeError(
-            f"Filecrypt PoW: could not find SHA-1 nonce for {difficulty_bits}-bit target within budget"
-        )
-
-    sha1_prefix = _sha1_hex(challenge + ":" + pow_nonce)
-    info(f"Filecrypt PoW solved (nonce={pow_nonce}, sha1={sha1_prefix[:12]}..., {elapsed_ms}ms)")
-
-    # Compute pow_x and pow_data in filecrypt's own browser via flaresolverr-next's
-    # persistent session + executeJs. The Node sidecar produces tokens whose browser
-    # fingerprint doesn't match the cf_clearance cookie FlareSolverr obtained, so
-    # filecrypt's server always rejects them. Running the same scripts inside the
-    # same Chrome session that solved the CF challenge produces matching tokens.
-    fs_pow_id, pow_x, pow_data = _compute_pow_via_flaresolverr(
-        shared_state, output.url
-    )
-    if fs_pow_id and fs_pow_id != pow_id:
-        # The server may rotate pow_id between requests; prefer the one the JS
-        # observed to be current.
-        info(f"Filecrypt PoW: pow_id updated from {pow_id!r} to {fs_pow_id!r} (live page)")
-        pow_id = fs_pow_id
-    if not pow_x and not pow_data:
-        # Fall back to the Node sidecar (no Node, no flaresolverr, …).
-        info("Filecrypt PoW: flaresolverr tokens unavailable — falling back to Node sidecar")
-        pow_x, pow_data = _compute_pow_sidecars(
-            shared_state, session, output.url, ext_url, sig_url
-        )
-    info(f"Filecrypt PoW: final tokens pow_x={len(pow_x)} chars, pow_data={len(pow_data)} chars")
-    if not pow_x and not pow_data:
-        info("Filecrypt PoW: no tokens generated — submitting SHA-1 only (server will reject)")
-
-    submit_data = {
-        "pow_id": pow_id,
-        "pow_nonce": pow_nonce,
-        "pow_elapsed": str(elapsed_ms),
-        "pow_pauses": "0",
-        "pow_data": pow_data or "",
-        "pow_x": pow_x or "",
-    }
-
-    submit_url = output.url
-    headers_post = {
-        **headers,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": urlparse(submit_url).scheme + "://" + urlparse(submit_url).netloc,
-        "Referer": submit_url,
-    }
-    try:
-        response = session.post(
-            submit_url,
-            data=submit_data,
-            headers=headers_post,
-            timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
-            allow_redirects=True,
-        )
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Filecrypt PoW POST failed: {exc}")
-
-    refreshed_soup = BeautifulSoup(response.text, "html.parser")
-    if _get_pow_captcha(refreshed_soup):
-        # filecrypt still asking for PoW ⇒ either token format wrong or server-side
-        # fingerprinting blocks the synthetic POST. Surface a clear reason so the
-        # dispatcher can hand off to manual handoff. Capture the raw response so
-        # debugging what the server actually saw is easy from the log.
-        snippet = response.text[:300].replace("\n", " ")
-        info(
-            f"Filecrypt still shows pow-captcha after SHA-1 POST "
-            f"(status={response.status_code}, url={response.url!r}, head={snippet!r})"
-        )
-        # Discover any extra JS that filecrypt may load on the rejected page so we
-        # can identify new scripts that need to be ported next iteration.
-        scripts = refreshed_soup.find_all("script", src=re.compile(r"\.(?:js|mjs)"))
-        for s in scripts:
-            info(f"Filecrypt script on rejected page: {s.get('src')}")
-        raise RuntimeError(
-            "Filecrypt rejected the PoW solution token — likely needs server-side fingerprint"
-        )
-
-    return response
 
 
 class PermanentLinkFailure(Exception):

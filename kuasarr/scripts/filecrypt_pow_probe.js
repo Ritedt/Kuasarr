@@ -1,232 +1,167 @@
-// filecrypt PoW diagnostic probe — runs inside flaresolverr-next's Chrome via
-// executeJs. Reports every step's outcome (DOM presence, fetch status, global
-// surface, R()/S.collect() result) as JSON. Loaded as `new Function(exec)` is
-// the canonical way to inject a script body into the page from executeJs — we
-// keep that one call site and use eval-via-script-element injection for m.js
-// and s.js themselves.
+// filecrypt PoW — click-and-let-page-solve via flaresolverr-next executeJs.
 //
-// IMPORTANT — Promise-Return-Konvention (Versuch 7):
-// flaresolverr-next wrappt das Snippet als `(() => { <script> })()` (Block-Body
-// Arrow) und führt es via CDP `Runtime.evaluate` mit `awaitPromise: True` aus.
-// Damit der outer Arrow das Promise explizit zurückgibt, MUSS das Snippet
-// mit `return __kuasarr_pow_solve();` enden (statt eines `(async function()
-// { ... })();`-Statement-Calls). Sonst ist `executeJsResult` ein leerer String.
+// MECHANIC (reverse-engineered from rix1337/sponsors-helper `_POW_SOLVE_JS`):
+// We do NOT brute-force the SHA-1 nonce, do NOT read pow_x/pow_data, and do
+// NOT POST a token ourselves. Instead we drive filecrypt's OWN PoW UI:
+//   1. Intercept the form's native submit (filecrypt would navigate away and
+//      the executeJs context would lose the page).
+//   2. Synthesize a cubic-Bézier pointer/mouse glide onto the PoW box, then a
+//      full pointerover/down/up + click sequence — so filecrypt's own s.js
+//      records a human-like motion vector and the click reads as a gesture.
+//   3. filecrypt's OWN m.js/s.js + SHA-1 worker run in the page MAIN WORLD with
+//      the real (headed-Xvfb) Chrome fingerprint, compute the clean PoW token,
+//      and fill the hidden form inputs (pow_id/pow_nonce/pow_data/pow_x/...).
+//   4. Poll for data-state="done" AND a populated pow_data hidden input.
+//   5. Re-submit the form via fetch() with credentials:'include' — the POST
+//      happens INSIDE the browser, so cf_clearance + TLS + fingerprint stay
+//      consistent. We capture the unlocked-page HTML from the fetch response.
+//   6. Return {status, code, url, haspow, html}. haspow=true means filecrypt
+//      re-shows the PoW → caller retries (up to 3×).
+//
+// This is browser automation (synthetic input events triggering filecrypt's own
+// legitimate PoW flow), NOT detection-evasion — no window.chrome / navigator /
+// matchMedia properties are touched.
+//
+// PROMISE-RETURN CONVENTION (Versuch 7): flaresolverr-next wraps this snippet as
+// `(() => { <script> })()` and runs it via CDP Runtime.evaluate with
+// awaitPromise=true. Ending with `return new Promise(...)` makes the outer arrow
+// return the promise so executeJsResult is non-empty.
 
-async function __kuasarr_pow_solve() {
-    const out = {steps: [], errors: []};
-    const log = (step, payload) => out.steps.push({step, ...payload});
+return new Promise(function (resolve) {
+    var out_diag = {
+        // Cheap fingerprint diagnostics — settles the Code-605 question on the
+        // first run. If hasChromeRuntime is false here, filecrypt's own m.js
+        // would ALSO see it and reject — meaning the FS-next browser itself is
+        // the problem (needs headed mode / different browser), not this snippet.
+        hasChrome: typeof window.chrome === 'object',
+        hasChromeRuntime: !!(window.chrome && window.chrome.runtime),
+        hasChromeWebstore: !!(window.chrome && window.chrome.webstore),
+        pointer: (window.matchMedia && window.matchMedia('(pointer: fine)').matches) ? 'fine' : 'none',
+        hover: (window.matchMedia && window.matchMedia('(hover: hover)').matches) ? 'hover' : 'none',
+        url: location.href
+    };
 
-    function rec(exc) {
-        return {ok: false, error: String(exc && (exc.message || exc) || 'unknown'),
-                stack: (exc && exc.stack ? String(exc.stack).slice(0, 400) : '')};
+    var el = document.getElementById('pow-captcha');
+    if (!el) { resolve(JSON.stringify({ status: 'no-pow', diag: out_diag })); return; }
+
+    var box = el.querySelector('.pow-captcha__box') || el;
+    var form = el.closest('form');
+
+    // (1) Intercept the form's native submit. filecrypt's click handler would
+    // submit+navigate, destroying the executeJs page context. We clobber the
+    // submit entry points and preventDefault on capture so OUR fetch() below is
+    // the only thing that actually POSTs.
+    if (form) {
+        form.addEventListener('submit', function (e) {
+            e.preventDefault(); e.stopImmediatePropagation();
+        }, true);
+        form.requestSubmit = function () {};
+        form.submit = function () {};
     }
 
-    try {
-        // ── Step 1: surface-level diagnostics ─────────────────────────────
-        log('surface', {
-            ok: true,
-            url: location.href,
-            title: document.title,
-            dcl: document.readyState,
-            hasEval: typeof eval === 'function',
-            cdf: !!window.crypto && !!window.crypto.subtle,
-            hasGlobalThis: typeof globalThis === 'object',
+    try { box.scrollIntoView({ block: 'center' }); } catch (e) {}
+    var rect = box.getBoundingClientRect();
+    var tx = rect.left + rect.width / 2, ty = rect.top + rect.height / 2;
+
+    var rnd = function (a, b) { return a + Math.random() * (b - a); };
+    // Busy-wait via performance.now() — setTimeout can't tick reliably inside a
+    // synchronous CDP Runtime.evaluate event loop.
+    var spin = function (ms) { var t = performance.now(); while (performance.now() - t < ms) {} };
+
+    var px = null, py = null;
+    var fire = function (type, x, y, extra) {
+        var Ctor = type.indexOf('pointer') === 0 ? PointerEvent : MouseEvent;
+        var init = Object.assign({
+            bubbles: true, cancelable: true, composed: true, view: window,
+            clientX: x, clientY: y, screenX: x, screenY: y + 80,
+            button: 0,
+            buttons: type.indexOf('move') >= 0 ? 0 : 1
+        }, extra || {});
+        if (Ctor === PointerEvent) {
+            init.pointerId = 1; init.pointerType = 'mouse'; init.isPrimary = true;
+        }
+        var target;
+        try { target = document.elementFromPoint(x, y); } catch (e) {}
+        (target || box).dispatchEvent(new Ctor(type, init));
+    };
+
+    // (2) Cubic-Bézier glide with two control points + per-step jitter +
+    // velocity-aware dwell (slower at start/end) + ease-in-out timing.
+    var cubic = function (p0, p1, p2, p3, t) {
+        var u = 1 - t;
+        return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+    };
+    var glide = function (x0, y0, x1, y1, steps, jit) {
+        var c1x = x0 + (x1 - x0) * rnd(0.2, 0.4) + rnd(-40, 40);
+        var c1y = y0 + (y1 - y0) * rnd(0.2, 0.4) + rnd(-40, 40);
+        var c2x = x0 + (x1 - x0) * rnd(0.6, 0.8) + rnd(-30, 30);
+        var c2y = y0 + (y1 - y0) * rnd(0.6, 0.8) + rnd(-30, 30);
+        if (px == null) { px = x0; py = y0; }
+        for (var i = 1; i <= steps; i++) {
+            var t = i / steps;
+            var te = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;   // ease-in-out
+            var x = cubic(x0, c1x, c2x, x1, te) + rnd(-jit, jit);
+            var y = cubic(y0, c1y, c2y, y1, te) + rnd(-jit, jit);
+            fire('pointermove', x, y, { movementX: x - px, movementY: y - py });
+            fire('mousemove', x, y, { movementX: x - px, movementY: y - py });
+            px = x; py = y;
+            var speed = Math.abs(0.5 - t) * 2;          // slower toward the ends
+            spin(rnd(6, 12) + speed * rnd(8, 20));
+        }
+    };
+
+    // (2a) Wobbly approach from off-box, (2b) precise landing on the box center.
+    var sx = tx + rnd(-180, -120), sy = ty + rnd(-150, -90);
+    var ovx = tx + rnd(8, 22) * (Math.random() < 0.5 ? -1 : 1);
+    var ovy = ty + rnd(6, 16) * (Math.random() < 0.5 ? -1 : 1);
+    glide(sx, sy, ovx, ovy, 20 + Math.floor(rnd(0, 8)), 2.2);
+    spin(rnd(20, 50));
+    glide(ovx, ovy, tx, ty, 6 + Math.floor(rnd(0, 5)), 1.0);
+    spin(rnd(50, 90));
+
+    // (3) Full click sequence — triggers filecrypt's own PoW worker.
+    fire('pointerover', tx, ty); fire('pointerenter', tx, ty);
+    fire('mouseover', tx, ty);
+    fire('pointerdown', tx, ty); fire('mousedown', tx, ty);
+    spin(rnd(60, 140));
+    fire('pointerup', tx, ty); fire('mouseup', tx, ty);
+    try { box.click(); } catch (e) {}
+
+    // (4) Poll for data-state="done" AND populated pow_data, max 6s.
+    var start = Date.now();
+    var DEADLINE_MS = 6000;
+    var iv = setInterval(function () {
+        var f = {};
+        el.querySelectorAll('input[type=hidden]').forEach(function (i) { f[i.name] = i.value; });
+        var st = el.getAttribute('data-state');
+        var ready = (st === 'done' && f.pow_data);
+        if (!ready && Date.now() - start <= DEADLINE_MS) { return; }
+        clearInterval(iv);
+        if (!ready) { resolve(JSON.stringify({ status: 'timeout', state: st, diag: out_diag })); return; }
+
+        // (5) Re-submit the form via fetch() — POST runs in the browser so
+        // cf_clearance + TLS stay consistent. We capture the unlocked HTML.
+        if (!form) { resolve(JSON.stringify({ status: 'no-form', diag: out_diag })); return; }
+        var body = new URLSearchParams();
+        new FormData(form).forEach(function (v, k) { body.append(k, v); });
+        fetch(form.getAttribute('action') || location.href, {
+            method: 'POST', body: body,
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            credentials: 'include'
+        }).then(function (r) {
+            return r.text().then(function (txt) { return { code: r.status, url: r.url, text: txt }; });
+        }).then(function (o) {
+            // (6) haspow=true → filecrypt re-shows the PoW → caller retries.
+            resolve(JSON.stringify({
+                status: 'ok',
+                code: o.code,
+                url: o.url,
+                haspow: o.text.indexOf('pow-captcha') >= 0,
+                html: o.text,
+                diag: out_diag
+            }));
+        }).catch(function (e) {
+            resolve(JSON.stringify({ status: 'error', error: String(e), diag: out_diag }));
         });
-
-        // ── Step 2: pow-captcha div presence ──────────────────────────────
-        let powDiv = null;
-        try {
-            powDiv = document.querySelector('#pow-captcha, .pow-captcha, [class*="pow-captcha"]');
-        } catch (e) { log('pow-div-find', rec(e)); }
-        log('pow-div', {ok: !!powDiv,
-                        tag: powDiv ? powDiv.tagName : null,
-                        id: powDiv ? powDiv.id : null,
-                        cls: powDiv ? powDiv.className : null,
-                        challenge: powDiv ? powDiv.getAttribute('data-challenge') : null,
-                        difficulty: powDiv ? powDiv.getAttribute('data-difficulty') : null,
-                        scriptSrcs: Array.from(document.querySelectorAll('script[src]')).map(s => s.src).filter(s => /\/js\/(m|s)\.js/.test(s))});
-
-        if (!powDiv) {
-            out.ok = false;
-            out.reason = 'no pow-captcha div in DOM';
-            return JSON.stringify(out);
-        }
-
-        const challenge = powDiv.getAttribute('data-challenge');
-        const difficulty = parseInt(powDiv.getAttribute('data-difficulty'), 10) || 0;
-        const powIdInput = powDiv.querySelector('input[name="pow_id"]');
-        const pow_id = powIdInput ? powIdInput.value : '';
-
-        out.pow_id = pow_id;
-        out.challenge = challenge;
-        out.difficulty = difficulty;
-
-        // ── Step 3: m.js / s.js fetch via same-origin credentials ─────────
-        async function fetchScript(path) {
-            try {
-                const r = await fetch(path, {credentials: 'same-origin', cache: 'no-cache'});
-                const txt = await r.text();
-                return {ok: r.ok, status: r.status, len: txt.length,
-                        head: txt.slice(0, 80)};
-            } catch (e) { return rec(e); }
-        }
-
-        const mRes = await fetchScript('/js/m.js?v=0f174e67');
-        log('fetch-m', mRes);
-        if (!mRes.ok) { out.ok = false; out.reason = 'm.js fetch failed'; return JSON.stringify(out); }
-
-        const sRes = await fetchScript('/js/s.js?v=82c3f32b');
-        log('fetch-s', sRes);
-        if (!sRes.ok) { out.ok = false; out.reason = 's.js fetch failed'; return JSON.stringify(out); }
-
-        // ── Step 4: load globals via direct script-element injection ────
-        // filecrypt itself loads m.js/s.js as <script src=…> in the live page.
-        // The same-origin Page-context grants it the page's globals. We mimic
-        // that by appending a <script> with the cleaned source as text — this
-        // runs in the page's VM context, not the executeJs isolated world.
-        function cleanForGlobal(src) {
-            return src
-                .replace(/\bexport\s+const\s+/g, 'globalThis.')
-                .replace(/\bexport\s+default\s+/g, 'globalThis.__default = ')
-                .replace(/\bexport\s*\{[^}]+\}\s*;?/g, '');
-        }
-
-        function injectScript(scriptText, label) {
-            try {
-                const s = document.createElement('script');
-                s.textContent = cleanForGlobal(scriptText);
-                document.head.appendChild(s);
-                s.remove();
-                return {ok: true, path: 'script-append', label,
-                        hasR: typeof globalThis.R, hasS: typeof globalThis.S};
-            } catch (e) { return rec(e); }
-        }
-
-        async function loadGlobal(path) {
-            const r = await fetch(path, {credentials: 'same-origin', cache: 'no-cache'});
-            const txt = await r.text();
-            return injectScript(txt, path);
-        }
-
-        const mLoad = await loadGlobal('/js/m.js?v=0f174e67');
-        log('load-m', mLoad);
-        const sLoad = await loadGlobal('/js/s.js?v=82c3f32b');
-        log('load-s', sLoad);
-
-        // ── Step 5: poll for R and S.collect to appear ─────────────────────
-        let pollTries = 0;
-        while ((typeof globalThis.R !== 'function' ||
-                typeof globalThis.S !== 'object' ||
-                typeof globalThis.S.collect !== 'function') && pollTries < 30) {
-            await new Promise(r => setTimeout(r, 100));
-            pollTries++;
-        }
-        log('wait-globals', {
-            ok: typeof globalThis.R === 'function' && typeof globalThis.S === 'object' && typeof globalThis.S.collect === 'function',
-            tries: pollTries,
-            R: typeof globalThis.R,
-            S: typeof globalThis.S,
-            S_collect: globalThis.S && typeof globalThis.S.collect,
-            S_start: globalThis.S && typeof globalThis.S.start,
-            S_recordClick: globalThis.S && typeof globalThis.S.recordClick,
-        });
-
-        const powBox = powDiv.querySelector('.pow-captcha__box, [class*="pow-captcha__box"]');
-
-        // Synthetische Mouse-Sequenz emittieren, damit S.collect() einen nicht-leeren
-        // Vektor vorfindet (sonst droppt s.js die Signatur — siehe filecrypt_pow_sidecar.js).
-        // Ohne diese Sequenz war pow_data im Live-Test 14:53 leer.
-        if (powBox && globalThis.S && typeof globalThis.S.recordPointer === 'function') {
-            try {
-                if (typeof globalThis.S.start === 'function') globalThis.S.start();
-                for (let i = 0; i < 6; i++) {
-                    globalThis.S.recordPointer({
-                        clientX: 120 + i * 8,
-                        clientY: 220 + (i % 3) * 6,
-                        timeStamp: performance.now() + i * 30,
-                        pointerType: 'mouse',
-                        target: powBox, bubbles: true,
-                    });
-                }
-                log('S-pointerSeq', {ok: true, count: 6});
-            } catch (e) { log('S-pointerSeq', rec(e)); }
-        } else {
-            log('S-pointerSeq', {ok: false, error: 'no recordPointer'});
-        }
-
-        if (powBox && globalThis.S && typeof globalThis.S.recordClick === 'function') {
-            try {
-                globalThis.S.recordClick({
-                    clientX: 156, clientY: 232,
-                    timeStamp: performance.now(),
-                    target: powBox, bubbles: true,
-                });
-                log('S-recordClick', {ok: true});
-            } catch (e) { log('S-recordClick', rec(e)); }
-        }
-
-        // Race-Detection: 30s-Timer, damit der executeJs-Timeout nicht ungebremst
-        // blockiert, falls der m.js SHA-1 Web Worker noch im Background-Throttle hängt.
-        // m.js startet einen Web Worker, der SHA-1 brute-force ausführt; R() returnt ein
-        // Promise, das erst resolved wenn der Worker fertig ist. Die 250 ms Sleep in der
-        // vorherigen Version reichten dafür nicht (Live-Test 14:53: pow_x=0).
-        async function withTimeout(promise, ms) {
-            let to;
-            const timeout = new Promise(res => { to = setTimeout(() => res(null), ms); });
-            const result = await Promise.race([promise, timeout]);
-            clearTimeout(to);
-            return result;
-        }
-
-        let pow_x = '';
-        let pow_data = '';
-
-        const rStart = performance.now();
-        if (typeof globalThis.R === 'function') {
-            try {
-                const rResult = await withTimeout(globalThis.R(), 30000);
-                if (rResult === null) {
-                    log('R-call', {ok: false, timeout: true, r_call_ms: 30000});
-                } else {
-                    pow_x = String(rResult);
-                    log('R-call', {ok: true, r_call_ms: Math.round(performance.now() - rStart), len: pow_x.length});
-                }
-            } catch (e) { log('R-call', rec(e)); }
-        } else {
-            log('R-call', {ok: false, error: 'globalThis.R is not a function'});
-        }
-
-        const sStart = performance.now();
-        if (globalThis.S && typeof globalThis.S.collect === 'function') {
-            try {
-                const sResult = await withTimeout(Promise.resolve(globalThis.S.collect()), 5000);
-                if (sResult === null) {
-                    log('S-collect', {ok: false, timeout: true, s_collect_ms: 5000});
-                } else {
-                    pow_data = String(sResult);
-                    log('S-collect', {ok: true, s_collect_ms: Math.round(performance.now() - sStart), len: pow_data.length});
-                }
-            } catch (e) { log('S-collect', rec(e)); }
-        } else {
-            log('S-collect', {ok: false, error: 'S.collect is not a function'});
-        }
-
-        // Full token values — the dispatcher reads out.pow_x / out.pow_data
-        // (NOT pow_x_len). The earlier probe only stored lengths + heads, so the
-        // tokens were computed correctly (R() len=19, S.collect() len=1365 in the
-        // live test) but never reached the POST → empty pow_x/pow_data → fallback.
-        out.pow_x = pow_x;
-        out.pow_data = pow_data;
-        out.pow_x_len = pow_x.length;
-        out.pow_data_len = pow_data.length;
-        out.pow_x_head = pow_x.slice(0, 30);
-        out.pow_data_head = pow_data.slice(0, 30);
-        out.ok = !!(pow_x && pow_data);
-    } catch (e) {
-        out.ok = false;
-        out.errors.push({where: 'top', msg: String(e && (e.message || e) || 'unknown'),
-                         stack: (e && e.stack ? String(e.stack).slice(0, 500) : '')});
-    }
-    return JSON.stringify(out);
-}
-return __kuasarr_pow_solve();
+    }, 80);
+});

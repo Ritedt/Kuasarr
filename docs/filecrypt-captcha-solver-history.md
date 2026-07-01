@@ -127,7 +127,7 @@ filecrypt lehnt weiter ab.
 
 **Live-Test am 30.06.2026 13:30**:
 
-```
+```text
 [13:30:16] Filecrypt PoW: flaresolverr returned empty executeJsResult
 [13:30:16] Filecrypt PoW: flaresolverr tokens unavailable — falling back to Node sidecar
 [13:30:17] Filecrypt PoW: final tokens pow_x=92 chars, pow_data=1138 chars
@@ -347,6 +347,72 @@ Sleep + 250 ms `recordPointer`-loser Pfad die Hauptursache war.
 
 ---
 
+## Versuch 8b: Circle-Captcha 2Captcha-Parsing-Bug (01.07.2026)
+
+**Kernidee**: Der Circle-Captcha-Pfad (separat vom PoW-Pfad) scheiterte
+konsistent mit "2Captcha task ready but no token". Die History hatte das
+bislang als Worker-Problem (`ERROR_CAPTCHA_UNSOLVABLE`) eingestuft. Der
+Live-Test 01.07.2026 10:56 (Batman.v.Superman UHD) zeigt aber ein anderes
+Bild — und einen isolierten, leicht behebbaren Bug.
+
+### Versuch-8b-Bug-Diagnose
+
+Live-Log:
+
+```text
+[10:56:15] 2Captcha: Created task 83129573238
+[10:56:30] 2Captcha task 83129573238 ready but no token
+[10:56:30] DBC returned no coordinates for Circle-Captcha
+[10:56:30] Token rejected by Filecrypt!
+```
+
+**Wichtig**: 2Captcha meldet die Aufgabe als **erfolgreich gelöst** (Status
+`ready`), nicht als `unsolvable`. Der Worker hat also die korrekte Position
+gefunden — nur Kuasarr extrahiert die Koordinaten nicht.
+
+Root Cause: `_get_task_result` in
+[`twocaptcha_client.py`](../kuasarr/providers/captcha/twocaptcha_client.py)
+(Z. 185-208) kannte **nur token-basierte Solutions** und suchte nach
+`token`/`text`/`gRecaptchaResponse`. Die 2Captcha-API liefert für
+`CoordinatesTask` aber eine **andere Solution-Struktur**:
+
+```json
+{"solution": {"coordinates": [{"x": 358, "y": 268}]}}
+```
+
+Kein `token`, kein `text`. Die Solution fiel durch, `text` wurde `""`, und
+`solve_coordinates_captcha` sprang sofort raus (`if not result.is_solved`).
+DBC hat das Problem nicht, weil DBC Koordinaten als `"x,y"`-String liefert.
+
+### Versuch-8b-Fix
+
+`_get_task_result` so erweitern, dass eine nicht-leere `solution` ohne Token
+als JSON-String zurückgegeben wird. Die bestehende Parsing-Logik in
+`solve_coordinates_captcha` (Z. 415-423) decodiert das
+`{"coordinates":[{"x":N,"y":N}]}` dann automatisch zu `(x, y)`.
+
+```python
+if status == "ready":
+    solution = result.get("solution", {})
+    token = (solution.get("token", "") or solution.get("text", "")
+             or solution.get("gRecaptchaResponse", ""))
+    if token:
+        return CaptchaResult(text=token, ...)
+    # Non-token solutions (e.g. CoordinatesTask) — hand back as JSON so the
+    # caller's type-specific parser can decode it.
+    if solution:
+        return CaptchaResult(text=json.dumps(solution), ...)
+```
+
+### Versuch-8b-Ergebnis
+
+Ausstehend — der nächste Circle-Captcha-Live-Test muss bestätigen, dass die
+Koordinaten jetzt extrahiert werden und filecrypt den Klick akzeptiert.
+Vorherige Fehldiagnose ("Worker-Problem") korrigiert: es war ein
+Client-Parsing-Bug.
+
+---
+
 ## Aktueller Stand (30.06.2026)
 
 | Captcha-Typ | Pfad | Status |
@@ -354,7 +420,7 @@ Sleep + 250 ms `recordPointer`-loser Pfad die Hauptursache war.
 | hide.cx API | `dbc_dispatcher._solve_hide_cx` | ✅ läuft (Post #67) |
 | filecrypt CNL | `dbc_dispatcher._extract_filecrypt_links` | ✅ läuft |
 | filecrypt reCAPTCHA-v2 | `dbc_dispatcher._solve_filecrypt_with_dbc` mit `g-recaptcha-response`-Field (`c2f31be`) | ✅ läuft |
-| filecrypt Circle-Captcha | `dbc_dispatcher._solve_filecrypt_with_dbc` mit DBC/2Captcha-`CoordinatesTask` (`a73be2b`, `71191f5`) | ⚠️ 2Captcha gibt `ERROR_CAPTCHA_UNSOLVABLE` zurück (Worker-Problem) |
+| filecrypt Circle-Captcha | `dbc_dispatcher._solve_filecrypt_with_dbc` mit DBC/2Captcha-`CoordinatesTask` (`a73be2b`, `71191f5`) | ✅ läuft nach Parsing-Fix (Versuch 8b: `_get_task_result` extrahiert jetzt `coordinates`-Solution) |
 | filecrypt PoW | `dbc_dispatcher._solve_filecrypt_pow_if_present` | ⚠️ Versuch 8 — Race-Condition + Pointer-Sequenz implementiert, Live-Test ausstehend |
 | filecrypt manueller Handoff | `kuasarr/api/captcha/provider_routes.py:serve_filecrypt_manual` | ✅ läuft (Browser-basierte Lösung durch User) |
 
@@ -449,6 +515,7 @@ vereinbar.
 | *(ausstehend)* | fix(filecrypt-pow): Promise-Return-Pattern im Probe-Snippet (Versuch 7) |
 | *(ausstehend)* | fix(filecrypt-pow): race-condition on R()/S.collect() in probe (Versuch 8) |
 | *(ausstehend)* | docs(filecrypt): note on SponsorsHelper as known third-party solver (not adopted) |
+| *(ausstehend)* | fix(twocaptcha): parse CoordinatesTask solution (Circle-Captcha "ready but no token") (Versuch 8b) |
 
 ---
 

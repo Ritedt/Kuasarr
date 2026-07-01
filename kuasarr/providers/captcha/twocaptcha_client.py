@@ -198,14 +198,30 @@ class TwoCaptchaClient(BaseCaptchaClient):
                             is_correct=True,
                             status=CaptchaStatus.SOLVED,
                         )
-                    else:
-                        info(f"2Captcha task {task_id} ready but no token")
+
+                    # Non-token solutions (e.g. CoordinatesTask) put the payload in
+                    # a different field. CoordinatesTask returns
+                    # {"solution": {"coordinates": [{"x": N, "y": N}]}} — no token.
+                    # Hand the raw solution back as a JSON string so the caller's
+                    # type-specific parser (solve_coordinates_captcha) can decode it.
+                    # Without this, every CoordinatesTask logged "ready but no token"
+                    # and Circle-Captcha solving silently returned None.
+                    if solution:
+                        info(f"2Captcha task {task_id} solved (non-token solution)")
                         return CaptchaResult(
                             captcha_id=task_id,
-                            text="",
-                            is_correct=False,
-                            status=CaptchaStatus.FAILED,
+                            text=json.dumps(solution),
+                            is_correct=True,
+                            status=CaptchaStatus.SOLVED,
                         )
+
+                    info(f"2Captcha task {task_id} ready but no token")
+                    return CaptchaResult(
+                        captcha_id=task_id,
+                        text="",
+                        is_correct=False,
+                        status=CaptchaStatus.FAILED,
+                    )
 
                 elif status == "processing":
                     debug(f"2Captcha task {task_id} still processing ({int(time.time() - start)}s elapsed)...")

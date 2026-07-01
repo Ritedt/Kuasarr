@@ -22,6 +22,18 @@ from kuasarr.search import get_search_results
 from kuasarr.storage.config import Config
 
 
+def _xml_attr(value):
+    """XML-attribute-escape a free-text value for use in a raw XML f-string.
+
+    xml.sax.saxutils.quoteattr returns the value already wrapped in the
+    appropriate quotes and with XML entities escaped, so the caller must NOT
+    add surrounding quotes around the {_xml_attr(...)} placeholder.
+    """
+    if value is None:
+        return '""'
+    return sax_utils.quoteattr(str(value))
+
+
 def setup_arr_routes(app):
     @app.get('/download/')
     def fake_nzb_file():
@@ -33,7 +45,10 @@ def setup_arr_routes(app):
         size_mb = decoded_payload[3]
         password = decoded_payload[4]
         imdb_id = decoded_payload[5]
-        return f'<nzb><file title="{title}" url="{url}" mirror="{mirror}" size_mb="{size_mb}" password="{password}" imdb_id="{imdb_id}"/></nzb>'
+        # Escape free-text attributes — unescaped &, <, >, " in titles/URLs
+        # (e.g. 1Fichier URLs, French titles) corrupt the NZB and make *arr
+        # reject the download. size_mb is numeric and left as-is.
+        return f'<nzb><file title={_xml_attr(title)} url={_xml_attr(url)} mirror={_xml_attr(mirror)} size_mb={_xml_attr(size_mb)} password={_xml_attr(password)} imdb_id={_xml_attr(imdb_id)}/></nzb>'
 
     @app.post('/api')
     @require_api_key
@@ -58,7 +73,10 @@ def setup_arr_routes(app):
             if file_elem is None:
                 abort(400, "Invalid NZB payload: missing <file> element")
 
-            title = sax_utils.unescape(file_elem.attrib.get("title", ""))
+            # ElementTree.fromstring already decodes XML entities, so no extra
+            # sax_utils.unescape here (it would double-decode and corrupt titles
+            # whose literal text contains entity-like sequences).
+            title = file_elem.attrib.get("title", "")
             url = file_elem.attrib.get("url")
             size_mb = file_elem.attrib.get("size_mb")
 
@@ -219,9 +237,12 @@ def setup_arr_routes(app):
                 elif mode == "queue" or mode == "history":
                     if request.query.name and request.query.name == "delete":
                         package_id = request.query.value
-                        deleted = delete_package(shared_state, package_id)
+                        delete_package(shared_state, package_id)
+                        # Idempotent: report success regardless of whether the
+                        # package still existed in JDownloader — otherwise Radarr/
+                        # Sonarr re-probe missing (already imported/cleaned) IDs endlessly.
                         return {
-                            "status": deleted,
+                            "status": True,
                             "nzo_ids": [package_id]
                         }
 

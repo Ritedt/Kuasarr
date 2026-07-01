@@ -112,6 +112,20 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
     if imdb_id and not imdb_id.startswith('tt'):
         imdb_id = f'tt{imdb_id}'
 
+    # Search-level cache: *arr poll the same movie repeatedly — serve cached
+    # results instantly instead of re-running all scrapers (5-8s -> ~0ms).
+    from kuasarr.search.cache import search_cache, TTL_SEARCH, TTL_FEED, TTL_EMPTY
+    cache_mode = "feed" if is_feed else "search"
+    cache_key = search_cache.make_key("ALL", cache_mode, imdb_id, search_phrase, season, episode, mirror)
+    cached = search_cache.get(cache_key)
+    if cached is not None:
+        # cached holds the FULL enriched+sorted set; apply pagination+cap here
+        # (offset/limit are NOT in the cache key, so one entry serves all pages)
+        cached_page = cached[offset:offset + limit] if limit > 0 else cached[offset:]
+        cached_page = cached_page[:1000]
+        info(f"Providing {len(cached_page)} releases to {request_from} from cache ({cache_mode})")
+        return cached_page
+
     lower_request = request_from.lower()
     docs_search = "lazylibrarian" in lower_request
     webui_search = "webui" in lower_request
@@ -251,16 +265,58 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
     else:
         stype = "feed search"
 
+    # P3-A: Wanted-List-Seeding — for feed requests, additionally search the
+    # Radarr/Sonarr 'wanted' (missing + cutoff-unmet) IMDb IDs so the feed
+    # surfaces releases for wanted movies/shows WITHOUT needing imdb.com title
+    # resolution (bypasses the AWS WAF block). Capped to avoid ThreadPool load.
+    if is_feed:
+        try:
+            from kuasarr.providers import radarr_api, sonarr_api
+            # Only seed wanted IDs from the requesting *arr (Radarr feed ->
+            # Radarr movies; Sonarr feed -> Sonarr shows) to avoid cross-category
+            # waste. Capped low: 5 IDs x ~18 sources ~= 90 funcs within deadline.
+            lower_rf = (request_from or "").lower()
+            if "radarr" in lower_rf:
+                wanted = radarr_api.get_wanted_imdb_ids(shared_state)
+            elif "sonarr" in lower_rf:
+                wanted = sonarr_api.get_wanted_imdb_ids(shared_state)
+            else:
+                wanted = (radarr_api.get_wanted_imdb_ids(shared_state)
+                          + sonarr_api.get_wanted_imdb_ids(shared_state))
+            wanted = list(dict.fromkeys(wanted))[:5]
+            for wid in wanted:
+                wf = _build_functions_from_registry(
+                    shared_state, wid, "", request_from, allow_phrase_search,
+                    mirror, "", "", is_feed=False, start_time=start_time
+                )
+                if wf:
+                    functions.extend(wf)
+            if wanted:
+                info(f'Wanted-list seeding: added searches for {len(wanted)} wanted IMDb IDs ({len(functions)} total functions)')
+        except Exception as e:
+            debug(f'Wanted-list seeding failed (non-blocking): {e}')
+
     info(f'Starting {len(functions)} search functions for {stype}... This may take some time.')
 
-    with ThreadPoolExecutor() as executor:
+    from kuasarr.constants import get_search_deadline, SEARCH_MAX_WORKERS
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+    deadline = get_search_deadline()
+    max_workers = min(SEARCH_MAX_WORKERS, len(functions)) or 1
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(func) for func in functions]
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-                results.extend(result)
-            except Exception as e:
-                error(f"An error occurred: {e}")
+        try:
+            for future in as_completed(futures, timeout=deadline):
+                try:
+                    result = future.result()
+                    results.extend(result)
+                except Exception as e:
+                    error(f"An error occurred: {e}")
+        except FuturesTimeoutError:
+            # Deadline reached: cancel not-yet-started, return what we have.
+            # (Running HTTP threads can't be killed — they finish/timeout on their own.)
+            for f in futures:
+                f.cancel()
+            info(f"Search deadline ({deadline}s) reached — returning {len(results)} partial results")
 
     elapsed_time = time.time() - start_time
     info(f"Providing {len(results)} releases to {request_from} for {stype}. Time taken: {elapsed_time:.2f} seconds")
@@ -276,6 +332,30 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
             return datetime.min
 
     results.sort(key=_parse_date, reverse=True)
+
+    # Deduplicate by download link (the same release appears across multiple
+    # sources/mirrors); first occurrence wins, order (newest first) preserved.
+    def _dedupe(rels):
+        seen = set()
+        out = []
+        for r in rels:
+            d = r.get("details") or r  # flat dict (he.py) or "details"-wrapped
+            link = d.get("link") or ""
+            key = link if link else (d.get("title", ""), d.get("hostname", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(r)
+        return out
+    results = _dedupe(results)
+
+    # Cache the FULL enriched+sorted+deduped set BEFORE pagination/cap so different
+    # offset/limit requests share one cache entry. TTL is derived from the
+    # pre-pagination length. Deep-copy to isolate the cache from any caller
+    # mutation of the returned list/dicts.
+    import copy
+    ttl = TTL_FEED if is_feed else (TTL_EMPTY if not results else TTL_SEARCH)
+    search_cache.set(cache_key, copy.deepcopy(results), ttl)
 
     # Apply pagination before capping so offset+limit always returns up to limit results
     if offset > 0 or limit > 0:
@@ -317,7 +397,29 @@ def _enrich_with_xrel(shared_state, results):
     corrected = 0
     nuked = 0
 
-    info(f"xREL: enriching {total} releases...")
+    debug(f"xREL: enriching {total} releases...")
+
+    # Fetch xREL info in PARALLEL, deduplicated by title (the same release
+    # appears across multiple sources, so we fetch each title only once).
+    # Was serial — N blocking HTTP calls; now bounded to 8 concurrent.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    unique_titles = list({
+        r.get("details", {}).get("title", "")
+        for r in results if r.get("details", {}).get("title", "")
+    })
+    xrel_map = {}
+    if unique_titles:
+        with ThreadPoolExecutor(max_workers=min(8, len(unique_titles))) as _ex:
+            future_to_title = {
+                _ex.submit(get_xrel_release_info, shared_state, t): t
+                for t in unique_titles
+            }
+            for fut in as_completed(future_to_title):
+                t = future_to_title[fut]
+                try:
+                    xrel_map[t] = fut.result()
+                except Exception:
+                    xrel_map[t] = None
 
     enriched = []
     for release in results:
@@ -325,7 +427,7 @@ def _enrich_with_xrel(shared_state, results):
         title = details.get("title", "")
         hostname = details.get("hostname", "?")
 
-        xrel_info = get_xrel_release_info(shared_state, title)
+        xrel_info = xrel_map.get(title)
 
         if xrel_info:
             matched += 1
@@ -340,7 +442,7 @@ def _enrich_with_xrel(shared_state, results):
                 new_size = xrel_info["size_bytes"]
                 if old_size != new_size:
                     corrected += 1
-                    info(
+                    debug(
                         f"xREL: size corrected for '{title}' (source={hostname}): "
                         f"{old_size / (1024 * 1024):.1f} MB → {new_size / (1024 * 1024):.1f} MB"
                     )

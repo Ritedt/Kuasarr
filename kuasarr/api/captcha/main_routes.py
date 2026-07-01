@@ -26,7 +26,7 @@ def setup_main_routes(app):
 
     @app.get('/captcha/')
     def captcha_trailing_slash():
-        redirect('/captcha')
+        return redirect('/captcha')
 
     @app.get('/captcha')
     def check_captcha():
@@ -87,10 +87,16 @@ def setup_main_routes(app):
                 "mirror": desired_mirror,
                 "session": filecrypt_session,
                 "links": prioritized_links,
-                "original_url": original_url
+                "original_url": original_url,
+                "handoff_url": data.get("handoff_url")
             }
 
             encoded_payload = urlsafe_b64encode(json.dumps(payload).encode()).decode()
+
+            # Packages flagged needs_manual (filecrypt PoW that can't be auto-solved)
+            # → route to the manual solve page (browser solve + paste links).
+            if data.get("needs_manual"):
+                return redirect(f"/captcha/filecrypt-manual?data={quote(encoded_payload)}")
 
             has_junkies_links = any(is_junkies_link(l) for l in prioritized_links)
             has_keeplinks_links = any(is_keeplinks_link(l) for l in prioritized_links)
@@ -98,17 +104,17 @@ def setup_main_routes(app):
             has_hide_links = any(is_hide_link(l) for l in prioritized_links)
 
             if has_hide_links:
-                redirect(f"/captcha/hide?data={quote(encoded_payload)}")
+                return redirect(f"/captcha/hide?data={quote(encoded_payload)}")
             elif has_junkies_links:
-                redirect(f"/captcha/junkies?data={quote(encoded_payload)}")
+                return redirect(f"/captcha/junkies?data={quote(encoded_payload)}")
             elif has_keeplinks_links:
-                redirect(f"/captcha/keeplinks?data={quote(encoded_payload)}")
+                return redirect(f"/captcha/keeplinks?data={quote(encoded_payload)}")
             elif has_tolink_links:
-                redirect(f"/captcha/tolink?data={quote(encoded_payload)}")
+                return redirect(f"/captcha/tolink?data={quote(encoded_payload)}")
             elif filecrypt_session:
-                redirect(f"/captcha/circle?data={quote(encoded_payload)}")
+                return redirect(f"/captcha/circle?data={quote(encoded_payload)}")
             else:
-                redirect(f"/captcha/cutcaptcha?data={quote(encoded_payload)}")
+                return redirect(f"/captcha/cutcaptcha?data={quote(encoded_payload)}")
 
             return render_centered_html(f'''<h1><img src="{images.logo}" type="image/png" alt="Kuasarr logo" class="logo"/>Kuasarr</h1>
             <p>Unexpected Error!</p>

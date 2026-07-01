@@ -8,8 +8,10 @@ and integrates with the existing Filecrypt decryption logic.
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
+import tempfile
 import threading
 import time
 from typing import Any, Dict, Iterable, Optional, Tuple
@@ -49,6 +51,292 @@ from kuasarr.constants import HTTP_DEFAULT_TIMEOUT_SECONDS, get_timeout
 DEFAULT_DISPATCH_INTERVAL_SECONDS = 10
 MAX_BACKOFF_MULTIPLIER = 8
 PROCESSING_STATUS = "processing"  # job is actively being worked on this tick
+
+
+# --- Filecrypt Proof-of-Work captcha (click-and-let-page-solve) ---
+# filecrypt.cc's PoW (<div id="pow-captcha" data-challenge data-difficulty>) is
+# solved by filecrypt's OWN JS worker (SHA-1 brute-force + browser fingerprint).
+# Earlier Kuasarr attempts replicated the SHA-1 in Python and POSTed self-built
+# pow_x/pow_data tokens — filecrypt rejected them (the re-injected fingerprint
+# flagged Code 605). The working mechanic (reverse-engineered from rix1337's
+# sponsors-helper, see docs/filecrypt-pow-reverse-engineering.md): send a JS
+# snippet to flaresolverr-next's executeJs that CLICKS filecrypt's PoW box
+# (cubic-Bezier pointer glide + click), lets filecrypt's main-world JS compute
+# the clean token, then re-submits the form via in-browser fetch() and returns
+# the unlocked page HTML. No token is extracted, no nonce brute-forced, no
+# fingerprint touched — pure browser automation of filecrypt's own UI flow.
+
+
+def _get_pow_captcha(soup):
+    return soup.find("div", {"id": "pow-captcha", "class": "pow-captcha"})
+
+
+class _PowSolvedResponse:
+    """Minimal response-like returned when PoW is solved via executeJs.
+
+    Quacks like requests.Response for the downstream CNL/DLC extraction: carries
+    the unlocked-page HTML (.text), the final URL (.url) and the HTTP status
+    (.status_code). Built from the JSON the in-browser fetch() in the probe
+    returns, so the rest of the pipeline can parse it with BeautifulSoup exactly
+    like a normal page GET.
+    """
+
+    __slots__ = ("text", "url", "status_code", "content")
+
+    def __init__(self, text: str, url: str, status_code: int):
+        self.text = text
+        self.url = url
+        self.status_code = status_code
+        self.content = text.encode("utf-8", "replace") if isinstance(text, str) else text
+
+
+def _ensure_script_path(shared_state, name):
+    """Locate a JavaScript asset in the wheel; cache its on-disk path.
+
+    Resolution order:
+      1. previously cached path (shared_state)
+      2. sibling of this file in source-tree: kuasarr/scripts/<name>
+      3. system-wide install dir: /usr/local/share/kuasarr/<name>
+      4. Extract from the installed wheel via importlib.resources into
+         $TMPDIR/kuasarr_sidecar/<name>.
+    """
+    cache_key = f"kuasarr_asset_path::{name}"
+    cached = shared_state.values.get(cache_key)
+    if cached and os.path.exists(cached):
+        return cached
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.normpath(os.path.join(here, "..", "scripts", name)),
+        os.path.join("/usr/local/share/kuasarr", name),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            shared_state.values[cache_key] = p
+            return p
+
+    try:
+        from importlib.resources import files
+        src = files("kuasarr.scripts").joinpath(name)
+        extracted_dir = os.path.join(tempfile.gettempdir(), "kuasarr_sidecar")
+        os.makedirs(extracted_dir, exist_ok=True)
+        extracted = os.path.join(extracted_dir, name)
+        if not os.path.exists(extracted):
+            with open(extracted, "wb") as f:
+                f.write(src.read_bytes())
+        shared_state.values[cache_key] = extracted
+        return extracted
+    except Exception:
+        return None
+
+
+def _find_pow_probe(shared_state):
+    return _ensure_script_path(shared_state, "filecrypt_pow_probe.js")
+
+
+# JavaScript that runs inside flaresolverr-next's Chrome browser via executeJs.
+# We load the script body from disk (filecrypt_pow_probe.js) instead of inlining
+# it as a Python triple-quoted string. That eliminates the multi-pass JSON-escape
+# pipeline that was corrupting `\\\\b` regex tokens and making the previous
+# executeJs come back as an empty string.
+#
+# The script itself reports every step (DOM, fetch, load, eval, R/S, collect)
+# in `out.steps` so the dispatcher can log exactly what failed — the previous
+# version only said "empty executeJsResult" with no detail.
+def _load_fs_execjs(shared_state):
+    """Read the executeJs snippet from disk and return its raw text.
+
+    If the probe file can't be located, fall back to a minimal inline snippet
+    so the dispatcher still has *something* to send.
+    """
+    path = _find_pow_probe(shared_state)
+    if path and os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as exc:
+            info(f"Filecrypt PoW: could not read probe from {path}: {exc}")
+    # Last-resort inline fallback (kept tiny on purpose: no regex backrefs).
+    return "(async function(){return JSON.stringify({ok:false,error:'probe missing'});})();"
+
+
+def _create_or_get_pow_session(shared_state):
+    """Get or create a flaresolverr-next session id for filecrypt PoW work.
+
+    Reusing a session keeps the same cf_clearance cookie + Chrome browser
+    instance across the PoW-solve and the SHA-1 POST, so the fingerprint
+    tokens match what filecrypt's server recorded.
+    """
+    sid = shared_state.values.get("filecrypt_pow_session")
+    if sid:
+        return sid
+    flaresolverr_url = shared_state.values["config"]("FlareSolverr").get("url")
+    if not flaresolverr_url:
+        return ""
+    session_name = f"kuasarr_filecrypt_pow_{int(time.time())}"
+    try:
+        resp = requests.post(
+            flaresolverr_url, json={"cmd": "sessions.create", "session": session_name},
+            headers={"Content-Type": "application/json"},
+            timeout=get_timeout(15),
+        )
+        resp.raise_for_status()
+        sid = resp.json().get("session")
+        if sid:
+            shared_state.values["filecrypt_pow_session"] = sid
+            info(f"Filecrypt PoW: created flaresolverr session {sid}")
+            return sid
+    except Exception as exc:
+        info(f"Filecrypt PoW: failed to create flaresolverr session: {exc}")
+    return ""
+
+
+def _compute_pow_via_flaresolverr(shared_state, page_url):
+    """Drive filecrypt's PoW box via flaresolverr-next executeJs (click-and-let-page-solve).
+
+    Loads the JS snippet from kuasarr/scripts/filecrypt_pow_probe.js, sends it to
+    flaresolverr-next's persistent session (which holds the cf_clearance cookie +
+    headed-Xvfb Chrome fingerprint from the CF bypass). The snippet clicks filecrypt's
+    PoW box (cubic-Bezier pointer glide + click), lets filecrypt's main-world JS
+    compute the clean PoW token, then re-submits the form via in-browser fetch()
+    and returns the unlocked-page HTML. We do NOT extract pow_x/pow_data ourselves.
+
+    Returns a `_PowSolvedResponse` (.text + .url + .status_code) on success, or
+    `None` on any failure (no session, executeJs error, timeout, haspow=true, etc.).
+    The caller (in _solve_filecrypt_pow_if_present) treats None as "retry/hand-off".
+    """
+    flaresolverr_url = shared_state.values["config"]("FlareSolverr").get("url")
+    if not flaresolverr_url:
+        return None
+
+    sid = _create_or_get_pow_session(shared_state)
+    if not sid:
+        return None
+
+    payload = {
+        "cmd": "request.get",
+        "url": page_url,
+        "session": sid,
+        "maxTimeout": 60000,
+        # Small waitInSeconds: the JS self-terminates by resolving its promise
+        # with the final {status,code,url,haspow,html} payload. We only need
+        # the post-JS settle delay for any post-resolution cleanup (rare).
+        "waitInSeconds": 3,
+        "executeJs": _load_fs_execjs(shared_state),
+    }
+    try:
+        resp = requests.post(
+            flaresolverr_url, json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=get_timeout(90),
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        info(f"Filecrypt PoW: flaresolverr executeJs HTTP error: {exc}")
+        return None
+
+    result = resp.json()
+    if result.get("status") != "ok":
+        info(f"Filecrypt PoW: flaresolverr status={result.get('status')}: {result.get('message', '<no msg>')[:200]}")
+        return None
+
+    exec_result = result["solution"].get("executeJsResult", "")
+    if not exec_result:
+        # Empty executeJsResult means the probe script did not return a promise
+        # (Promise-Return-Bug from Versuch 7, already fixed — but if it recurs,
+        # check the probe source ends with `return new Promise(...)`).
+        info(
+            "Filecrypt PoW: flaresolverr returned empty executeJsResult — "
+            "Probe-Snippet-Promise-Return (Versuch 7) nicht aktiv. Prüfe: "
+            "(1) rix1337/flaresolverr-next Image aktiv, "
+            "(2) filecrypt_pow_probe.js endet mit `return new Promise(...)`, "
+            "(3) tempfile-Cache /tmp/kuasarr_sidecar/filecrypt_pow_probe.js aktuell."
+        )
+        return None
+
+    try:
+        parsed = json.loads(exec_result)
+    except json.JSONDecodeError as exc:
+        info(f"Filecrypt PoW: executeJs result not JSON: {exc}: {exec_result[:200]}")
+        return None
+
+    # Diagnostic dump — log the diag payload (which carries the fingerprint
+    # diagnostics: hasChromeRuntime, pointer, hover) so we can SEE on run one
+    # whether the headed-Xvfb FS-next browser actually carries the expected
+    # fingerprint. This settles the Code-605 question once and for all.
+    diag = parsed.get("diag") or {}
+    info(
+        f"Filecrypt PoW probe diag: hasChrome={diag.get('hasChrome')} "
+        f"hasChromeRuntime={diag.get('hasChromeRuntime')} "
+        f"hasChromeWebstore={diag.get('hasChromeWebstore')} "
+        f"pointer={diag.get('pointer')} hover={diag.get('hover')}"
+    )
+
+    status = parsed.get("status")
+    if status != "ok":
+        info(f"Filecrypt PoW: probe not ok — status={status!r} state={parsed.get('state')!r} "
+             f"error={parsed.get('error')!r}")
+        return None
+
+    if parsed.get("haspow"):
+        # filecrypt re-showed the PoW in the response → token was rejected. Caller
+        # should retry; if all retries fail, fall back to the manual handoff.
+        info("Filecrypt PoW: probe returned haspow=true — filecrypt rejected the submission")
+        return None
+
+    info(
+        f"Filecrypt PoW: solved via FS-next executeJs "
+        f"(code={parsed.get('code')}, haspow=False, html_len={len(parsed.get('html') or '')})"
+    )
+    return _PowSolvedResponse(
+        text=parsed.get("html", "") or "",
+        url=parsed.get("url", page_url),
+        status_code=int(parsed.get("code") or 200),
+    )
+
+
+
+def _solve_filecrypt_pow_if_present(shared_state, session, output, headers):
+    """Solve filecrypt.cc's PoW captcha via flaresolverr-next executeJs (click-and-let-page-solve).
+
+    The probe script (kuasarr/scripts/filecrypt_pow_probe.js) drives filecrypt's
+    own PoW box: cubic-Bezier pointer glide + click on `.pow-captcha__box`, lets
+    filecrypt's m.js/s.js/SHA-1 worker compute the clean token in the main-world
+    page context, then re-submits the form via in-browser fetch() and returns
+    the unlocked-page HTML.
+
+    This dispatcher up to 3 times (filecrypt sometimes requires a re-solve on
+    a fresh pow_id rotation). On success, returns a _PowSolvedResponse that the
+    downstream CNL/DLC extraction can parse. On total failure, raises
+    RuntimeError so the caller hands the captcha off to the manual /captcha route.
+
+    Why this works (and the earlier extract-and-POST did not):
+    earlier attempts re-injected m.js/s.js via <script textContent> inside the
+    executeJs isolated world; m.js there saw an empty `window.chrome.runtime`
+    and reported Code 605. The current approach NEVER re-injects — it only
+    dispatches a click, letting filecrypt's page-loaded m.js (which runs in the
+    main world with the real headed-Xvfb-Chrome fingerprint from
+    flaresolverr-next) compute the token.
+    """
+    if not _get_pow_captcha(BeautifulSoup(output.text, "html.parser")):
+        return output
+
+    MAX_ATTEMPTS = 3
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        info(f"Filecrypt PoW: click-and-let-page-solve attempt {attempt}/{MAX_ATTEMPTS}")
+        solved = _compute_pow_via_flaresolverr(shared_state, output.url)
+        if solved is None:
+            info(f"Filecrypt PoW: attempt {attempt} returned no solved-response (see prior log line)")
+            continue
+        return solved
+
+    # All attempts exhausted. Surface a clear reason so the caller hands the
+    # captcha off to the manual /captcha route instead of looping forever.
+    raise RuntimeError(
+        "Filecrypt PoW: failed after "
+        f"{MAX_ATTEMPTS} click-and-let-page-solve attempts — handing off to manual"
+    )
 
 
 class PermanentLinkFailure(Exception):
@@ -219,6 +507,19 @@ class DBCDispatcher:
             if data.get("session"):
                 continue
 
+            # Skip packages awaiting manual captcha solving (filecrypt PoW etc.).
+            # TTL: after 7 days without a manual solve, fail the package for good
+            # (otherwise the queue fills up with packages no one ever solves).
+            if data.get("needs_manual"):
+                ts = data.get("manual_timestamp", 0)
+                try:
+                    if ts and (time.time() - float(ts) > 7 * 86400):
+                        self._mark_as_failed(package_id, data.get("title", package_id),
+                                             "Manual solve timeout (7d)")
+                except (TypeError, ValueError):
+                    pass
+                continue
+
             title = data.get("title", package_id)
             prioritized_links = self._filter_and_prioritize_links(data.get("links", []), package_id, title)
             if not prioritized_links:
@@ -291,7 +592,15 @@ class DBCDispatcher:
             
             try:
                 result = self._solve_link(title, link_url, mirror, password)
-                
+
+                # PoW/Captcha not auto-solvable → hand off to manual queue (keep package,
+                # flag it) instead of failing it.
+                if result and result.get("status") == "manual_required":
+                    self._mark_as_manual_required(
+                        package_id, title, result.get("reason", "PoW"), result.get("url")
+                    )
+                    return False
+
                 if result and result.get("status") == "success":
                     download_links = result.get("links", [])
                     if download_links:
@@ -473,37 +782,116 @@ class DBCDispatcher:
             info(f"Password was wrong or missing. Could not get links for {title}")
             return None
 
+        # Filecrypt Proof-of-Work-Captcha lösen (falls vorhanden) via lokalem
+        # Python-Solver (SHA-1 brute-force, kein Browser, kein Fingerprinting).
+        # RuntimeError → hand-off to manual handoff (Dispatcher fängt das ab).
+        try:
+            output = _solve_filecrypt_pow_if_present(self.shared_state, session, output, headers)
+            soup = BeautifulSoup(output.text, 'html.parser')
+        except RuntimeError as e:
+            msg = str(e)
+            # PoW-related failures → hand off to manual captcha queue (browser solve).
+            # Other RuntimeErrors (transient network etc.) → None → retry.
+            if "PoW" in msg or "proof-of-work" in msg or "needs browser" in msg:
+                info(f"Filecrypt PoW not auto-solvable — handing off to manual queue: {e}")
+                return {"status": "manual_required", "reason": "PoW needs browser solving", "url": url}
+            info(f"Filecrypt PoW solve failed (transient): {e}")
+            return None
+
         # Check if captcha is needed
         no_captcha_present = bool(soup.find("form", {"class": "cnlform"}))
         info(f"Captcha check: CNL form present={no_captcha_present}")
-        
-        if not no_captcha_present:
-            # Handle Circle-Captcha first (try to skip with fake coords)
-            circle_captcha = bool(soup.find_all("div", {"class": "circle_captcha"}))
-            i = 0
-            while circle_captcha and i < 3:
-                random_x = str(random.randint(100, 200))
-                random_y = str(random.randint(100, 200))
-                output = session.post(url, data=f"buttonx.x={random_x}&buttonx.y={random_y}",
-                                      headers={'User-Agent': self.shared_state.values["user_agent"],
-                                               'Content-Type': 'application/x-www-form-urlencoded'})
-                url = output.url
-                soup = BeautifulSoup(output.text, 'html.parser')
-                circle_captcha = bool(soup.find_all("div", {"class": "circle_captcha"}))
-                i += 1
 
-            # Now solve the main captcha (CutCaptcha or reCAPTCHA) via DBC
-            info("Attempting to solve captcha via DBC...")
-            token = self._get_captcha_token(url, soup)
-            info(f"Captcha token received: {bool(token)}")
-            
-            if token:
-                output = session.post(url, data=f"cap_token={token}",
-                                      headers={'User-Agent': self.shared_state.values["user_agent"],
-                                               'Content-Type': 'application/x-www-form-urlencoded'})
-                url = output.url
+        if not no_captcha_present:
+            # Circle-Captcha: filecrypt now uses an image captcha where the user has
+            # to click inside an open circle. We send the image to DBC
+            # (solve_coordinates_captcha), which returns the (x, y) of the open circle
+            # — then submit those exact coordinates instead of random ones.
+            #
+            # Detection is strict: the page must have BOTH a <div class="circle_captcha">
+            # AND an <input type="image" src="/captcha/circle.php name="button">. The
+            # CSS class alone is not enough because filecrypt's main captcha UI also
+            # contains the substring "circle_captcha" in inline styles (false positive).
+            circle_captcha_img = soup.find(
+                "input",
+                {"type": "image", "src": re.compile(r"/captcha/circle\.php")},
+            )
+            if circle_captcha_img and self._client:
+                info("Circle-Captcha detected, solving via DBC image solver...")
+                # The captcha image is served at /captcha/circle.php relative to the
+                # page origin. Fetch it with the same session so the PHPSESSID cookie
+                # binds the answer to this page load.
+                origin = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+                img_src = circle_captcha_img.get("src", "")
+                if img_src.startswith("/"):
+                    img_url = origin + img_src
+                elif img_src.startswith("http"):
+                    img_url = img_src
+                else:
+                    img_url = f"{origin}/captcha/circle.php"
+                img_resp = session.get(
+                    img_url,
+                    headers={
+                        **headers,
+                        "Referer": url,
+                        "Accept": "image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5",
+                    },
+                    timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+                )
+                img_resp.raise_for_status()
+                info(f"Circle-Captcha image fetched ({len(img_resp.content)} bytes)")
+
+                coords = self._client.solve_coordinates_captcha(img_resp.content)
+                if coords:
+                    click_x, click_y = coords
+                    info(f"Circle-Captcha coordinates: x={click_x}, y={click_y}")
+                    output = session.post(
+                        url,
+                        data=f"button.x={click_x}&button.y={click_y}",
+                        headers={
+                            **headers,
+                            "Content-Type": "application/x-www-form-urlencoded",
+                            "Origin": origin,
+                            "Referer": url,
+                        },
+                        timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+                    )
+                    url = output.url
+                    soup = BeautifulSoup(output.text, 'html.parser')
+                    # If we still see circle_captcha, the answer was wrong — fall
+                    # through to the rest of the loop and let DBC retry on the
+                    # next package attempt.
+                    if soup.find("div", {"class": "circle_captcha"}):
+                        info("Circle-Captcha still present after DBC click — coordinates were wrong")
+                else:
+                    info("DBC returned no coordinates for Circle-Captcha")
             else:
-                info("No captcha token received, trying to continue without token...")
+                # No circle captcha — try CutCaptcha/reCAPTCHA/image via DBC.
+                # The previous fallback (random coords then POST without token)
+                # was a no-op that produced the 'Token rejected' message in the log;
+                # we skip that path entirely to avoid the wasted POST.
+                info("Attempting to solve captcha via DBC...")
+                token = self._get_captcha_token(url, soup)
+                info(f"Captcha token received: {bool(token)}")
+                if token:
+                    # filecrypt uses different field names for different captcha
+                    # types. Detect from the page which field name to send the
+                    # captcha response back as.
+                    recaptcha_field = soup.find("textarea", {"name": "g-recaptcha-response"})
+                    field_name = recaptcha_field.get("name") if recaptcha_field else "cap_token"
+                    info(f"Filecrypt: posting captcha response as field '{field_name}'")
+                    output = session.post(
+                        url,
+                        data={field_name: token},
+                        headers={
+                            **self._build_post_headers(url),
+                            "Origin": urlparse(url).scheme + "://" + urlparse(url).netloc,
+                            "Referer": url,
+                        },
+                    )
+                    url = output.url
+                else:
+                    info("No captcha token received — nothing to submit")
         else:
             info("No CAPTCHA present. Skipping token!")
 
@@ -522,11 +910,26 @@ class DBCDispatcher:
         # Extract links using existing logic
         return self._extract_filecrypt_links(session, soup, url, title, headers)
 
+    def _build_post_headers(self, url):
+        """Build default POST headers for captcha submission."""
+        return {
+            'User-Agent': self.shared_state.values["user_agent"],
+            'Content-Type': 'application/x-www-form-urlencoded',
+        }
+
     def _get_captcha_token(self, url: str, soup: BeautifulSoup) -> Optional[str]:
         """Get captcha token by solving via DBC."""
         
         debug(f"DBC: Checking for captcha types on {url}")
-        
+
+        # filecrypt.cc now uses a Proof-of-Work captcha (pow-captcha) that requires
+        # browser-side JS execution + fingerprinting (s.js/m.js signals). It cannot
+        # be solved by DBC/2Captcha (no image/reCAPTCHA). Detect it explicitly so the
+        # failure reason is clear instead of the misleading "no captcha found" path.
+        if soup.find("div", {"class": "pow-captcha"}):
+            info("Filecrypt PoW-captcha detected — requires browser-based solving, not solvable via DBC/2Captcha")
+            return None
+
         # Check for CutCaptcha
         cutcaptcha_div = soup.find("div", {"class": "cutcaptcha"})
         if cutcaptcha_div or "SAs61IAI" in str(soup):
@@ -1333,6 +1736,32 @@ class DBCDispatcher:
             info(f"Misery Key error: {exc}")
         
         return ""
+
+    def _mark_as_manual_required(self, package_id: str, title: str, reason: str, url: Optional[str] = None) -> None:
+        """Flag a package as needing manual captcha solving (e.g. filecrypt PoW).
+
+        Unlike _mark_as_failed, the package stays in the protected-DB (so the WebUI
+        captcha page can pick it up) and is only removed from the dispatcher's job
+        queue (so it is not retried automatically). A timestamp enables TTL cleanup.
+        """
+        try:
+            db = self.shared_state.get_db("protected")
+            current = None
+            for pid, raw in (db.retrieve_all_titles() or []):
+                if pid == package_id:
+                    current = raw
+                    break
+            data = json.loads(current) if current else {}
+            data["needs_manual"] = True
+            data["handoff_url"] = url
+            data["manual_timestamp"] = time.time()
+            data["handoff_reason"] = reason
+            db.update_store(package_id, json.dumps(data))
+            send_discord_message(self.shared_state, title=title, case="captcha")
+        except Exception as exc:
+            debug(f"Error marking as manual_required: {exc}")
+        push_jobs.remove_job(package_id)
+        info(f"Package {title} needs manual solving (reason: {reason})")
 
     def _mark_as_failed(self, package_id: str, title: str, reason: str) -> None:
         """Mark a package as failed."""

@@ -20,10 +20,64 @@ import kuasarr.providers.ui.html_images as images
 from kuasarr.providers.version import get_version
 from kuasarr.storage.config import Config
 
-# Auth configuration from environment
-_AUTH_USER = os.environ.get("KUASARR_WEBUI_USER", "").strip()
-_AUTH_PASS = os.environ.get("KUASARR_WEBUI_PASS", "").strip()
-_AUTH_TYPE = os.environ.get("KUASARR_AUTH_TYPE", "basic").lower()
+# Auth configuration: ENV override first, then Config('WebUI') fallback.
+# Read live so WebUI-configured credentials take effect without an app restart;
+# ENV stays the hard override for Docker secrets.
+_AUTH_CACHE = {}  # {config_key: (value, expires_at)} — short TTL, cleared on save
+_AUTH_CACHE_TTL = 5.0  # seconds
+_AUTH_CACHE_LOCK = threading.Lock()
+
+
+def _webui_value(key):
+    """Read a WebUI config value; graceful fallback if config is not ready yet."""
+    try:
+        return (Config('WebUI').get(key) or "").strip()
+    except Exception:
+        return ""
+
+
+def _live_get(env_name, config_key, default=""):
+    """ENV first (hard override), then Config('WebUI') fallback.
+
+    TTL-cached because Config('WebUI').get('password') is a 'secret' value and
+    triggers AES decryption (~1-2ms) per read.
+    """
+    env_val = os.environ.get(env_name)
+    if env_val:
+        return env_val.strip()
+    now = time.time()
+    with _AUTH_CACHE_LOCK:
+        entry = _AUTH_CACHE.get(config_key)
+        if entry and entry[1] > now:
+            return entry[0]
+    val = _webui_value(config_key) or default
+    with _AUTH_CACHE_LOCK:
+        _AUTH_CACHE[config_key] = (val, now + _AUTH_CACHE_TTL)
+    return val
+
+
+def _get_auth_user():
+    return _live_get("KUASARR_WEBUI_USER", "user")
+
+
+def _get_auth_pass():
+    return _live_get("KUASARR_WEBUI_PASS", "password")
+
+
+def _get_auth_type():
+    return (_live_get("KUASARR_AUTH_TYPE", "") or "basic").lower()
+
+
+def _get_secret_key():
+    # HMAC key derived from the current password; recomputed per call
+    # (SHA256 ~1µs, thread-safe, no shared mutable state).
+    return hashlib.sha256(_get_auth_pass().encode("utf-8")).digest()
+
+
+def invalidate_auth_cache():
+    """Force-refresh auth cache — call after WebUI credentials change."""
+    with _AUTH_CACHE_LOCK:
+        _AUTH_CACHE.clear()
 
 # Cookie settings
 _COOKIE_NAME = "kuasarr_session"
@@ -39,9 +93,6 @@ _RATE_LIMIT_MAX_REQUESTS = 10  # max requests per window
 _rate_limit_store = {}  # Simple in-memory store: {key: [(timestamp, count), ...]}
 _rate_limit_lock = threading.Lock()
 
-# Stable secret derived from PASS (restart-safe)
-_SECRET_KEY = hashlib.sha256(_AUTH_PASS.encode("utf-8")).digest()
-
 _AUTH_MODE_ATTR = "__kuasarr_auth_mode__"
 _AUTH_MODE_PUBLIC = "public"
 _AUTH_MODE_BROWSER = "browser"
@@ -50,12 +101,12 @@ _AUTH_MODE_API_KEY = "api_key"
 
 def is_auth_enabled():
     """Check if authentication is enabled (both USER and PASS set)."""
-    return bool(_AUTH_USER and _AUTH_PASS)
+    return bool(_get_auth_user() and _get_auth_pass())
 
 
 def is_form_auth():
     """Check if form-based auth is enabled."""
-    return _AUTH_TYPE == "form"
+    return _get_auth_type() == "form"
 
 
 def _b64encode(data: bytes) -> str:
@@ -68,7 +119,7 @@ def _b64decode(data: str) -> bytes:
 
 
 def _sign(data: bytes) -> bytes:
-    return hmac.new(_SECRET_KEY, data, hashlib.sha256).digest()
+    return hmac.new(_get_secret_key(), data, hashlib.sha256).digest()
 
 
 def _mask_user(user: str) -> str:
@@ -118,7 +169,7 @@ def _verify_session_cookie(value: str) -> bool:
 
         payload = json.loads(raw.decode("utf-8"))
 
-        if payload.get("u") != _mask_user(_AUTH_USER):
+        if payload.get("u") != _mask_user(_get_auth_user()):
             raise ValueError
 
         if int(time.time()) > int(payload.get("exp", 0)):
@@ -288,7 +339,7 @@ def check_basic_auth():
     try:
         decoded = base64.b64decode(auth[6:]).decode("utf-8")
         user, passwd = decoded.split(":", 1)
-        return user == _AUTH_USER and passwd == _AUTH_PASS
+        return user == _get_auth_user() and passwd == _get_auth_pass()
     except:
         return False
 
@@ -439,7 +490,7 @@ def _handle_login_post():
     password = request.forms.get("password", "")
     next_url = _normalize_next_url(request.forms.get("next", "/"))
 
-    if username == _AUTH_USER and password == _AUTH_PASS:
+    if username == _get_auth_user() and password == _get_auth_pass():
         cookie = _create_session_cookie(username)
         secure_flag = request.url.startswith("https://")
         response.set_cookie(

@@ -40,6 +40,8 @@ import {
   saveIntegrationSettings,
   getHostnamesSettings,
   saveHostnamesSettings,
+  getSjdjSettings,
+  saveSjdjSettings,
   getAdvancedSettings,
   saveAdvancedSettings,
 } from '../lib/api';
@@ -50,6 +52,7 @@ import type {
   CaptchaSettings,
   IntegrationSettings,
   HostnamesSettings,
+  SjdjSettings,
   AdvancedSettings,
 } from '../types';
 
@@ -726,6 +729,11 @@ function CaptchaTab() {
         </CardContent>
       </Card>
 
+      <p className="text-xs text-text-secondary flex items-center gap-1">
+        <Info className="h-3 w-3 shrink-0" />
+        <span><strong>DBC_MAX_CONCURRENT</strong> env var controls max concurrent CAPTCHA jobs (default: 1). Requires container restart.</span>
+      </p>
+
       <FeedbackBanner result={result} />
       <div className="flex justify-end pt-2">
         <Button type="submit" variant="primary" loading={saveMutation.isPending} leftIcon={<Save className="h-4 w-4" />}>
@@ -893,6 +901,52 @@ function HostnamesTab() {
     },
   });
 
+  // SJ/DJ hoster login credentials — separate form/state + own save action
+  const [sjdjForm, setSjdjForm] = useState<Omit<SjdjSettings, '_is_set'>>({
+    sj_user: '',
+    sj_preferred_hoster: '',
+    dj_user: '',
+    dj_preferred_hoster: '',
+    sj_password: '',
+    dj_password: '',
+  });
+  const [sjdjIsSet, setSjdjIsSet] = useState<Record<string, boolean>>({});
+
+  const { data: sjdjData } = useQuery({
+    queryKey: ['settings', 'sjdj'],
+    queryFn: getSjdjSettings,
+  });
+
+  useEffect(() => {
+    if (sjdjData) {
+      setSjdjForm({
+        sj_user: sjdjData.sj_user,
+        sj_preferred_hoster: sjdjData.sj_preferred_hoster,
+        dj_user: sjdjData.dj_user,
+        dj_preferred_hoster: sjdjData.dj_preferred_hoster,
+        sj_password: '',  // never prefill secrets
+        dj_password: '',
+      });
+      setSjdjIsSet(sjdjData._is_set || {});
+    }
+  }, [sjdjData]);
+
+  const sjdjMutation = useMutation({
+    mutationFn: saveSjdjSettings,
+    onSuccess: () => {
+      setResult({ success: true, message: 'SJ/DJ credentials saved successfully!' });
+      setTimeout(() => setResult(null), 5000);
+    },
+    onError: (error) => {
+      setResult({ success: false, message: error instanceof Error ? error.message : 'Failed to save SJ/DJ credentials' });
+    },
+  });
+
+  const handleSjdjSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    sjdjMutation.mutate(sjdjForm);
+  };
+
   if (isLoading) return <div className="flex items-center justify-center py-12"><Spinner size="lg" /></div>;
 
   const handleSave = (e: React.FormEvent) => {
@@ -902,48 +956,112 @@ function HostnamesTab() {
   };
 
   return (
-    <form onSubmit={handleSave} className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Network className="h-5 w-5" />
-            Scraper Hostnames
-          </CardTitle>
-          <CardDescription>
-            Enter the hostname for each DDL site you want to scrape. Leave empty to disable a site.
-            Kuasarr never bundles hostnames — you must provide them yourself.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {restartSites.length > 0 && (
-            <div className="mb-4 p-3 rounded-lg bg-kuasarr-primary/10 border border-kuasarr-primary/30 flex items-start gap-2">
-              <Info className="h-4 w-4 text-kuasarr-primary mt-0.5 shrink-0" />
-              <p className="text-sm text-kuasarr-primary">
-                A restart is required for changes to: <strong>{restartSites.join(', ')}</strong>
-              </p>
+    <div className="space-y-6">
+      <form onSubmit={handleSave}>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Network className="h-5 w-5" />
+              Scraper Hostnames
+            </CardTitle>
+            <CardDescription>
+              Enter the hostname for each DDL site you want to scrape. Leave empty to disable a site.
+              Kuasarr never bundles hostnames — you must provide them yourself.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {restartSites.length > 0 && (
+              <div className="mb-4 p-3 rounded-lg bg-kuasarr-primary/10 border border-kuasarr-primary/30 flex items-start gap-2">
+                <Info className="h-4 w-4 text-kuasarr-primary mt-0.5 shrink-0" />
+                <p className="text-sm text-kuasarr-primary">
+                  A restart is required for changes to: <strong>{restartSites.join(', ')}</strong>
+                </p>
+              </div>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {HOSTNAME_SITES.map((site) => (
+                <Input
+                  key={site}
+                  label={site.toUpperCase()}
+                  placeholder="example.com"
+                  value={form[site]}
+                  onChange={(e) => setForm({ ...form, [site]: e.target.value })}
+                />
+              ))}
             </div>
-          )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {HOSTNAME_SITES.map((site) => (
+          </CardContent>
+        </Card>
+        <div className="flex justify-end pt-4">
+          <Button type="submit" variant="primary" loading={saveMutation.isPending} leftIcon={<Save className="h-4 w-4" />}>
+            Save Hostname Settings
+          </Button>
+        </div>
+      </form>
+
+      {/* SJ / DJ Login Credentials */}
+      <form onSubmit={handleSjdjSave}>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Lock className="h-5 w-5" />
+              SJ / DJ Login Credentials
+            </CardTitle>
+            <CardDescription>
+              Optional login credentials for the SJ and DJ hosters above. Applied on the next session build.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Input
-                key={site}
-                label={site.toUpperCase()}
-                placeholder="example.com"
-                value={form[site]}
-                onChange={(e) => setForm({ ...form, [site]: e.target.value })}
+                label="SJ Username"
+                placeholder="username"
+                value={sjdjForm.sj_user}
+                onChange={(e) => setSjdjForm({ ...sjdjForm, sj_user: e.target.value })}
+                leftIcon={<User className="h-4 w-4" />}
               />
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+              <PasswordInput
+                label="SJ Password"
+                value={sjdjForm.sj_password}
+                onChange={(v) => setSjdjForm({ ...sjdjForm, sj_password: v })}
+                isSet={sjdjIsSet['sj_password']}
+              />
+              <Input
+                label="DJ Username"
+                placeholder="username"
+                value={sjdjForm.dj_user}
+                onChange={(e) => setSjdjForm({ ...sjdjForm, dj_user: e.target.value })}
+                leftIcon={<User className="h-4 w-4" />}
+              />
+              <PasswordInput
+                label="DJ Password"
+                value={sjdjForm.dj_password}
+                onChange={(v) => setSjdjForm({ ...sjdjForm, dj_password: v })}
+                isSet={sjdjIsSet['dj_password']}
+              />
+              <Input
+                label="SJ Preferred Hoster"
+                placeholder="e.g. rapidgator"
+                value={sjdjForm.sj_preferred_hoster}
+                onChange={(e) => setSjdjForm({ ...sjdjForm, sj_preferred_hoster: e.target.value })}
+              />
+              <Input
+                label="DJ Preferred Hoster"
+                placeholder="e.g. rapidgator"
+                value={sjdjForm.dj_preferred_hoster}
+                onChange={(e) => setSjdjForm({ ...sjdjForm, dj_preferred_hoster: e.target.value })}
+              />
+            </div>
+            <div className="flex justify-end mt-4">
+              <Button type="submit" variant="primary" loading={sjdjMutation.isPending} leftIcon={<Save className="h-4 w-4" />}>
+                Save SJ/DJ Credentials
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </form>
 
       <FeedbackBanner result={result} />
-      <div className="flex justify-end pt-2">
-        <Button type="submit" variant="primary" loading={saveMutation.isPending} leftIcon={<Save className="h-4 w-4" />}>
-          Save Hostname Settings
-        </Button>
-      </div>
-    </form>
+    </div>
   );
 }
 

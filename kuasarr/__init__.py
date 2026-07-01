@@ -91,14 +91,18 @@ def run():
         if arguments.port:
             port = int(arguments.port)
         
+        need_connection_setup = False
         if os.environ.get('DOCKER'):
             config_path = "/config"
-            if not arguments.internal_address:
-                print(
-                    f"You must set the INTERNAL_ADDRESS variable to a locally reachable URL, e.g. http://192.168.1.1:{port}")
-                print("The local URL will be used by Radarr/Sonarr to connect to kuasarr")
-                print("Stopping kuasarr...")
-                sys.exit(1)
+            if arguments.internal_address:
+                internal_address = arguments.internal_address
+            else:
+                # No INTERNAL_ADDRESS via ENV/CLI: instead of exiting, defer to
+                # the connection setup server (started after config is ready below).
+                need_connection_setup = True
+                # Placeholder keeps set_connection_info/validate_address happy
+                # until the real value is entered via the setup form.
+                internal_address = f'http://0.0.0.0:{port}'
         else:
             internal_address = f'http://{check_ip()}:{port}'
 
@@ -139,6 +143,30 @@ def run():
         shared_state.update("user_agent",
                             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
         shared_state.update("helper_active", False)
+
+        # P0: If INTERNAL_ADDRESS was not provided via ENV/CLI, start the
+        # connection setup server (HTML form on 0.0.0.0:port) so the user can
+        # set it through the browser. On first run (no value saved yet) the form
+        # is shown; on later runs the saved value is used directly.
+        if need_connection_setup:
+            saved_internal = Config('Connection').get('internal_address')
+            if saved_internal:
+                internal_address = saved_internal
+                external_address = Config('Connection').get('external_address') or saved_internal
+                shared_state.set_connection_info(internal_address, external_address, port)
+            else:
+                info(f"INTERNAL_ADDRESS not set — starting connection setup server on 0.0.0.0:{port}")
+                connection_config(shared_state)
+                internal_address = shared_state.values['internal_address']
+                external_address = shared_state.values['external_address']
+
+        # P2a: Apply configured timezone to the running process (logs/timestamps)
+        tz = Config('Connection').get('timezone') or 'Europe/Berlin'
+        os.environ['TZ'] = tz
+        try:
+            time.tzset()
+        except AttributeError:
+            pass  # Windows (tzset unavailable; irrelevant for Docker/Unix)
 
         # Captcha Config (supports DBC and 2Captcha)
         captcha_config = Config('Captcha')

@@ -113,6 +113,26 @@ def get_localized_title(shared_state, imdb_id, language='de'):
         if cache_age < 60 * 60:
             return None
 
+    # Tier 1/2: JSON APIs (api.imdbapi.dev / IMDb CDN) — bypasses the AWS WAF
+    # that blocks direct imdb.com scraping (HTTP 202). Falls through to the
+    # HTML/FlareSolverr path below on any failure (None).
+    try:
+        from kuasarr.providers import imdb_metadata_api
+        api_title = imdb_metadata_api.get_localized(shared_state, imdb_id, language)
+        if api_title:
+            api_title = _TITLE_SANITIZE_RE.sub(' ', api_title).strip()
+            api_title = api_title.replace(" - ", "-")
+            api_title = _MULTI_SPACE_RE.sub(' ', api_title)
+            recently_searched[cache_key] = {"title": api_title, "timestamp": datetime.now()}
+            shared_state.update(context, recently_searched)
+            # also persist in a long-term context (survives the 24h purge) for stale fallback
+            _lt = shared_state.get_recently_searched(shared_state, "recents_imdb_titles_lt", 60 * 60 * 24 * 30)
+            _lt[cache_key] = {"title": api_title, "timestamp": datetime.now()}
+            shared_state.update("recents_imdb_titles_lt", _lt)
+            return api_title
+    except Exception as e:
+        debug(f"IMDb API tier failed for {imdb_id}, falling through to HTML: {e}")
+
     headers = {
         'Accept-Language': language,
         'User-Agent': shared_state.values["user_agent"]
@@ -143,6 +163,17 @@ def get_localized_title(shared_state, imdb_id, language='de'):
 
     if not localized_title:
         debug(f"Could not get localized title for {imdb_id} in {language} from IMDb")
+        # Stale-cache fallback: during a transient WAF/API outage, return the
+        # last known good title (looked up beyond the normal 24h window) so the
+        # dependent scrapers keep producing results instead of emptying out.
+        try:
+            long_term = shared_state.get_recently_searched(shared_state, "recents_imdb_titles_lt", 60 * 60 * 24 * 30)
+            prior = long_term.get(cache_key)
+            if prior and prior.get("title"):
+                debug(f"IMDb: returning stale cached title for {imdb_id} during outage: {prior['title']}")
+                return prior["title"]
+        except Exception:
+            pass
         recently_searched[cache_key] = {"title": None, "timestamp": datetime.now()}
         shared_state.update(context, recently_searched)
         return None
@@ -153,6 +184,10 @@ def get_localized_title(shared_state, imdb_id, language='de'):
 
     recently_searched[cache_key] = {"title": localized_title, "timestamp": datetime.now()}
     shared_state.update(context, recently_searched)
+    # also persist in a long-term context (survives the 24h purge) for stale fallback
+    _lt = shared_state.get_recently_searched(shared_state, "recents_imdb_titles_lt", 60 * 60 * 24 * 30)
+    _lt[cache_key] = {"title": localized_title, "timestamp": datetime.now()}
+    shared_state.update("recents_imdb_titles_lt", _lt)
 
     return localized_title
 
@@ -187,6 +222,18 @@ def get_imdb_id_from_title(shared_state, title, language="de"):
         title_item = recently_searched[title]
         if title_item["timestamp"] > datetime.now() - timedelta(seconds=threshold):
             return title_item["imdb_id"]
+
+    # Tier 1/2: JSON API search (api.imdbapi.dev / IMDb CDN) before imdb.com/find.
+    # This function previously had NO fallback if imdb.com/find failed.
+    try:
+        from kuasarr.providers import imdb_metadata_api
+        api_id = imdb_metadata_api.search_imdb_id(shared_state, title, ttype)
+        if api_id:
+            recently_searched[title] = {"imdb_id": api_id, "timestamp": datetime.now()}
+            shared_state.update(context, recently_searched)
+            return api_id
+    except Exception as e:
+        debug(f"IMDb API search tier failed for {title}, falling through to imdb.com/find: {e}")
 
     headers = {
         'Accept-Language': language,

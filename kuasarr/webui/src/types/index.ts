@@ -346,6 +346,16 @@ export interface HostnamesSettings {
   dj: string;
 }
 
+export interface SjdjSettings {
+  sj_user: string;
+  sj_preferred_hoster: string;
+  dj_user: string;
+  dj_preferred_hoster: string;
+  sj_password: string;
+  dj_password: string;
+  _is_set: Record<string, boolean>;
+}
+
 export interface AdvancedSettings {
   flatten_nested_folders: boolean;
   trigger_rescan: boolean;

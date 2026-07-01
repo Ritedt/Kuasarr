@@ -133,31 +133,83 @@ async function __kuasarr_pow_solve() {
 
         const powBox = powDiv.querySelector('.pow-captcha__box, [class*="pow-captcha__box"]');
 
+        // Synthetische Mouse-Sequenz emittieren, damit S.collect() einen nicht-leeren
+        // Vektor vorfindet (sonst droppt s.js die Signatur — siehe filecrypt_pow_sidecar.js).
+        // Ohne diese Sequenz war pow_data im Live-Test 14:53 leer.
+        if (powBox && globalThis.S && typeof globalThis.S.recordPointer === 'function') {
+            try {
+                if (typeof globalThis.S.start === 'function') globalThis.S.start();
+                for (let i = 0; i < 6; i++) {
+                    globalThis.S.recordPointer({
+                        clientX: 120 + i * 8,
+                        clientY: 220 + (i % 3) * 6,
+                        timeStamp: performance.now() + i * 30,
+                        pointerType: 'mouse',
+                        target: powBox, bubbles: true,
+                    });
+                }
+                log('S-pointerSeq', {ok: true, count: 6});
+            } catch (e) { log('S-pointerSeq', rec(e)); }
+        } else {
+            log('S-pointerSeq', {ok: false, error: 'no recordPointer'});
+        }
+
+        if (powBox && globalThis.S && typeof globalThis.S.recordClick === 'function') {
+            try {
+                globalThis.S.recordClick({
+                    clientX: 156, clientY: 232,
+                    timeStamp: performance.now(),
+                    target: powBox, bubbles: true,
+                });
+                log('S-recordClick', {ok: true});
+            } catch (e) { log('S-recordClick', rec(e)); }
+        }
+
+        // Race-Detection: 30s-Timer, damit der executeJs-Timeout nicht ungebremst
+        // blockiert, falls der m.js SHA-1 Web Worker noch im Background-Throttle hängt.
+        // m.js startet einen Web Worker, der SHA-1 brute-force ausführt; R() returnt ein
+        // Promise, das erst resolved wenn der Worker fertig ist. Die 250 ms Sleep in der
+        // vorherigen Version reichten dafür nicht (Live-Test 14:53: pow_x=0).
+        async function withTimeout(promise, ms) {
+            let to;
+            const timeout = new Promise(res => { to = setTimeout(() => res(null), ms); });
+            const result = await Promise.race([promise, timeout]);
+            clearTimeout(to);
+            return result;
+        }
+
         let pow_x = '';
         let pow_data = '';
-        try {
-            if (typeof globalThis.S === 'object' && typeof globalThis.S.start === 'function') {
-                try { globalThis.S.start(); } catch (e) { log('S-start', rec(e)); }
-            }
-            if (powBox && globalThis.S && typeof globalThis.S.recordClick === 'function') {
-                try {
-                    globalThis.S.recordClick({
-                        clientX: 200, clientY: 220,
-                        timeStamp: performance.now(),
-                        target: powBox, bubbles: true
-                    });
-                    log('S-recordClick', {ok: true});
-                } catch (e) { log('S-recordClick', rec(e)); }
-            }
-            await new Promise(r => setTimeout(r, 250));
 
-            if (typeof globalThis.R === 'function') {
-                try { pow_x = String(await globalThis.R()); } catch (e) { log('R-call', rec(e)); }
-            }
-            if (globalThis.S && typeof globalThis.S.collect === 'function') {
-                try { pow_data = String(await globalThis.S.collect()); } catch (e) { log('S-collect', rec(e)); }
-            }
-        } catch (e) { log('eval-block', rec(e)); }
+        const rStart = performance.now();
+        if (typeof globalThis.R === 'function') {
+            try {
+                const rResult = await withTimeout(globalThis.R(), 30000);
+                if (rResult === null) {
+                    log('R-call', {ok: false, timeout: true, r_call_ms: 30000});
+                } else {
+                    pow_x = String(rResult);
+                    log('R-call', {ok: true, r_call_ms: Math.round(performance.now() - rStart), len: pow_x.length});
+                }
+            } catch (e) { log('R-call', rec(e)); }
+        } else {
+            log('R-call', {ok: false, error: 'globalThis.R is not a function'});
+        }
+
+        const sStart = performance.now();
+        if (globalThis.S && typeof globalThis.S.collect === 'function') {
+            try {
+                const sResult = await withTimeout(Promise.resolve(globalThis.S.collect()), 5000);
+                if (sResult === null) {
+                    log('S-collect', {ok: false, timeout: true, s_collect_ms: 5000});
+                } else {
+                    pow_data = String(sResult);
+                    log('S-collect', {ok: true, s_collect_ms: Math.round(performance.now() - sStart), len: pow_data.length});
+                }
+            } catch (e) { log('S-collect', rec(e)); }
+        } else {
+            log('S-collect', {ok: false, error: 'S.collect is not a function'});
+        }
 
         out.pow_x_len = pow_x.length;
         out.pow_data_len = pow_data.length;

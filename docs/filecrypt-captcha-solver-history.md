@@ -262,6 +262,91 @@ nach dem ersten Live-Test gegen einen echten filecrypt-Container.
 
 ---
 
+## Versuch 8: Race-Condition auf R()/S.collect() (30.06.2026)
+
+**Kernidee**: Versuch 7 hat das **strukturelle** Problem behoben (Probe läuft
+komplett durch, alle 7 Steps `ok: True`), aber die Tokens kommen leer zurück.
+Live-Test vom 30.06.2026 14:53 (Batman.v.Superman Container):
+
+```text
+[14:53:45] Filecrypt PoW probe: {'step': 'wait-globals', 'ok': True, 'tries': 0, ...}
+[14:53:45] Filecrypt PoW probe: {'step': 'S-recordClick', 'ok': True}
+[14:53:45] Filecrypt PoW: flaresolverr tokens pow_id='DBE42CB80C' pow_x=0 chars pow_data=0 chars
+[14:53:45] Filecrypt PoW: flaresolverr tokens unavailable — falling back to Node sidecar
+[14:53:47] Filecrypt PoW: final tokens pow_x=92 chars, pow_data=1138 chars
+[14:53:47] Filecrypt still shows pow-captcha after SHA-1 POST
+```
+
+**Beobachtungen aus dem Live-Test:**
+
+1. **`wait-globals` mit `tries: 0`** — `R()` und `S.collect()` waren beim
+   ersten Polling-Tick verfügbar, aber **nicht zwingend initialisiert**.
+   `m.js` startet einen Web Worker für die SHA-1-Berechnung; `R()` returnt
+   ein Promise, das erst resolved wenn der Worker durch ist. Die 250 ms
+   Sleep zwischen `recordClick` und `R()`-Aufruf reichen dafür nicht.
+
+2. **Der Node-Sidecar liefert im selben Lauf `pow_x=92 chars, pow_data=1138
+   chars`** — filecrypts JS produziert also die Tokens, wenn man ihm genug
+   Zeit lässt. Wir wissen also: das strukturelle Snippet ist OK, das
+   **Timing** ist falsch.
+
+3. **Selbst der Node-Sidecar wird vom filecrypt-Server abgelehnt**
+   ("Filecrypt still shows pow-captcha after SHA-1 POST"). Das ist die
+   cf_clearance-Fingerprinting-Hypothese aus Versuch 7 — kommt erst zum
+   Tragen, NACHDEM wir konsistente Tokens haben.
+
+### Versuch-8-Fix
+
+**Zwei** Änderungen am Probe-Snippet:
+
+1. **`S.recordPointer`-Sequenz vor `recordClick`** (6 Pointer-Events mit
+   progressiver Koordinatenbewegung, wie im Node-Sidecar). Dadurch hat
+   `S.collect()` einen nicht-leeren Maus-/Timing-Vektor, den s.js aggregieren
+   kann. Ohne diese Sequenz wird `pow_data` per Default leer.
+
+2. **`Promise.race` mit Timeout** um `R()` und `S.collect()` gewrappt:
+   - `R()`: 30s Timeout — sicher unter `EXECUTE_JS_TIMEOUT` (60s) und
+     großzügig für die SHA-1-Bruteforce.
+   - `S.collect()`: 5s — s.js ist ein synchroner Aggregator.
+   - Bei Timeout wird `null` returnt; das macht `pow_x` leer und der
+     Probe-Step wird mit `r_timeout: true, r_call_ms: 30000` geloggt.
+     Damit wissen wir **klar**, ob `R()` gegen den Timeout gerannt ist
+     (Worker-Hänger) oder nur einen leeren String resolved hat.
+
+3. **Timing-Logs** für beide Calls (`r_call_ms`, `s_collect_ms`), damit
+   der nächste Versuch bei Bedarf die Timeouts gezielt anpassen kann.
+
+### Versuch-8-Code-Änderungen
+
+- `kuasarr/scripts/filecrypt_pow_probe.js` (Z. 134-180) — `S.recordPointer`-
+  Sequenz, `withTimeout`-Helper, Timing-Logs.
+- `kuasarr/providers/captcha/dbc_dispatcher.py` (`_compute_pow_via_flaresolverr`)
+  — expliziter Warn-Log wenn `r_call_ms >= 29000` (Worker-Hänger erkannt).
+
+### Test-Plan (ausstehend)
+
+1. Kuasarr-Container neu starten.
+2. filecrypt-Container triggern.
+3. Logs prüfen:
+   - **Erfolg:** Probe-Log `S-pointerSeq ok: true count: 6`, `R-call ok: true
+     r_call_ms: 8000-25000 len: 90`, `S-collect ok: true s_collect_ms: 50
+     len: 1100`. Dispatcher: `flaresolverr tokens pow_x=92 chars pow_data=1138
+     chars`.
+   - **Worker-Timeout:** `R-call timeout: true r_call_ms: 30000` →
+     `EXECUTE_JS_TIMEOUT` auf 90s hochsetzen ODER `waitInSeconds` auf 30s.
+   - **Akzeptanz:** filecrypt zeigt nach SHA-1-POST keinen `pow-captcha`
+     mehr im Response-Body.
+4. **Falls filecrypt die Tokens ablehnt** (cf_clearance-Hypothese):
+   Übergang zu Plan B aus Versuch 7 (Playwright-Micro-Service, mit
+   arm/v7-Einschränkung).
+
+### Versuch-8-Ergebnis
+
+Ausstehend — der Live-Test muss die Hypothese bestätigen, dass die 250 ms
+Sleep + 250 ms `recordPointer`-loser Pfad die Hauptursache war.
+
+---
+
 ## Aktueller Stand (30.06.2026)
 
 | Captcha-Typ | Pfad | Status |
@@ -270,7 +355,7 @@ nach dem ersten Live-Test gegen einen echten filecrypt-Container.
 | filecrypt CNL | `dbc_dispatcher._extract_filecrypt_links` | ✅ läuft |
 | filecrypt reCAPTCHA-v2 | `dbc_dispatcher._solve_filecrypt_with_dbc` mit `g-recaptcha-response`-Field (`c2f31be`) | ✅ läuft |
 | filecrypt Circle-Captcha | `dbc_dispatcher._solve_filecrypt_with_dbc` mit DBC/2Captcha-`CoordinatesTask` (`a73be2b`, `71191f5`) | ⚠️ 2Captcha gibt `ERROR_CAPTCHA_UNSOLVABLE` zurück (Worker-Problem) |
-| filecrypt PoW | `dbc_dispatcher._solve_filecrypt_pow_if_present` | ⚠️ Versuch 7 — Promise-Return-Fix + Maglev-Anforderung implementiert, Live-Test ausstehend |
+| filecrypt PoW | `dbc_dispatcher._solve_filecrypt_pow_if_present` | ⚠️ Versuch 8 — Race-Condition + Pointer-Sequenz implementiert, Live-Test ausstehend |
 | filecrypt manueller Handoff | `kuasarr/api/captcha/provider_routes.py:serve_filecrypt_manual` | ✅ läuft (Browser-basierte Lösung durch User) |
 
 ---
@@ -287,6 +372,59 @@ nach dem ersten Live-Test gegen einen echten filecrypt-Container.
    `DBC` umstellen oder Bilder vorab manuell klassifizieren.
 4. **CPU/RAM-Monitoring** der FS-Sessions: in Spitzenzeiten blockiert FS durch
    parallele `executeJs`-Aufrufe; Lastverteilung pro Container nötig.
+
+---
+
+## Bekannte Drittlösung: `rix1337/SponsorsHelper` (nicht integriert)
+
+`rix1337` (Quasarr-Maintainer) bietet ein privates Docker-Image
+`ghcr.io/rix1337/sponsors-helper:latest` an, das filecrypt-PoW in einer
+**externen Helper-Container-Architektur** löst. Stand 30.06.2026 geprüft
+und **bewusst nicht** in Kuasarr übernommen:
+
+| Kriterium | SponsorsHelper | Kuasarr-Constraint |
+| --- | --- | --- |
+| Source / Lizenz | Closed-source | Open-source |
+| Zugang | **Aktive GitHub-Spende an rix1337 erforderlich** (Sponsor-Gate im Container) | free, self-hosted, community-driven |
+| Multi-Arch | `linux/amd64`, `linux/arm64` | **muss `linux/arm/v7`** ([CLAUDE.md](../../CLAUDE.md), [SPRINT_PLAN_V2.md](SPRINT_PLAN_V2.md)) |
+| Captcha-Provider | **nur 2Captcha** | DBC + 2Captcha (User-Wahl) |
+| Browser-Engine | delegiert an FlareSolverr (kein Chromium im Image) | bereits FlareSolverr im User-Setup |
+| API-Protokoll | closed, kann jederzeit breaking ändern | muss API-Contract erhalten |
+
+**Technisch redundanter Ansatz**: Quasarr's eigener `_solve_filecrypt_pow_if_present`
+macht intern einen `MouseEvent('click')`-Dispatch via `flaresolverr-next`
+`executeJs` — **identisch** mit Kuasarrs Commit `ba36ad1`. SponsorsHelper
+orchestriert nur ein externer Wrapper mit dem gleichen FlareSolverr-Aufruf
+und einem 5-Min-Refresh-Sponsor-Status. Kein technologischer Mehrwert
+gegenüber dem aktuellen Kuasarr-Ansatz.
+
+**Image-Aufbau** (verifiziert via GHCR-Manifest): `python:3.12.13-bookworm` + `uv`, 175 MB compressed, 11 Layer, **kein Browser im Image**. Port `9700/tcp` exposed, `/config`-Volume speichert GitHub-OAuth-Token (persistent!). ENV: `QUASARR_URL`, `QUASARR_API_KEY`, `FLARESOLVERR_URL`, `APIKEY_2CAPTCHA`, `TZ`.
+
+**Architektur-Doku explizit ablehnend**:
+[SPRINT_PLAN_V2.md](SPRINT_PLAN_V2.md) Z. 804 sagt:
+*"SponsorsHelper nicht übernehmen — alle Quasarr-Referenzen auf
+SponsorsHelper entfernen."* Diese Entscheidung wurde nach der Recherche
+am 30.06.2026 **bestätigt** — die technischen Eigenschaften (closed-source,
+Sponsor-Gate, kein arm/v7) sind nicht mit Kuasarrs Architekturprinzipien
+vereinbar.
+
+**Was Kuasarr aus dem SponsorsHelper-Pattern trotzdem nutzt**:
+
+1. **API-Pattern für externe Helper**: Das `/sponsors_helper/api/*`-Schema
+   (REST + `apikey`-Query + 300s-Refresh-Token) ist eine bewährte
+   Vorlage, falls Kuasarr jemals einen eigenen optionalen Helper-Container
+   anbieten will — dann aber mit offenem, dokumentiertem Protokoll.
+
+2. **2Captcha-Integration ist einfach**: `APIKEY_2CAPTCHA` + HTTP-Calls.
+   Kuasarr hat bereits einen 2Captcha-Client ([`a73be2b`][commit-a73be2b]).
+
+3. **Für User, die SponsorsHelper trotzdem einsetzen wollen**: Den
+   `/captcha`-Handoff-Pfad in [provider_routes.py][provider-routes]
+   weiterpflegen — das ist die generische Schnittstelle für jeden externen
+   Browser-basierten Solver (manuell oder automatisiert).
+
+[commit-a73be2b]: https://github.com/Ritedt/Kuasarr/commit/a73be2b
+[provider-routes]: ../kuasarr/api/captcha/provider_routes.py
 
 ---
 
@@ -308,7 +446,9 @@ nach dem ersten Live-Test gegen einen echten filecrypt-Container.
 | `39d6545` | feat(filecrypt-pow): sidecar gets parent UA + emits mouse sequence |
 | `13cf0a3` | fix(filecrypt-pow): log CF-bypass status + tighten JS-detection |
 | `ba36ad1` | feat(filecrypt-pow): compute tokens in flaresolverr-next executeJs |
-| _(ausstehend)_ | fix(filecrypt-pow): Promise-Return-Pattern im Probe-Snippet (Versuch 7) |
+| *(ausstehend)* | fix(filecrypt-pow): Promise-Return-Pattern im Probe-Snippet (Versuch 7) |
+| *(ausstehend)* | fix(filecrypt-pow): race-condition on R()/S.collect() in probe (Versuch 8) |
+| *(ausstehend)* | docs(filecrypt): note on SponsorsHelper as known third-party solver (not adopted) |
 
 ---
 

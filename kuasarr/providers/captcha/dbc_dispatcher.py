@@ -300,6 +300,17 @@ def _compute_pow_via_flaresolverr(shared_state, page_url):
     if isinstance(parsed, dict) and parsed.get("steps"):
         for step in parsed["steps"]:
             info(f"Filecrypt PoW probe: {step}")
+        # Versuch 8: Wenn R() gegen den 30s-Timeout gerannt ist, ist der m.js
+        # SHA-1 Web Worker ge-throttled. Das ist ein Hinweis, dass die Worker-
+        # Konfiguration (Background-Throttling, Maglev) nicht stimmt ODER die
+        # filecrypt-Difficulty so hoch ist, dass 30s nicht reichen.
+        for step in parsed["steps"]:
+            if isinstance(step, dict) and step.get("r_call_ms", 0) >= 29000:
+                info("Filecrypt PoW: R() raced against the 30s timeout — "
+                     "m.js SHA-1 web worker is throttled or difficulty too high. "
+                     "Consider bumping EXECUTE_JS_TIMEOUT in FlareSolverr to 90s+ "
+                     "or waiting longer inside the probe.")
+                break
     if isinstance(parsed, dict) and parsed.get("errors"):
         for err in parsed["errors"]:
             info(f"Filecrypt PoW probe error: {err}")

@@ -23,6 +23,7 @@ from kuasarr.constants import (
     FILECRYPT_POW_TAB_VERIFY_SECONDS,
     get_flaresolverr_pow_timeout,
 )
+from kuasarr.providers.network.origin_guard import same_origin_guard_for
 from kuasarr.providers.network.cloudflare import (
     FlareSolverrResponse,
     is_cloudflare_challenge,
@@ -567,6 +568,11 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
     session, headers, output = ensure_session_cf_bypassed(info, shared_state, session, url, headers)
     if not session or not output:
         return False
+
+    # The password and the captcha token are posted to this session below, and
+    # requests follows 302 by default while carrying the body along. Pin the
+    # session to the container's own origin so neither can be redirected away.
+    session = same_origin_guard_for(session, output.url)
 
     soup = BeautifulSoup(output.text, 'html.parser')
 

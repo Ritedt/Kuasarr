@@ -28,6 +28,10 @@ from kuasarr.downloads.linkcrypters.filecrypt import (
 )
 from kuasarr.providers.captcha import push_jobs
 from kuasarr.providers.captcha.math_captcha import solve_math_captcha
+from kuasarr.providers.network.origin_guard import (
+    origin_of as _origin_of,
+    same_origin_guard_for as _same_origin_guard_for,
+)
 from kuasarr.providers.network.cloudflare import (
     flaresolverr_create_session,
     flaresolverr_destroy_session,
@@ -539,6 +543,12 @@ class DBCDispatcher:
             return None
         
         info(f"Filecrypt page loaded successfully (status={output.status_code}, {len(output.text)} bytes)")
+
+        # Everything below posts the container password and the captcha token.
+        # requests follows 302 by default and carries the body along, so a
+        # container that redirects the POST would hand both to a host of its
+        # choosing. Pin the session to the container's own origin first.
+        session = self._same_origin_guard_for(session, output.url)
 
         soup = BeautifulSoup(output.text, 'html.parser')
 
@@ -1168,75 +1178,13 @@ class DBCDispatcher:
 
     @staticmethod
     def _origin_of(url: str) -> Optional[tuple]:
-        """Normalize a URL to (scheme, host, port) for origin comparison.
-
-        Host alone is not an origin: ``http://container:9999`` is a different
-        origin than ``https://container`` and may well be an internal service
-        on the same machine. Comparing the triple keeps those apart.
-        """
-        try:
-            parsed = urlparse(url)
-        except ValueError:
-            return None
-        scheme = (parsed.scheme or "").lower()
-        host = (parsed.hostname or "").lower()
-        if not scheme or not host:
-            return None
-        try:
-            port = parsed.port
-        except ValueError:
-            return None
-        if port is None:
-            port = {"http": 80, "https": 443}.get(scheme)
-        return (scheme, host, port)
+        """Deprecated alias for :func:`kuasarr.providers.network.origin_guard.origin_of`."""
+        return _origin_of(url)
 
     @staticmethod
     def _same_origin_guard_for(session: requests.Session, base_url: str) -> requests.Session:
-        """Pin a session to the container origin, redirects included.
-
-        Checking only the initial URL is not enough: with
-        ``allow_redirects=True`` a container can answer 302 pointing at an
-        internal host and ``requests`` follows it, carrying along whatever the
-        session sends - for the captcha POSTs that is the form's hidden fields
-        including ``myhiddenpwd``. ``requests`` has no redirect hook, so
-        ``send`` is wrapped and every hop is checked before it is followed.
-
-        The hop count is bounded here because wrapping ``send`` bypasses
-        ``requests``' own ``max_redirects`` handling - an open redirect chain
-        on a hostile container would otherwise spin forever.
-        """
-        origin = DBCDispatcher._origin_of(base_url)
-        if origin is None:
-            return session
-
-        max_hops = session.max_redirects if session.max_redirects else 30
-        original_send = session.send
-
-        def send(request, **kwargs):
-            allow_redirects = kwargs.pop("allow_redirects", True)
-            response = original_send(request, allow_redirects=False, **kwargs)
-
-            history = []
-            while allow_redirects and response.is_redirect:
-                if len(history) >= max_hops:
-                    raise requests.TooManyRedirects(
-                        f"Exceeded {max_hops} redirects on the container origin")
-                target = urljoin(response.url, response.headers.get("Location", ""))
-                target_origin = DBCDispatcher._origin_of(target)
-                if target_origin != origin:
-                    raise requests.TooManyRedirects(
-                        f"Refusing to follow redirect off the container origin: {target_origin}")
-                history.append(response)
-                next_request = requests.Request(
-                    "GET", target, headers=response.request.headers).prepare()
-                response = original_send(next_request, allow_redirects=False, **kwargs)
-
-            if history:
-                response.history = history
-            return response
-
-        session.send = send
-        return session
+        """Deprecated alias for :func:`...origin_guard.same_origin_guard_for`."""
+        return _same_origin_guard_for(session, base_url)
 
     def _solve_keeplinks_captcha(
         self,

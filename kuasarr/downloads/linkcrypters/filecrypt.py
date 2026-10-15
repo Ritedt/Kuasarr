@@ -445,8 +445,56 @@ def _parse_pow_result(execute_js_result):
     return payload if isinstance(payload, dict) else None
 
 
+def _cookie_applies_to(cookie, host):
+    """Whether a cookie's domain covers ``host``, with or without a leading dot."""
+    domain = (cookie.domain or '').lstrip('.').lower()
+    return bool(domain) and (domain == host or host.endswith(f'.{domain}'))
+
+
+def get_filecrypt_phpsessid(session, url=None):
+    """
+    Read the container session out of a jar that may hold more than one PHPSESSID.
+
+    ``requests`` raises ``CookieConflictError`` as soon as two cookies share a name
+    and no domain or path narrows the lookup down, so a bare ``jar.get('PHPSESSID')``
+    turns an ambiguity into an aborted link extraction. Pick the cookie that
+    actually applies to the container origin instead, and never raise.
+    """
+    candidates = [cookie for cookie in session.cookies if cookie.name == 'PHPSESSID']
+    if not candidates:
+        return None
+
+    if url:
+        host = (urlparse(url).hostname or '').lower()
+        matching = [cookie for cookie in candidates if _cookie_applies_to(cookie, host)]
+        # Of several applicable cookies the last one wins: it is the most recently
+        # set, which is the session the browser last handed us.
+        if matching:
+            return matching[-1].value
+
+    return candidates[-1].value
+
+
 def _apply_pow_result(session, response):
-    """Carry the browser session's cookies back into the requests session."""
+    """
+    Carry the browser session's cookies back into the requests session.
+
+    They replace rather than merge: this browser is the one that cleared the PoW,
+    so its PHPSESSID is the session FileCrypt will honour from here on. Merging
+    left the pre-PoW cookie in the jar next to it - requests reports the solved
+    domain as ".filecrypt.cc" where it had stored "filecrypt.cc", so the two never
+    replaced each other. Every later read then raised CookieConflictError and every
+    later request carried an ambiguous session, which FileCrypt answered with an
+    anonymous page: no Click'n'Load form and a DLC endpoint without a payload.
+    Nothing is lost by replacing - the browser was seeded with the whole jar.
+    """
+    if not response.cookies:
+        # Nothing came back, so there is no better session to switch to; clearing
+        # would only leave the container with no session at all.
+        debug("Filecrypt PoW returned no cookies, keeping the current session.")
+        return
+
+    session.cookies.clear()
     for cookie in response.cookies:
         try:
             session.cookies.set(
@@ -863,7 +911,7 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
                     info("DLC not found! Falling back to first available download Button...")
 
                     base_url = urlparse(url).netloc
-                    phpsessid = session.cookies.get('PHPSESSID')
+                    phpsessid = get_filecrypt_phpsessid(session, url)
                     if not phpsessid:
                         info("PHPSESSID cookie not found! Cannot proceed with download links extraction.")
                         return False

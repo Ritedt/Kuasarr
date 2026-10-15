@@ -60,7 +60,7 @@ from kuasarr.providers.notifications import send_discord_message
 from kuasarr.providers.statistics import StatsHelper
 from kuasarr.providers.hosters import filter_blocked_hosters
 from kuasarr.downloads import fail
-from kuasarr.downloads.linkcrypters.filecrypt import CNL, DLC
+from kuasarr.downloads.linkcrypters.filecrypt import CNL, DLC, get_filecrypt_phpsessid
 from kuasarr.downloads.linkcrypters.hide import unhide_links
 from kuasarr.constants import HTTP_DEFAULT_TIMEOUT_SECONDS, get_timeout
 
@@ -878,7 +878,7 @@ class DBCDispatcher:
                     
                     # Return replacement info for Circle-Captcha handling
                     base_url = urlparse(url).netloc
-                    phpsessid = session.cookies.get('PHPSESSID')
+                    phpsessid = get_filecrypt_phpsessid(session, url)
                     if not phpsessid:
                         info("PHPSESSID cookie not found!")
                         return None

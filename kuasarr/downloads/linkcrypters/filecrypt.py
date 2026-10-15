@@ -14,9 +14,252 @@ import requests
 from Cryptodome.Cipher import AES
 from bs4 import BeautifulSoup
 
-from kuasarr.providers.network.cloudflare import is_cloudflare_challenge, ensure_session_cf_bypassed, flaresolverr_get
+import uuid
+
+from kuasarr.constants import (
+    FILECRYPT_POW_DEADLINE_MS,
+    FILECRYPT_POW_SOLVE_ATTEMPTS,
+    FILECRYPT_POW_REQUEST_WAIT_SECONDS,
+    FILECRYPT_POW_TAB_VERIFY_SECONDS,
+    get_flaresolverr_pow_timeout,
+)
+from kuasarr.providers.network.cloudflare import (
+    FlareSolverrResponse,
+    is_cloudflare_challenge,
+    ensure_session_cf_bypassed,
+    flaresolverr_get,
+    flaresolverr_request,
+    flaresolverr_create_session,
+    flaresolverr_destroy_session,
+    flaresolverr_supports_next,
+)
 from kuasarr.providers.log import info, debug
 from kuasarr.providers.captcha.circle_solver import solve_circle_captcha, fallback_random_coordinates
+
+
+# ==============================================================================
+# FILECRYPT PROOF-OF-WORK
+# ==============================================================================
+
+# FILECRYPT POW JAVASCRIPT INJECTED INTO THE FLARESOLVERR-NEXT BROWSER
+#
+# The proof-of-work is solved by Filecrypt's own JavaScript Web Worker running in a
+# real browser. Kuasarr does not compute the hash itself - it only makes the
+# automated browser behave like a trusted human session:
+#
+# - Filecrypt's anti-adblock overlay (#dontfoid) and any transparent/high z-index
+#   cover are removed, because they would swallow the trusted pointer click.
+#   A scripted .click() bypasses them, a real dispatched pointer cannot.
+# - A focus event is dispatched every 80ms so the worker is not paused by the
+#   window blur that happens in an automated browser.
+# - The controller's own submitForm() call is hooked, so the final signed PoW
+#   fields (pow_id/pow_nonce/pow_elapsed/pow_pauses/pow_data/pow_x) are captured
+#   once the worker finished, and posted directly instead of navigating.
+#
+# __DEADLINE_MS__ in _POW_SOLVE_JS is a template placeholder replaced at call time.
+#
+# Ported from ghcr.io/rix1337/sponsors-helper (rix1337). Requires
+# ghcr.io/rix1337/flaresolverr-next - standard FlareSolverr ignores executeJs,
+# trustedClick and documentStartJs, so the PoW cannot be solved without it.
+
+_POW_CLICKJACK_BLOCKER_JS = r"""(() => {
+    'use strict';
+    if (window.__filecryptHelperClickBlockerInstalled) return;
+    window.__filecryptHelperClickBlockerInstalled = true;
+
+    const ACTIVATION_EVENTS = new Set([
+        'click',
+        'dblclick',
+        'auxclick',
+        'mousedown',
+        'mouseup',
+        'pointerdown',
+        'pointerup',
+        'touchstart',
+        'touchend',
+    ]);
+    const nativeWindowOpen = window.open.bind(window);
+    const nativeAddEventListener = EventTarget.prototype.addEventListener;
+    const wrappedActivationListeners = new WeakMap();
+
+    const normalizeHost = host => String(host || '').replace(/^www[.]/i, '').toLowerCase();
+    const isFileCryptInternalPopup = url => {
+        try {
+            const parsed = new URL(url || '', window.location.href);
+            if (normalizeHost(parsed.hostname) !== normalizeHost(window.location.hostname)) return false;
+            const path = parsed.pathname.toLowerCase();
+            return path.startsWith('/link/') || path.startsWith('/dlc/');
+        } catch (e) {
+            return false;
+        }
+    };
+    const isSelfPopup = url => {
+        try {
+            return new URL(url || '', window.location.href).href === window.location.href;
+        } catch (e) {
+            return false;
+        }
+    };
+    const isGlobalActivationTarget = target => {
+        return target === window ||
+            target === document ||
+            target === document.documentElement ||
+            target === document.body;
+    };
+    const listenerSource = listener => {
+        try {
+            if (typeof listener === 'function') return Function.prototype.toString.call(listener);
+            if (listener && typeof listener.handleEvent === 'function') {
+                return Function.prototype.toString.call(listener.handleEvent);
+            }
+        } catch (e) {}
+        return '';
+    };
+    const isClickjackerListener = listener => {
+        const source = listenerSource(listener);
+        if (!source) return false;
+        const compact = source
+            .replaceAll(' ', '')
+            .replaceAll('\n', '')
+            .replaceAll('\r', '')
+            .replaceAll('\t', '');
+        const lower = compact.toLowerCase();
+        const opensPopup = lower.includes('.open(');
+        const navigatesTop = lower.includes('top.location=') ||
+            lower.includes('top.location.href=') ||
+            lower.includes('window.location=') ||
+            lower.includes('window.location.href=') ||
+            lower.includes('location.location=') ||
+            lower.includes('location.location.href=');
+        const forcesClick = lower.includes('preventdefault()') &&
+            (lower.includes('stoppropagation()') || lower.includes('stopimmediatepropagation()'));
+        const linkRedirect = lower.includes('/link/');
+        const selfPopup = lower.includes('.open(top.location.href') ||
+            lower.includes('.open(location.href');
+        return (opensPopup && navigatesTop && linkRedirect) || (selfPopup && forcesClick);
+    };
+    const getWrappedActivationListener = listener => {
+        if (typeof listener !== 'function' && (!listener || typeof listener.handleEvent !== 'function')) {
+            return listener;
+        }
+        if (!isClickjackerListener(listener)) {
+            return listener;
+        }
+        let wrapped = wrappedActivationListeners.get(listener);
+        if (wrapped) return wrapped;
+
+        wrapped = function (event) {
+            console.log('[FileCrypt-Helper] 🚫 Blocked page delegated activation handler:', event.type);
+            return undefined;
+        };
+        wrappedActivationListeners.set(listener, wrapped);
+        return wrapped;
+    };
+
+    EventTarget.prototype.addEventListener = function (type, listener, options) {
+        if (ACTIVATION_EVENTS.has(String(type).toLowerCase()) && isGlobalActivationTarget(this)) {
+            return nativeAddEventListener.call(this, type, getWrappedActivationListener(listener), options);
+        }
+
+        return nativeAddEventListener.call(this, type, listener, options);
+    };
+
+    window.open = function (...args) {
+        const url = args[0];
+        if (isFileCryptInternalPopup(url)) {
+            return nativeWindowOpen(...args);
+        }
+
+        if (isSelfPopup(url)) {
+            console.log('[FileCrypt-Helper] 🚫 Blocked page self-popup clickjacker:', url || '[current page]');
+            return null;
+        }
+
+        console.log('[FileCrypt-Helper] 🚫 Blocked page window.open:', url || '[no url]');
+        return null;
+    };
+})();"""
+
+_POW_SOLVE_JS = r"""
+var DEADLINE_MS = __DEADLINE_MS__;
+var el = document.getElementById('pow-captcha');
+if (!el) { window.__FRS_AWAIT = Promise.resolve(JSON.stringify({ status: 'no-pow' })); return JSON.stringify({ error: 'no-pow' }); }
+var box = el.querySelector('.pow-captcha__box') || el;
+var form = (box.closest && box.closest('form')) || document.getElementById('cform');
+var done = false;
+var _resolve;
+window.__FRS_AWAIT = new Promise(function (r) { _resolve = r; });
+
+function finish(payload) {
+    if (done) return;
+    done = true;
+    _resolve(JSON.stringify(payload));
+}
+
+// Hook the controller's own submit call: by the time submitForm() invokes
+// requestSubmit()/submit(), pow_id/pow_nonce/pow_elapsed/pow_pauses/pow_data/
+// pow_x are all final (and pow_x now carries the trusted 2.1 signature).
+function capture() {
+    if (!form) { finish({ status: 'error', error: 'no form' }); return; }
+    var body = new URLSearchParams();
+    new FormData(form).forEach(function (v, k) { body.append(k, v); });
+    fetch(form.getAttribute('action') || location.href, {
+        method: 'POST', body: body,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        credentials: 'include'
+    }).then(function (r) {
+        return r.text().then(function (txt) { return { code: r.status, url: r.url, text: txt }; });
+    }).then(function (o) {
+        finish({
+            status: 'ok', code: o.code, url: o.url,
+            haspow: o.text.indexOf('pow-captcha') >= 0, html: o.text
+        });
+    }).catch(function (e) {
+        finish({ status: 'error', error: String(e) });
+    });
+}
+
+if (form) {
+    // Suppress any native navigation that might slip in ahead of our hook.
+    form.addEventListener('submit', function (e) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        capture();
+    }, true);
+    form.requestSubmit = function () { capture(); };
+    form.submit = function () { capture(); };
+}
+
+var start = Date.now();
+var iv = setInterval(function () {
+    // The controller pauses the worker on window blur; nudge focus so it does
+    // not stay paused in an automated browser window.
+    try { window.dispatchEvent(new Event('focus')); } catch (e) {}
+    if (done) { clearInterval(iv); return; }
+    var st = el.getAttribute('data-state');
+    if (st === 'fail') { clearInterval(iv); finish({ status: 'timeout', state: st }); return; }
+    if (Date.now() - start > DEADLINE_MS) { clearInterval(iv); finish({ status: 'timeout', state: st }); }
+}, 80);
+
+// Remove Filecrypt's anti-adblock overlay (#dontfoid) and any wide/transparent
+// max-z-index cover: without ads loaded the overlay paints over the captcha and
+// would swallow the trusted pointer click (a JS .click() bypasses it, a real
+// pointer cannot).
+try { var _ov = document.getElementById('dontfoid'); if (_ov) _ov.remove(); } catch (e) {}
+try {
+    document.querySelectorAll('div').forEach(function (div) {
+        var s = getComputedStyle(div); var z = parseInt(s.zIndex, 10);
+        if ((s.position === 'fixed' || s.position === 'absolute') && z > 999999 &&
+            (s.backgroundColor === 'transparent' || s.opacity === '0' ||
+             div.offsetWidth > window.innerWidth * 0.8)) {
+            div.remove();
+        }
+    });
+} catch (e) {}
+// Report the click target (viewport CSS px, whole pixels) for the trusted gesture.
+try { box.scrollIntoView({ block: 'center' }); } catch (e) {}
+var rect = box.getBoundingClientRect();
+return JSON.stringify({ trustedClick: { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) } });
+"""
 
 
 class CNL:
@@ -132,6 +375,182 @@ class DLC:
         return all_urls
 
 
+def detect_filecrypt_captcha_type(html):
+    """
+    Determine which gate a Filecrypt page currently puts in front of the download.
+
+    Returns one of: 'none', 'pow', 'circle_captcha', 'cutcaptcha',
+    'imagecaptcha', 'recaptcha', 'password' or 'unknown'.
+    """
+    if not html:
+        return 'unknown'
+
+    soup = BeautifulSoup(html, 'html.parser')
+
+    # Order matters: the PoW gate is checked first because it is unambiguous, then
+    # cnlform - the definitive "container reached" marker - so that stray recaptcha
+    # markup on an already solved page cannot push it back into the captcha path.
+    if soup.find(id='pow-captcha') or soup.find('div', {'class': 'pow-captcha'}):
+        return 'pow'
+    if soup.find('form', {'class': 'cnlform'}):
+        return 'none'
+    if soup.find('div', {'class': 'circle_captcha'}):
+        return 'circle_captcha'
+    if soup.find('input', {'id': 'p4assw0rt'}):
+        return 'password'
+    if soup.find('div', {'class': 'g-recaptcha'}):
+        return 'recaptcha'
+    if soup.find('input', {'name': 'captcha_response'}):
+        return 'imagecaptcha'
+    if soup.find('div', {'class': 'cutcaptcha'}) or 'cutcaptcha' in html.lower():
+        return 'cutcaptcha'
+
+    return 'unknown'
+
+
+def _filecrypt_cookie_dict(session, url):
+    """Export a requests session as the cookie list FlareSolverr expects."""
+    domain = urlparse(url).netloc
+    return [
+        {
+            "name": cookie.name,
+            "value": cookie.value,
+            "domain": cookie.domain or domain,
+            "path": cookie.path or "/",
+        }
+        for cookie in session.cookies
+    ]
+
+
+def _parse_pow_result(execute_js_result):
+    """
+    Decode the payload the injected PoW script resolved with.
+
+    With trustedClick, FlareSolverr-next awaits window.__FRS_AWAIT and returns
+    the resolved value as executeJsResult. The arm script resolves it with
+    JSON.stringify(), so the value arrives as a JSON string. In-page failures
+    arrive as an "EXECUTE_JS_ERROR: ..." string instead, which is not a dict.
+    """
+    if not execute_js_result:
+        return None
+
+    payload = execute_js_result
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (ValueError, json.JSONDecodeError):
+            return None
+
+    return payload if isinstance(payload, dict) else None
+
+
+def _apply_pow_result(session, response):
+    """Carry the browser session's cookies back into the requests session."""
+    for cookie in response.cookies:
+        try:
+            session.cookies.set(
+                cookie.get("name"),
+                cookie.get("value"),
+                domain=cookie.get("domain"),
+                path=cookie.get("path", "/"),
+            )
+        except Exception as e:
+            debug(f"Could not apply FlareSolverr cookie: {e}")
+
+
+def _submit_pow_challenge(shared_state, session, url, headers):
+    """
+    Solve a Filecrypt proof-of-work in a real flaresolverr-next browser.
+
+    The PoW itself is computed by Filecrypt's own Web Worker - this only drives
+    the browser so the worker produces a result Filecrypt accepts, and returns
+    the solved response, or None when the PoW could not be cleared.
+    """
+    solve_js = _POW_SOLVE_JS.replace('__DEADLINE_MS__', str(FILECRYPT_POW_DEADLINE_MS))
+    timeout = get_flaresolverr_pow_timeout()
+    cookies = _filecrypt_cookie_dict(session, url)
+    browser_headers = {'User-Agent': shared_state.values["user_agent"]}
+
+    if not flaresolverr_supports_next(shared_state):
+        info("Filecrypt proof-of-work requires ghcr.io/rix1337/flaresolverr-next. "
+             "Standard FlareSolverr ignores executeJs/trustedClick, so it cannot be solved.")
+        return None
+
+    browser_session = f"kuasarr-pow-{uuid.uuid4().hex[:12]}"
+    if not flaresolverr_create_session(shared_state, browser_session):
+        info("Could not create flaresolverr-next session for the Filecrypt PoW solve!")
+        return None
+
+    try:
+        for attempt in range(1, FILECRYPT_POW_SOLVE_ATTEMPTS + 1):
+            info(f"Solving Filecrypt proof-of-work in browser "
+                 f"(attempt {attempt}/{FILECRYPT_POW_SOLVE_ATTEMPTS})...")
+
+            # One request does all three phases inside FlareSolverr: the arm script
+            # installs the hooks and reports the click target, FlareSolverr dispatches
+            # the trusted pointer gesture, then it awaits window.__FRS_AWAIT and hands
+            # us the POST result. Splitting this into two requests would reload the
+            # page in between and destroy the worker state the click is meant to start.
+            try:
+                response = flaresolverr_request(
+                    shared_state,
+                    url,
+                    cmd="request.get",
+                    timeout=timeout,
+                    session_id=browser_session,
+                    cookies=cookies,
+                    wait=FILECRYPT_POW_REQUEST_WAIT_SECONDS,
+                    tabs_till_verify=FILECRYPT_POW_TAB_VERIFY_SECONDS,
+                    execute_js=solve_js,
+                    trusted_click=True,
+                    document_start_js=_POW_CLICKJACK_BLOCKER_JS,
+                    headers=browser_headers,
+                )
+            except Exception as e:
+                info(f"Filecrypt PoW executeJs error (attempt {attempt}): {e}")
+                continue
+
+            result = _parse_pow_result(response.execute_js_result)
+            if not result:
+                info(f"Filecrypt PoW returned unparseable result (attempt {attempt}): "
+                     f"{str(response.execute_js_result)[:200]}")
+                continue
+
+            if result.get('error'):
+                info(f"Filecrypt PoW in-page error (attempt {attempt}): {result['error']}")
+                continue
+
+            if result.get('status') == 'timeout':
+                info(f"Filecrypt PoW timed out (attempt {attempt}), state={result.get('state')}")
+                continue
+
+            if result.get('haspow'):
+                info(f"Filecrypt PoW submission rejected (attempt {attempt}), "
+                     f"HTTP {result.get('code')}")
+                continue
+
+            html = result.get('html') or ""
+            if not html:
+                info(f"Filecrypt PoW returned no page (attempt {attempt}).")
+                continue
+
+            _apply_pow_result(session, response)
+
+            solved = FlareSolverrResponse(
+                url=result.get('url') or response.url,
+                status_code=int(result.get('code') or 200),
+                headers=response.headers,
+                text=html,
+            )
+            info("Filecrypt proof-of-work solved.")
+            return solved
+
+        info(f"Filecrypt proof-of-work not solved after {FILECRYPT_POW_SOLVE_ATTEMPTS} attempts.")
+        return None
+    finally:
+        flaresolverr_destroy_session(shared_state, browser_session)
+
+
 def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=None):
     """
     Robust Filecrypt fetch:
@@ -242,10 +661,36 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
             info(f"Password could not be applied for {title}")
             return False
 
-    no_captcha_present = bool(soup.find("form", {"class": "cnlform"}))
-    if no_captcha_present:
+    captcha_type = detect_filecrypt_captcha_type(output.text)
+    info(f"Filecrypt captcha type: {captcha_type}")
+
+    if captcha_type == 'pow':
+        # Proof-of-work: solved inside a real browser, because Filecrypt requires a
+        # trusted pointer event that only FlareSolverr-next can dispatch.
+        pow_output = _submit_pow_challenge(shared_state, session, url, headers)
+        if pow_output is None:
+            info("Filecrypt proof-of-work could not be solved. Check that FlareSolverr runs "
+                 "ghcr.io/rix1337/flaresolverr-next.")
+            return False
+
+        url = pow_output.url
+        output = pow_output
+        soup = BeautifulSoup(output.text, 'html.parser')
+
+        # The browser already carried us past the gate, so the cap_token is spent.
+        captcha_type = detect_filecrypt_captcha_type(output.text)
+        if captcha_type == 'pow':
+            info("Filecrypt still shows the proof-of-work after solving.")
+            return False
+
+    elif captcha_type == 'none':
         info("No CAPTCHA present. Skipping token!")
+
     else:
+        if captcha_type not in ('circle_captcha',):
+            info(f"Unhandled Filecrypt captcha type '{captcha_type}' - trying the "
+                 f"cap_token fallback.")
+
         circle_captcha = bool(soup.find_all("div", {"class": "circle_captcha"}))
         i = 0
         while circle_captcha and i < 3:

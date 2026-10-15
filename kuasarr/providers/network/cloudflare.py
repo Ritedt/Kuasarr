@@ -3,7 +3,7 @@
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 import threading
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from urllib.parse import urlencode, urlparse
 
 import requests
@@ -160,7 +160,24 @@ def update_session_via_flaresolverr(
             domain=ck.get("domain"),
             path=ck.get("path", "/")
         )
-    return {"session": sess, "user_agent": solution.get("userAgent", None)}
+
+    fs_headers = {h["name"]: h["value"] for h in solution.get("headers", [])}
+
+    return {
+        "session": sess,
+        "user_agent": solution.get("userAgent", None),
+        # The solved page itself. Callers that go on to re-fetch with requests
+        # cannot do so for Cloudflare-protected hosts: cf_clearance is bound to
+        # the browser's TLS fingerprint, so a fresh requests connection is
+        # challenged again no matter which cookies it carries.
+        "response": FlareSolverrResponse(
+            url=solution.get("url", target_url),
+            status_code=solution.get("status", 200),
+            headers=fs_headers,
+            text=solution.get("response", ""),
+            cookies=solution.get("cookies"),
+        ),
+    }
 
 
 def ensure_session_cf_bypassed(
@@ -199,7 +216,18 @@ def ensure_session_cf_bypassed(
             shared_state.update("user_agent", user_agent)
             headers = {'User-Agent': shared_state.values["user_agent"]}
 
-        # re-fetch using the new session/headers
+        # Use the solved page directly. Re-fetching with requests would be
+        # challenged again: cf_clearance is bound to the browser's TLS
+        # fingerprint, so a fresh requests connection never passes the check.
+        solved = flaresolverr_result.get("response")
+        if solved is not None:
+            if solved.status_code == 403 or is_cloudflare_challenge(solved.text):
+                info("Cloudflare still challenging after FlareSolverr solve!")
+                return None, None, None
+            debug(f"Using FlareSolverr response: status={solved.status_code}")
+            return session, headers, solved
+
+        # Older/overridden helper without a response - fall back to re-fetching.
         try:
             resp = session.get(url, headers=headers, timeout=effective_timeout)
         except requests.RequestException as e:
@@ -218,28 +246,65 @@ class FlareSolverrResponse:
     Minimal Response-like object so it behaves like requests.Response.
     """
 
-    def __init__(self, url, status_code, headers, text):
+    def __init__(self, url, status_code, headers, text, execute_js_result=None,
+                 document_start_js_result=None, cookies=None):
         self.url = url
         self.status_code = status_code
         self.headers = headers or {}
         self.text = text or ""
         self.content = self.text.encode("utf-8")
 
-        # Cloudflare cookies are irrelevant here, but keep attribute for compatibility
-        self.cookies = requests.cookies.RequestsCookieJar()
+        # Only populated by flaresolverr-next, used by the FileCrypt PoW solver
+        self.execute_js_result = execute_js_result
+        self.document_start_js_result = document_start_js_result
+
+        # Cookies of the browser session. Empty for the plain request.get path,
+        # but the FileCrypt PoW solve runs in a browser session whose PHPSESSID
+        # has to be carried back into the requests session afterwards.
+        self.cookies = cookies or []
 
     def raise_for_status(self):
         if 400 <= self.status_code:
             raise requests.HTTPError(f"{self.status_code} Error for URL: {self.url}")
 
 
-def flaresolverr_get(
+def flaresolverr_request(
     shared_state,
     url: str,
+    cmd: str = "request.get",
+    post_data: Optional[str] = None,
+    headers: Optional[Dict] = None,
     timeout: Optional[int] = None,
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    cookies: Optional[List[Dict]] = None,
+    wait: Optional[int] = None,
+    tabs_till_verify: Optional[int] = None,
+    execute_js: Optional[str] = None,
+    trusted_click: bool = False,
+    document_start_js: Optional[str] = None,
 ) -> FlareSolverrResponse:
-    """Core function for performing a GET request via FlareSolverr only."""
+    """Perform a FlareSolverr request with the extended flaresolverr-next options.
+
+    Standard FlareSolverr only understands cmd/url/maxTimeout/postData/headers/
+    session. The remaining keys are what make the FileCrypt proof-of-work
+    solvable and require ghcr.io/rix1337/flaresolverr-next:
+
+    - execute_js: run on the solved page, result returned as executeJsResult.
+      With trusted_click it acts as the "arm" script.
+    - trusted_click: when true, execute_js is treated as a two-phase arm script.
+      It must install its hooks, assign window.__FRS_AWAIT (a Promise resolved
+      when the in-page action finishes) and return
+      {"trustedClick": {"x": <cssPx>, "y": <cssPx>}}. FlareSolverr then dispatches
+      a human-like trusted pointer gesture there via CDP - the only way to produce
+      an isTrusted click - awaits window.__FRS_AWAIT and returns the resolved
+      value as executeJsResult.
+    - document_start_js: registered through CDP before navigation, so it runs at
+      document start on the requested page and every redirect document. Used for
+      the clickjacking blocker that hostile ad overlays would otherwise fight.
+
+    Unsupported keys are ignored by standard FlareSolverr instead of failing,
+    so callers degrade rather than break when the wrong image is deployed.
+    """
     # Apply slow mode to timeout
     effective_timeout = get_timeout(timeout or FLARESOLVERR_REQUEST_TIMEOUT_SECONDS)
 
@@ -248,12 +313,31 @@ def flaresolverr_get(
         raise RuntimeError("FlareSolverr URL not configured in shared_state.")
 
     payload = {
-        "cmd": "request.get",
+        "cmd": cmd,
         "url": url,
-        "maxTimeout": effective_timeout * 1000
+        "maxTimeout": effective_timeout * 1000,
     }
+    if post_data is not None:
+        payload["postData"] = post_data
     if session_id:
         payload["session"] = session_id
+    if cookies is not None:
+        payload["cookies"] = cookies
+    if wait is not None:
+        payload["waitInSeconds"] = wait
+    if tabs_till_verify is not None:
+        payload["tabsTillVerify"] = tabs_till_verify
+    if execute_js:
+        payload["executeJs"] = execute_js
+    if trusted_click:
+        payload["trustedClick"] = trusted_click
+    if document_start_js:
+        payload["documentStartJs"] = document_start_js
+    if headers:
+        payload["headers"] = headers
+
+    debug(f"Sending FlareSolverr {cmd} to {url} (executeJs={bool(execute_js)}, "
+         f"trustedClick={bool(trusted_click)}, documentStartJs={bool(document_start_js)})")
 
     try:
         resp = requests.post(
@@ -288,7 +372,57 @@ def flaresolverr_get(
         url=url,
         status_code=status_code,
         headers=fs_headers,
-        text=html
+        text=html,
+        execute_js_result=solution.get("executeJsResult"),
+        document_start_js_result=solution.get("documentStartJsResult"),
+        cookies=solution.get("cookies"),
+    )
+
+
+def flaresolverr_supports_next(shared_state) -> bool:
+    """Probe whether the configured FlareSolverr honours documentStartJs.
+
+    Standard FlareSolverr ignores the unknown key, so the probe variable never
+    gets set and executeJs reports false. Only flaresolverr-next returns true.
+    """
+    probe = "window.__frsCapabilityProbe = true;"
+    reader = "return String(window.__frsCapabilityProbe === true);"
+
+    try:
+        response = flaresolverr_request(
+            shared_state,
+            "http://www.google.com/",
+            timeout=15,
+            execute_js=reader,
+            document_start_js=probe,
+        )
+    except Exception as e:
+        debug(f"FlareSolverr capability probe failed: {e}")
+        return False
+
+    supported = str(response.execute_js_result).strip().lower() == "true"
+    if supported:
+        debug("FlareSolverr supports documentStartJs (flaresolverr-next is up to date)")
+    else:
+        info("FlareSolverr does NOT support documentStartJs. FileCrypt hostile-ad blocking "
+             "is INACTIVE and downloads can be hijacked to ad pages. Use "
+             "ghcr.io/rix1337/flaresolverr-next.")
+    return supported
+
+
+def flaresolverr_get(
+    shared_state,
+    url: str,
+    timeout: Optional[int] = None,
+    session_id: Optional[str] = None
+) -> FlareSolverrResponse:
+    """Core function for performing a GET request via FlareSolverr only."""
+    return flaresolverr_request(
+        shared_state,
+        url,
+        cmd="request.get",
+        timeout=timeout,
+        session_id=session_id,
     )
 
 
@@ -301,63 +435,20 @@ def flaresolverr_post(
     session_id: Optional[str] = None
 ) -> FlareSolverrResponse:
     """Make POST request via FlareSolverr."""
-    # Apply slow mode to timeout
-    effective_timeout = get_timeout(timeout or FLARESOLVERR_REQUEST_TIMEOUT_SECONDS)
-
-    flaresolverr_url = _get_flaresolverr_url(shared_state)
-    if not flaresolverr_url:
-        raise RuntimeError("FlareSolverr URL not configured in shared_state.")
-
     # Encode POST data
     if isinstance(data, dict):
         post_data = urlencode(data)
     else:
         post_data = data or ""
 
-    payload = {
-        "cmd": "request.post",
-        "url": url,
-        "postData": post_data,
-        "maxTimeout": effective_timeout * 1000,
-    }
-    if session_id:
-        payload["session"] = session_id
-
-    if headers:
-        payload["headers"] = headers
-
-    try:
-        resp = requests.post(
-            flaresolverr_url,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=effective_timeout + 10
-        )
-        resp.raise_for_status()
-    except Exception as e:
-        raise RuntimeError(f"Error communicating with FlareSolverr: {e}") from e
-
-    data = resp.json()
-
-    if data.get("status") != "ok":
-        raise RuntimeError(f"FlareSolverr returned error: {data.get('message')}")
-
-    solution = data.get("solution", {})
-    html = solution.get("response", "")
-    status_code = solution.get("status", 200)
-    url = solution.get("url", url)
-
-    fs_headers = {h["name"]: h["value"] for h in solution.get("headers", [])}
-
-    user_agent = solution.get("userAgent")
-    if user_agent and user_agent != shared_state.values.get("user_agent"):
-        shared_state.update("user_agent", user_agent)
-
-    return FlareSolverrResponse(
-        url=url,
-        status_code=status_code,
-        headers=fs_headers,
-        text=html
+    return flaresolverr_request(
+        shared_state,
+        url,
+        cmd="request.post",
+        post_data=post_data,
+        headers=headers,
+        timeout=timeout,
+        session_id=session_id,
     )
 
 

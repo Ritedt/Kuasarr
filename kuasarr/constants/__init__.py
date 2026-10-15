@@ -34,6 +34,13 @@ CAPTCHA_MAX_WAIT_SECONDS = 180
 FLARESOLVERR_REQUEST_TIMEOUT_SECONDS = 60
 FLARESOLVERR_CHECK_TIMEOUT_SECONDS = 35
 
+# FileCrypt proof-of-work timeouts (requires flaresolverr-next)
+FILECRYPT_POW_DEADLINE_MS = 75000
+FILECRYPT_POW_REQUEST_TIMEOUT_SECONDS = 150
+FILECRYPT_POW_SOLVE_ATTEMPTS = 5
+FILECRYPT_POW_REQUEST_WAIT_SECONDS = 3
+FILECRYPT_POW_TAB_VERIFY_SECONDS = 3
+
 # JDownloader connection timeouts
 MYJD_API_TIMEOUT_SECONDS = 30
 MYJD_CONNECT_TIMEOUT_SECONDS = 3
@@ -103,6 +110,16 @@ def get_flaresolverr_max_timeout() -> int:
     This is used for longer-running FlareSolverr operations.
     """
     return get_timeout(FLARESOLVERR_REQUEST_TIMEOUT_SECONDS * 2)
+
+
+def get_flaresolverr_pow_timeout() -> int:
+    """Get FlareSolverr timeout for FileCrypt proof-of-work solves.
+
+    The PoW worker runs inside the browser for up to FILECRYPT_POW_DEADLINE_MS,
+    so the HTTP timeout to FlareSolverr has to be larger than the regular
+    request timeout.
+    """
+    return get_timeout(FILECRYPT_POW_REQUEST_TIMEOUT_SECONDS)
 
 
 def get_search_timeout() -> int:
@@ -273,6 +290,12 @@ __all__ = [
     "CAPTCHA_MAX_WAIT_SECONDS",
     "FLARESOLVERR_REQUEST_TIMEOUT_SECONDS",
     "FLARESOLVERR_CHECK_TIMEOUT_SECONDS",
+    "FILECRYPT_POW_DEADLINE_MS",
+    "FILECRYPT_POW_REQUEST_TIMEOUT_SECONDS",
+    "FILECRYPT_POW_SOLVE_ATTEMPTS",
+    "FILECRYPT_POW_REQUEST_WAIT_SECONDS",
+    "FILECRYPT_POW_TAB_VERIFY_SECONDS",
+    "get_flaresolverr_pow_timeout",
     "MYJD_API_TIMEOUT_SECONDS",
     "MYJD_CONNECT_TIMEOUT_SECONDS",
     "HTTP_DEFAULT_TIMEOUT_SECONDS",

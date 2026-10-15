@@ -50,6 +50,13 @@ IMDB_WAF_SETTLE_SECONDS = 8
 # indistinguishable from an empty IMDb response.
 _AWS_WAF_MARKER = "awsWafCookieDomainList"
 
+# A served IMDb title page carries the WAF cookie-domain list in its own scripts
+# as well - measured against imdb.com, both the 2 kB interstitial and the real
+# 2.4 MB page contain the marker. The marker alone therefore identifies nothing.
+# What separates them is the page's own structured metadata, which the
+# interstitial never carries.
+_IMDB_PAGE_MARKER = 'application/ld+json'
+
 # How long a failed lookup is served from cache before being retried. A plain
 # miss gets the historic hour; a WAF challenge gets minutes, because IMDb lifts
 # it on its own within a few and no local change is needed to fix it.
@@ -58,13 +65,20 @@ IMDB_WAF_CHALLENGE_CACHE_SECONDS = 5 * 60
 
 
 def _is_waf_challenge(response) -> bool:
-    """True if a response is the AWS WAF interstitial rather than real content."""
+    """True if a response is the AWS WAF interstitial rather than real content.
+
+    Both carry the WAF marker, so it only counts when the page's own metadata is
+    missing - otherwise a successfully served page would be reported as blocked.
+    """
     if response is None:
         return False
     try:
-        return _AWS_WAF_MARKER in (response.text or "")
+        text = response.text or ""
     except Exception:
         return False
+    if _AWS_WAF_MARKER not in text:
+        return False
+    return _IMDB_PAGE_MARKER not in text
 
 
 _TITLE_SANITIZE_RE = re.compile(r"[^a-zA-Z0-9äöüÄÖÜß&-']")

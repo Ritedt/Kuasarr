@@ -67,6 +67,21 @@ def _make_waf_challenge_html():
 <noscript><h1>JavaScript is disabled</h1></noscript></body></html>"""
 
 
+def _make_served_page_html(title):
+    """A served IMDb page, which carries the WAF marker in its own scripts.
+
+    Measured against imdb.com: the 2 kB interstitial and the real 2.4 MB page
+    both contain awsWafCookieDomainList and the awswaf.com challenge script.
+    The marker alone therefore cannot tell the two apart.
+    """
+    import json
+    return f"""<html><head>
+<script>window.awsWafCookieDomainList = ['imdb.com'];</script>
+<script src="https://x.token.awswaf.com/x/challenge.js"></script>
+<script type="application/ld+json">{json.dumps({"@type": "TVSeries", "name": title})}</script>
+</head><body></body></html>"""
+
+
 # ---------------------------------------------------------------------------
 # _extract_title_from_html
 # ---------------------------------------------------------------------------
@@ -478,6 +493,18 @@ class TestIsWafChallenge:
 
     def test_real_page_is_not_a_challenge(self):
         assert _is_waf_challenge(MagicMock(text=_make_jsonld_html("American Dad"))) is False
+
+    def test_served_page_with_the_waf_marker_is_not_a_challenge(self):
+        """The regression: a served page carries the marker too.
+
+        Checking the marker alone reported a successfully fetched page as
+        blocked - which logged "IMDb is not reachable right now" right next to a
+        title that had just been parsed, and cached the hit for 5 minutes
+        instead of 24 hours.
+        """
+        html = _make_served_page_html("American Dad")
+        assert "awsWafCookieDomainList" in html  # the premise has to hold
+        assert _is_waf_challenge(MagicMock(text=html)) is False
 
     def test_none_is_not_a_challenge(self):
         assert _is_waf_challenge(None) is False

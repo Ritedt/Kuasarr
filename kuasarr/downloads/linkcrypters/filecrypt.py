@@ -22,7 +22,9 @@ from kuasarr.constants import (
     FILECRYPT_POW_SOLVE_ATTEMPTS,
     FILECRYPT_POW_REQUEST_WAIT_SECONDS,
     FILECRYPT_POW_TAB_VERIFY_SECONDS,
+    HTTP_DEFAULT_TIMEOUT_SECONDS,
     get_flaresolverr_pow_timeout,
+    get_timeout,
 )
 from kuasarr.providers.network.origin_guard import same_origin_guard_for
 from kuasarr.providers.network.cloudflare import (
@@ -340,7 +342,8 @@ def narrow_cnl_payload(session, url: str, headers: dict, secret: Optional[str],
     link = f"https://{domain}/_CNL/{secret}.html?{season}&{episode}"
 
     try:
-        result = session.post(link, headers=headers)
+        result = session.post(link, headers=headers,
+                              timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
     except requests.RequestException as e:
         debug(f"FileCrypt: CNL-Episodenfilter nicht erreichbar ({e}), "
               f"ungefilterte Links werden verwendet.")

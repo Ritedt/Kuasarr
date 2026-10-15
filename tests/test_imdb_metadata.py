@@ -7,7 +7,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from kuasarr.providers.imdb_metadata import (
+    IMDB_WAF_SETTLE_SECONDS,
     _extract_title_from_html,
+    _is_waf_challenge,
     get_clean_title,
     get_localized_title,
 )
@@ -49,6 +51,20 @@ def _make_title_tag_html(title_text):
 
 def _make_empty_html():
     return "<html><head></head><body></body></html>"
+
+
+def _make_waf_challenge_html():
+    """The AWS WAF interstitial IMDb serves instead of the page.
+
+    Real one is ~2 kB and announces itself twice: the cookie-domain list and
+    the challenge script it fetches from a us-east-1 awswaf.com host.
+    """
+    return """<html lang="en"><head>
+<title></title>
+<script>window.awsWafCookieDomainList = ['imdb.com']; window.gokuProps = {"key":"AQID"};</script>
+<script src="https://fb423e1ef94f.6277d64d.us-east-1.token.awswaf.com/fb423e1ef94f/c3382d439950/916d943f6a58/challenge.js"></script>
+</head><body><div id="challenge-container"></div>
+<noscript><h1>JavaScript is disabled</h1></noscript></body></html>"""
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +368,127 @@ class TestGetLocalizedTitle:
             result = get_localized_title(state, "tt0000004")
             assert result is None
             mock_fs.assert_called_once()
+
+    def test_flaresolverr_is_asked_to_wait_for_the_waf_challenge(self):
+        """The regression: FlareSolverr returns the challenge page unless it waits.
+
+        Without ``wait`` it evaluates the page as soon as ``load`` fires and
+        hands back the WAF interstitial, which has no title. The wait is what
+        lets the challenge JavaScript set its cookie and reload.
+        """
+        state = _mock_shared_state()
+        with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get, \
+             patch("kuasarr.providers.imdb_metadata.flaresolverr_get") as mock_fs:
+            mock_get.return_value = MagicMock(status_code=202, text="")
+            # What FlareSolverr returns once the wait has elapsed.
+            mock_fs.return_value = MagicMock(
+                status_code=200, text=_make_jsonld_html("American Dad!"))
+
+            result = get_localized_title(state, "tt0397306")
+
+            assert result == "American Dad"
+            assert mock_fs.call_args.kwargs.get("wait") == IMDB_WAF_SETTLE_SECONDS
+
+    def test_wait_is_long_enough_for_the_challenge_to_clear(self):
+        """Measured against imdb.com: 8 s returns the real page, 0 s the interstitial."""
+        assert IMDB_WAF_SETTLE_SECONDS >= 8
+
+    def test_challenge_from_flaresolverr_is_reported_as_such(self):
+        """A challenge that survives the wait must not read as "no title".
+
+        FlareSolverr answers 200 for the interstitial, so without an explicit
+        check the log only says the title could not be found.
+        """
+        state = _mock_shared_state()
+        with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get, \
+             patch("kuasarr.providers.imdb_metadata.flaresolverr_get") as mock_fs, \
+             patch("kuasarr.providers.imdb_metadata.info") as mock_info:
+            mock_get.return_value = MagicMock(status_code=202, text="")
+            mock_fs.return_value = MagicMock(
+                status_code=200, text=_make_waf_challenge_html())
+
+            assert get_localized_title(state, "tt0397306") is None
+
+            messages = " ".join(str(c) for c in mock_info.call_args_list)
+            assert "WAF challenge still present" in messages
+
+    def test_waf_challenge_failure_expires_faster_than_a_plain_miss(self):
+        """A WAF challenge lifts itself, so it must not be cached for the full hour.
+
+        Otherwise one blocked lookup keeps returning None long after IMDb
+        answers again - and no local change can fix what is cached.
+        """
+        state = _mock_shared_state()
+        with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get, \
+             patch("kuasarr.providers.imdb_metadata.flaresolverr_get") as mock_fs:
+            mock_get.return_value = MagicMock(status_code=202, text="")
+            mock_fs.return_value = MagicMock(
+                status_code=200, text=_make_waf_challenge_html())
+
+            assert get_localized_title(state, "tt0397306") is None
+
+            entry = state.get_recently_searched(state, "recents_imdb_titles", 0)["tt0397306_de"]
+            assert entry["title"] is None
+            assert entry["retry_after"] < 60 * 60
+
+    def test_plain_miss_still_uses_the_full_hour(self):
+        """A genuine "IMDb has no such title" keeps the historic retry window."""
+        state = _mock_shared_state()
+        with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get:
+            mock_get.return_value = MagicMock(
+                status_code=200, text=_make_empty_html())
+
+            assert get_localized_title(state, "tt0000099") is None
+
+            entry = state.get_recently_searched(state, "recents_imdb_titles", 0)["tt0000099_de"]
+            assert entry["retry_after"] == 60 * 60
+
+    def test_legacy_cache_entry_without_retry_after_still_respects_the_hour(self):
+        """Entries written by an older version have no retry_after and must not expire early."""
+        cached = {"tt0397306_de": {"title": None, "timestamp": datetime.now()}}
+        state = _mock_shared_state(cache=cached)
+        with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get:
+            mock_get.return_value = MagicMock(status_code=200, text=_make_empty_html())
+
+            # Just-written legacy entry: still inside the hour, so no HTTP call.
+            assert get_localized_title(state, "tt0397306") is None
+            mock_get.assert_not_called()
+
+    def test_expired_legacy_entry_is_retried(self):
+        """Once the hour has passed a legacy entry is retried like any other."""
+        cached = {"tt0397306_de": {
+            "title": None, "timestamp": datetime.now() - timedelta(hours=2)}}
+        state = _mock_shared_state(cache=cached)
+        with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get:
+            mock_get.return_value = MagicMock(
+                status_code=200, text=_make_jsonld_html("American Dad!"))
+
+            assert get_localized_title(state, "tt0397306") == "American Dad"
+            mock_get.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _is_waf_challenge
+# ---------------------------------------------------------------------------
+
+class TestIsWafChallenge:
+
+    def test_detects_the_interstitial(self):
+        assert _is_waf_challenge(MagicMock(text=_make_waf_challenge_html())) is True
+
+    def test_real_page_is_not_a_challenge(self):
+        assert _is_waf_challenge(MagicMock(text=_make_jsonld_html("American Dad"))) is False
+
+    def test_none_is_not_a_challenge(self):
+        assert _is_waf_challenge(None) is False
+
+    def test_empty_body_is_not_a_challenge(self):
+        """An empty body is a different failure and keeps the full retry window."""
+        assert _is_waf_challenge(MagicMock(text="")) is False
+
+    def test_unreadable_response_does_not_raise(self):
+        """A response object without .text must not break the check."""
+        assert _is_waf_challenge(object()) is False
 
 
 # ---------------------------------------------------------------------------

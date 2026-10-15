@@ -282,3 +282,46 @@ class TestFilecryptPathIsGuarded:
         assert result is None
         # The guard has to be on this exact session object, not a copy.
         assert getattr(captured["session"].send, "__name__", "") == "send"
+
+    def test_manual_webui_path_cannot_be_redirected_off_origin(
+            self, filecrypt_server, internal_server, monkeypatch):
+        """The WebUI route posts the password too, so it needs the same guard.
+
+        ``get_filecrypt_links`` is a second implementation of the FileCrypt
+        flow, not a caller of the dispatcher. Covering only the dispatcher
+        leaves half the guarded code unverified.
+        """
+        from kuasarr.downloads.linkcrypters import filecrypt as filecrypt_module
+
+        TARGET["location"] = f"{internal_server}/steal"
+        TARGET["internal_hits"] = []
+        TARGET["internal_bodies"] = []
+
+        captured = {}
+
+        def fake_bypass(info, shared_state, session, url, headers):
+            captured["session"] = session
+            response = requests.Response()
+            response.status_code = 200
+            response.url = url
+            response._content = FILECRYPT_HTML.encode()
+            return session, headers, response
+
+        monkeypatch.setattr(
+            filecrypt_module, "ensure_session_cf_bypassed", fake_bypass)
+
+        state = SimpleNamespace(values={"user_agent": "test-agent"})
+        result = filecrypt_module.get_filecrypt_links(
+            shared_state=state,
+            # A real token value: with None the captcha fallback would raise a
+            # TypeError further down and mask what this test is about.
+            token="probe-token",
+            title="Some.Release.S01",
+            url=f"{filecrypt_server}/Container/ABCD.html",
+            password="serienfans.org",
+        )
+
+        assert TARGET["internal_hits"] == [], "redirect off the container origin was followed"
+        assert TARGET["internal_bodies"] == [], "the password reached a foreign host"
+        assert result is False
+        assert getattr(captured["session"].send, "__name__", "") == "send"

@@ -152,7 +152,8 @@ def setup_provider_routes(app):
             added = shared_state.download_package(
                 decrypted_links,
                 title,
-                password
+                password,
+                package_id
             )
             
             if added:

@@ -20,6 +20,14 @@ from kuasarr.providers.network.cloudflare import (
 )
 from kuasarr.providers.statistics import StatsHelper
 
+# access_status values that mean the container will never yield links again.
+# Retrying them just burns a captcha round-trip and re-queues a dead package.
+HIDE_DEAD_ACCESS_STATUSES = frozenset({"offline", "expired", "deleted", "private"})
+
+# Per-link equivalent of the above: a single hoster link can also go stale
+# without the container as a whole changing its access_status.
+HIDE_DEAD_LINK_STATUSES = frozenset({"offline", "expired", "deleted", "dead"})
+
 
 def get_hide_api_key(shared_state) -> Optional[str]:
     """Get hide.cx API key from config."""
@@ -240,6 +248,10 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None,
                     if unlock_response.status_code != 200:
                         return [], f"hide.cx Container-Passwort falsch oder Zugriff verweigert."
                     data = unlock_response.json()
+                    if not isinstance(data, dict) or "links" not in data:
+                        # 200 with an error body - the unlock did not succeed,
+                        # and "links" would silently fall back to [] below.
+                        return [], "hide.cx Unlock-Antwort enthielt keine Link-Liste."
                 else:
                     return [], "hide.cx Container ist passwortgeschützt. Passwort erforderlich."
             elif response.status_code != 200:
@@ -249,10 +261,10 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None,
                 data = response.json()
 
         access_status = data.get("access_status", "unknown")
-        if access_status == "offline":
-            info(f"hide.cx: Container is OFFLINE - no retry needed")
+        if access_status in HIDE_DEAD_ACCESS_STATUSES:
+            info(f"hide.cx: Container access_status is '{access_status}' - no retry needed")
             StatsHelper(shared_state).increment_failed_decryptions_automatic()
-            return [], "PERMANENT:hide.cx Container ist offline - Links nicht mehr verfügbar"
+            return [], f"PERMANENT:hide.cx Container ist '{access_status}' - Links nicht mehr verfügbar"
 
         container_links = data.get("links", [])
 
@@ -272,8 +284,9 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None,
                 info("hide.cx: Episodenauswahl nicht verfügbar, alle Links werden verwendet.")
 
         for link in container_links:
-            if link.get("link_status") == "offline":
-                debug(f"hide.cx: Skipping offline link {link.get('id')}")
+            link_status = link.get("link_status")
+            if link_status and link_status.lower() in HIDE_DEAD_LINK_STATUSES:
+                debug(f"hide.cx: Skipping {link_status} link {link.get('id')}")
                 continue
 
             hoster_url = link.get("hoster_url")
@@ -306,11 +319,16 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None,
             info(f"hide.cx: Successfully decrypted {len(links)} links")
             StatsHelper(shared_state).increment_captcha_decryptions_automatic()
         else:
-            all_offline = all(link.get("link_status") == "offline" for link in data.get("links", []))
-            if all_offline and data.get("links"):
-                info("hide.cx: All links in container are OFFLINE - no retry needed")
+            raw_links = data.get("links") or []
+            all_dead = all(
+                isinstance(link, dict)
+                and (link.get("link_status") or "").lower() in HIDE_DEAD_LINK_STATUSES
+                for link in raw_links
+            )
+            if all_dead and raw_links:
+                info("hide.cx: All links in container are unusable - no retry needed")
                 StatsHelper(shared_state).increment_failed_decryptions_automatic()
-                return [], "PERMANENT:hide.cx Alle Links im Container sind offline"
+                return [], "PERMANENT:hide.cx Alle Links im Container sind nicht mehr verfügbar"
             info("hide.cx: No links found in container response")
             StatsHelper(shared_state).increment_failed_decryptions_automatic()
 

@@ -22,6 +22,10 @@ import requests
 from bs4 import BeautifulSoup
 
 from kuasarr.providers import shared_state
+from kuasarr.downloads.linkcrypters.filecrypt import (
+    detect_filecrypt_captcha_type,
+    _submit_pow_challenge,
+)
 from kuasarr.providers.captcha import push_jobs
 from kuasarr.providers.captcha.math_captcha import solve_math_captcha
 from kuasarr.providers.network.cloudflare import (
@@ -578,6 +582,30 @@ class DBCDispatcher:
             info(f"Password was wrong or missing. Could not get links for {title}")
             return None
 
+        # Which gate is Filecrypt putting in front of this container? It serves a
+        # proof-of-work instead of the image captchas, and no captcha service can
+        # ever produce a token for that - only a real browser can clear it. Asking
+        # a service anyway guarantees a failure that then reads as a rejected token.
+        captcha_type = detect_filecrypt_captcha_type(output.text)
+        info(f"Filecrypt captcha type: {captcha_type}")
+
+        if captcha_type == 'pow':
+            pow_output = _submit_pow_challenge(self.shared_state, session, url, headers)
+            if pow_output is None:
+                info("Filecrypt proof-of-work could not be solved. Check that FlareSolverr "
+                     "runs ghcr.io/rix1337/flaresolverr-next.")
+                return None
+
+            url = pow_output.url
+            output = pow_output
+            soup = BeautifulSoup(output.text, 'html.parser')
+
+            # The browser already carried us past the gate, so nothing is left to
+            # solve. Seeing the PoW again means the submission did not go through.
+            if detect_filecrypt_captcha_type(output.text) == 'pow':
+                info("Filecrypt still shows the proof-of-work after solving.")
+                return None
+
         # Check if captcha is needed
         no_captcha_present = bool(soup.find("form", {"class": "cnlform"}))
         info(f"Captcha check: CNL form present={no_captcha_present}")
@@ -598,8 +626,8 @@ class DBCDispatcher:
                 i += 1
 
             # Now solve the main captcha (CutCaptcha or reCAPTCHA) via DBC
-            info("Attempting to solve captcha via DBC...")
-            token = self._get_captcha_token(url, soup)
+            info(f"Attempting to solve Filecrypt captcha '{captcha_type}' via captcha service...")
+            token = self._get_captcha_token(url, soup, captcha_type)
             info(f"Captcha token received: {bool(token)}")
             
             if token:
@@ -627,7 +655,8 @@ class DBCDispatcher:
         # Extract links using existing logic
         return self._extract_filecrypt_links(session, soup, url, title, headers)
 
-    def _get_captcha_token(self, url: str, soup: BeautifulSoup) -> Optional[str]:
+    def _get_captcha_token(self, url: str, soup: BeautifulSoup,
+                           captcha_type: str = 'unknown') -> Optional[str]:
         """Get captcha token by solving via DBC."""
         
         debug(f"DBC: Checking for captcha types on {url}")
@@ -682,6 +711,11 @@ class DBCDispatcher:
                 except Exception as e:
                     info(f"Image captcha error: {e}")
 
+        # Say so out loud. Returning None here used to look identical to a captcha
+        # service that was asked and had no answer, which sent the diagnosis down
+        # the wrong path entirely.
+        info(f"No captcha type recognised on this Filecrypt page (type='{captcha_type}') "
+             f"- no captcha service was called")
         return None
 
     def _solve_recaptcha_token(self, url: str, soup: BeautifulSoup) -> Optional[str]:

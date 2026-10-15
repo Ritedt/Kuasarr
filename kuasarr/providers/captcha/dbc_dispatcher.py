@@ -883,7 +883,7 @@ class DBCDispatcher:
         info(f"Solving Circle-Captcha for {url} via DBC...")
         debug(f"DBC: Circle-Captcha session: PHPSESSID={phpsessid[:10]}...")
         
-        session = requests.Session()
+        session = self._same_origin_guard_for(requests.Session(), url)
         session.cookies.set('PHPSESSID', phpsessid)
         headers = {'User-Agent': self.shared_state.values["user_agent"]}
         
@@ -977,8 +977,8 @@ class DBCDispatcher:
         4. Otherwise solve and submit the CAPTCHA
         """
         info(f"Attempting to decrypt Keeplinks: {url}")
-        
-        session = requests.Session()
+
+        session = self._same_origin_guard_for(requests.Session(), url)
         headers = {
             'User-Agent': self.shared_state.values["user_agent"],
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -1135,6 +1135,46 @@ class DBCDispatcher:
         if base_host.lower() != asset_host.lower():
             return None
         return resolved
+
+    @staticmethod
+    def _same_origin_guard_for(session: requests.Session, base_url: str) -> requests.Session:
+        """Pin a session to the container origin, redirects included.
+
+        Checking only the initial URL is not enough: with
+        ``allow_redirects=True`` a container can answer 302 pointing at an
+        internal host and ``requests`` follows it, carrying along whatever the
+        session sends - for the captcha POSTs that is the form's hidden fields
+        including ``myhiddenpwd``. ``requests`` has no redirect hook, so
+        ``send`` is wrapped and every hop is checked before it is followed.
+        """
+        origin_host = (urlparse(base_url).hostname or "").lower()
+        if not origin_host:
+            return session
+
+        original_send = session.send
+
+        def send(request, **kwargs):
+            allow_redirects = kwargs.pop("allow_redirects", True)
+            response = original_send(request, allow_redirects=False, **kwargs)
+
+            history = []
+            while allow_redirects and response.is_redirect:
+                target = urljoin(response.url, response.headers.get("Location", ""))
+                host = (urlparse(target).hostname or "").lower()
+                if host != origin_host:
+                    raise requests.TooManyRedirects(
+                        f"Refusing to follow redirect off the container origin: {host}")
+                history.append(response)
+                next_request = requests.Request(
+                    "GET", target, headers=response.request.headers).prepare()
+                response = original_send(next_request, allow_redirects=False, **kwargs)
+
+            if history:
+                response.history = history
+            return response
+
+        session.send = send
+        return session
 
     def _solve_keeplinks_captcha(
         self,
@@ -1337,7 +1377,7 @@ class DBCDispatcher:
         """
         info(f"Attempting to decrypt ToLink: {url}")
         
-        session = requests.Session()
+        session = self._same_origin_guard_for(requests.Session(), url)
         headers = {
             'User-Agent': self.shared_state.values["user_agent"],
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -1958,7 +1998,13 @@ class DBCDispatcher:
 
         image = snapshot.get('image')
         if not image and snapshot.get('image_url'):
-            image = self._he_fetch_image(snapshot['image_url'])
+            # The snapshot may come from FlareSolverr, where image_url is passed
+            # through from the page markup unvalidated - re-check the origin.
+            safe_image_url = self._same_origin_asset_url(page_url, snapshot['image_url'])
+            if not safe_image_url:
+                info("he: CAPTCHA image URL is not on the container origin - refusing to fetch")
+                return None
+            image = self._he_fetch_image(safe_image_url)
 
         if not image or len(image) < 100:
             info("he: Could not read the CAPTCHA image")
@@ -2031,7 +2077,7 @@ class DBCDispatcher:
         left - including on exceptions - so nothing piles up inside FlareSolverr.
         """
         headers = {'User-Agent': self.shared_state.values["user_agent"]}
-        session = requests.Session()
+        session = self._same_origin_guard_for(requests.Session(), url)
 
         try:
             response = session.get(url, headers=headers,

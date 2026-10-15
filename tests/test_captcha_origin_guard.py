@@ -125,3 +125,24 @@ class TestHeFormSnapshot:
         snapshot = DBCDispatcher._he_form_snapshot_from_html(form, PAGE)
         assert snapshot is not None
         assert snapshot["image_url"] == ""
+
+    def test_flaresolverr_snapshot_image_is_revalidated_downstream(self):
+        """A snapshot built in the browser can carry an unchecked image_url.
+
+        The HTML path validates the URL while parsing; the FlareSolverr path
+        cannot, so _he_solve_with_snapshot re-checks it before fetching.
+        """
+        browser_snapshot = {
+            'action': 'https://www.example-hoster.net/download/abc123.html',
+            'fields': [('captcha_id', 'cp_9f3a'), ('captcha_answer', '')],
+            'captcha_id': 'cp_9f3a',
+            'image': b'',
+            'image_url': 'http://169.254.169.254/latest/meta-data/',
+        }
+        # The guard the solver applies to that value:
+        assert DBCDispatcher._same_origin_asset_url(
+            PAGE, browser_snapshot['image_url']) is None
+        # A legitimate one still passes:
+        browser_snapshot['image_url'] = 'https://www.example-hoster.net/cp/captcha_9f3a.png'
+        assert DBCDispatcher._same_origin_asset_url(
+            PAGE, browser_snapshot['image_url']) is not None

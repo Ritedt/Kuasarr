@@ -9,6 +9,7 @@ This set of documents covers Kuasarr development. Read the relevant document bef
 | [Coding Style](Coding-Style.md) | Python conventions, naming patterns, and linting standards |
 | [Testing](Testing.md) | How to write and run tests |
 | [Contributing](Contributing.md) | Commit message format, pull request expectations |
+| [Release Process](Release-Prozess.md) | How a merged PR becomes a Docker image, and how to update a running instance |
 | [Security](Security.md) | Handling credentials, hostnames, and `.env` files safely |
 
 For project-level context, constraints, and architectural decisions, also see `CLAUDE.md` in the repository root.

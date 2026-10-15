@@ -7,6 +7,7 @@ import json
 import random
 import re
 import xml.dom.minidom
+from typing import List, Optional
 from urllib.parse import urlparse
 
 import dukpy
@@ -309,6 +310,60 @@ class CNL:
         urls = [result for result in uncrypted.split("\r\n") if len(result) > 0]
 
         return urls
+
+
+def narrow_cnl_payload(session, url: str, headers: dict, secret: Optional[str],
+                       season: str, episode: str, crypted_data: List[str],
+                       title: str) -> List[str]:
+    """Narrow a CNL payload down to one episode, if FileCrypt still answers that.
+
+    ``/_CNL/<secret>.html?season=&episode=`` is a convenience filter on top of
+    the payload that is already embedded in the page's cnlform: it returns the
+    same link set minus the episodes that were not asked for. It is therefore
+    optional, and it has to stay optional - on the live site it answers HTTP 200
+    with an empty body for every episode of every container, and ``json.loads``
+    of that raises ``JSONDecodeError``.
+
+    That exception used to escape into the bare ``except:`` that wraps the CNL
+    branch, which reported "Click'n'Load not found! Falling back to DLC..." even
+    though the payload had been read correctly two lines earlier. The container
+    then went through DLC and into the Circle-Captcha fallback for a captcha it
+    did not have. So a failed *filter* must leave the unfiltered payload alone.
+
+    Returns ``crypted_data`` unchanged unless the filter answers with usable
+    JSON, in which case the link set is replaced by the narrowed one.
+    """
+    if not (season and episode and secret):
+        return crypted_data
+
+    domain = urlparse(url).netloc
+    link = f"https://{domain}/_CNL/{secret}.html?{season}&{episode}"
+
+    try:
+        result = session.post(link, headers=headers)
+    except requests.RequestException as e:
+        debug(f"FileCrypt: CNL-Episodenfilter nicht erreichbar ({e}), "
+              f"ungefilterte Links werden verwendet.")
+        return crypted_data
+
+    # An empty body is the normal answer from this endpoint; only real JSON is
+    # worth parsing.
+    if result.status_code != 200 or not result.text.strip():
+        debug(f"FileCrypt: CNL-Episodenfilter lieferte keine Daten "
+              f"(HTTP {result.status_code}, {len(result.text)} Bytes), "
+              f"ungefilterte Links werden verwendet.")
+        return crypted_data
+
+    try:
+        data = json.loads(result.text)
+        if data.get("success") and data["data"][0] and data["data"][1]:
+            return [crypted_data[0], data["data"][0], data["data"][1], title]
+    except (ValueError, KeyError, IndexError, TypeError) as e:
+        debug(f"FileCrypt: CNL-Episodenfilter lieferte keine auswertbaren "
+              f"Daten ({e}), ungefilterte Links werden verwendet.")
+        return crypted_data
+
+    return crypted_data
 
 
 class DLC:
@@ -875,20 +930,15 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
                     title
                 ]
                 if episode and season:
-                    domain = urlparse(url).netloc
-                    filtered_cnl_secret = soup.find("input", {"name": "hidden_cnl_id"}).attrs["value"]
-                    filtered_cnl_link = f"https://{domain}/_CNL/{filtered_cnl_secret}.html?{season}&{episode}"
-                    filtered_cnl_result = session.post(filtered_cnl_link,
-                                                       headers=headers)
-                    if filtered_cnl_result.status_code == 200:
-                        filtered_cnl_data = json.loads(filtered_cnl_result.text)
-                        if filtered_cnl_data["success"]:
-                            crypted_data = [
-                                crypted_data[0],
-                                filtered_cnl_data["data"][0],
-                                filtered_cnl_data["data"][1],
-                                title
-                            ]
+                    # Optional filter only - see narrow_cnl_payload. A failed
+                    # filter must leave the payload that is already in the page
+                    # alone instead of aborting the CNL branch.
+                    cnl_secret_el = soup.find("input", {"name": "hidden_cnl_id"})
+                    crypted_data = narrow_cnl_payload(
+                        session, url, headers,
+                        cnl_secret_el.get("value") if cnl_secret_el else None,
+                        season, episode, crypted_data, title,
+                    )
                 links.extend(CNL(crypted_data).decrypt())
             except:
                 if "The owner of this folder has deactivated all hosts in this container in their settings." in soup.text:

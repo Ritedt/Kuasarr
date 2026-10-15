@@ -60,7 +60,12 @@ from kuasarr.providers.notifications import send_discord_message
 from kuasarr.providers.statistics import StatsHelper
 from kuasarr.providers.hosters import filter_blocked_hosters
 from kuasarr.downloads import fail
-from kuasarr.downloads.linkcrypters.filecrypt import CNL, DLC, get_filecrypt_phpsessid
+from kuasarr.downloads.linkcrypters.filecrypt import (
+    CNL,
+    DLC,
+    get_filecrypt_phpsessid,
+    narrow_cnl_payload,
+)
 from kuasarr.downloads.linkcrypters.hide import unhide_links
 from kuasarr.constants import HTTP_DEFAULT_TIMEOUT_SECONDS, get_timeout
 
@@ -839,19 +844,15 @@ class DBCDispatcher:
                     title
                 ]
                 if episode and season:
-                    domain = urlparse(url).netloc
-                    filtered_cnl_secret = soup.find("input", {"name": "hidden_cnl_id"}).attrs["value"]
-                    filtered_cnl_link = f"https://{domain}/_CNL/{filtered_cnl_secret}.html?{season}&{episode}"
-                    filtered_cnl_result = session.post(filtered_cnl_link, headers=headers)
-                    if filtered_cnl_result.status_code == 200:
-                        filtered_cnl_data = json.loads(filtered_cnl_result.text)
-                        if filtered_cnl_data["success"]:
-                            crypted_data = [
-                                crypted_data[0],
-                                filtered_cnl_data["data"][0],
-                                filtered_cnl_data["data"][1],
-                                title
-                            ]
+                    # Optional filter only - see narrow_cnl_payload. A failed
+                    # filter must leave the payload that is already in the page
+                    # alone instead of aborting the CNL branch.
+                    cnl_secret_el = soup.find("input", {"name": "hidden_cnl_id"})
+                    crypted_data = narrow_cnl_payload(
+                        session, url, headers,
+                        cnl_secret_el.get("value") if cnl_secret_el else None,
+                        season, episode, crypted_data, title,
+                    )
                 links.extend(CNL(crypted_data).decrypt())
                 break
             except:

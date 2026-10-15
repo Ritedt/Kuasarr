@@ -671,8 +671,10 @@ class DBCDispatcher:
                 info("Image captcha detected, solving via DBC...")
                 debug(f"DBC: Image captcha src: {img_src[:80]}...")
                 try:
-                    if not img_src.startswith("http"):
-                        img_src = requests.compat.urljoin(url, img_src)
+                    img_src = self._same_origin_asset_url(url, img_src)
+                    if not img_src:
+                        info("Image captcha src is not on the container origin - refusing to fetch")
+                        return None
                     img_response = requests.get(img_src, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
                     result = self._client.solve_captcha(img_response.content)
                     if result.is_solved:
@@ -897,10 +899,11 @@ class DBCDispatcher:
                     # No circle captcha, check if we have a direct link
                     match = re.search(r"top\.location\.href\s*=\s*['\"]([^'\"]+)['\"]", response.text)
                     if match:
-                        redirect_url = requests.compat.urljoin(url, match.group(1))
-                        redirect_resp = session.get(redirect_url, allow_redirects=True, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
-                        if redirect_resp.ok and "expired" not in redirect_resp.text.lower():
-                            return [redirect_resp.url]
+                        redirect_url = self._same_origin_asset_url(url, match.group(1))
+                        if redirect_url:
+                            redirect_resp = session.get(redirect_url, allow_redirects=True, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
+                            if redirect_resp.ok and "expired" not in redirect_resp.text.lower():
+                                return [redirect_resp.url]
                     continue
                 
                 # Find the captcha image
@@ -912,9 +915,11 @@ class DBCDispatcher:
                 if captcha_img:
                     img_src = captcha_img.get("src", "")
                     if img_src:
-                        if not img_src.startswith("http"):
-                            img_src = requests.compat.urljoin(url, img_src)
-                        
+                        img_src = self._same_origin_asset_url(url, img_src)
+                        if not img_src:
+                            info("Coordinates captcha src is not on the container origin - refusing to fetch")
+                            return None
+
                         # Download captcha image
                         img_response = session.get(img_src, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
                         
@@ -936,11 +941,12 @@ class DBCDispatcher:
                             # Check for redirect to final link
                             match = re.search(r"top\.location\.href\s*=\s*['\"]([^'\"]+)['\"]", submit_response.text)
                             if match:
-                                redirect_url = requests.compat.urljoin(url, match.group(1))
-                                redirect_resp = session.get(redirect_url, allow_redirects=True, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
-                                if redirect_resp.ok and "expired" not in redirect_resp.text.lower():
-                                    info(f"Circle-Captcha successfully solved: {redirect_resp.url}")
-                                    return [redirect_resp.url]
+                                redirect_url = self._same_origin_asset_url(url, match.group(1))
+                                if redirect_url:
+                                    redirect_resp = session.get(redirect_url, allow_redirects=True, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
+                                    if redirect_resp.ok and "expired" not in redirect_resp.text.lower():
+                                        info(f"Circle-Captcha successfully solved: {redirect_resp.url}")
+                                        return [redirect_resp.url]
                 
                 time.sleep(2)
                 
@@ -1114,11 +1120,11 @@ class DBCDispatcher:
         stripped = asset_url.strip()
         if not stripped:
             return None
+        # An empty/blank src resolves to base_url itself (urljoin(base, "") == base),
+        # which would re-fetch the container page instead of a captcha image.
+        # A resolved URL equal to base_url is otherwise legitimate - a form
+        # action that posts back to the page itself is normal.
         resolved = urljoin(base_url, stripped)
-        if resolved == base_url:
-            # urljoin(base, "") == base - that would re-fetch the container
-            # page itself instead of a captcha image.
-            return None
         try:
             base_host = urlparse(base_url).hostname
             asset_host = urlparse(resolved).hostname
@@ -1425,10 +1431,19 @@ class DBCDispatcher:
             
             debug(f"ToLink: Submitting CAPTCHA solution")
             form_action = captcha_form.get('action', '')
-            if form_action and not form_action.startswith('http'):
-                form_action = urljoin(url, form_action)
-            submit_url = form_action if form_action else url
-            
+            if form_action:
+                form_action = urljoin(url, form_action.strip())
+                # The action comes from container HTML we do not control, and
+                # post_data carries the form's hidden fields (myhiddenpwd, i.e.
+                # the release password hash). Only ever post that to the
+                # container's own origin.
+                submit_url = self._same_origin_asset_url(url, form_action)
+                if not submit_url:
+                    info("ToLink: form action is not on the container origin - refusing to POST")
+                    return None
+            else:
+                submit_url = url
+
             response = session.post(submit_url, data=post_data, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
             
             if response.status_code != 200:
@@ -1816,8 +1831,8 @@ class DBCDispatcher:
             'image': image,
         }
 
-    @staticmethod
-    def _he_form_snapshot_from_html(html: str, page_url: str) -> Optional[Dict[str, Any]]:
+    @classmethod
+    def _he_form_snapshot_from_html(cls, html: str, page_url: str) -> Optional[Dict[str, Any]]:
         """Build the same snapshot shape straight from the HTML.
 
         Used for pages that FlareSolverr did not have to touch, where the form is
@@ -1837,11 +1852,21 @@ class DBCDispatcher:
         captcha_id_input = form.find('input', {'name': 'captcha_id'})
         image_tag = form.find('img', src=True)
 
+        # action/image come from markup we do not control. The answer is posted
+        # back to `action`, and the image is fetched directly, so both stay on
+        # the container's origin.
+        safe_action = cls._same_origin_asset_url(page_url, urljoin(page_url, action))
+        if not safe_action:
+            return None
+        image_url = ''
+        if image_tag:
+            image_url = cls._same_origin_asset_url(page_url, image_tag['src']) or ''
+
         return {
-            'action': urljoin(page_url, action),
+            'action': safe_action,
             'fields': fields,
             'captcha_id': (captcha_id_input.get('value', '') if captcha_id_input else '') or '',
-            'image_url': urljoin(page_url, image_tag['src']) if image_tag else '',
+            'image_url': image_url,
         }
 
     @staticmethod
@@ -1952,9 +1977,13 @@ class DBCDispatcher:
             return None
 
         payload = self._replace_he_captcha_answer(snapshot['fields'], answer)
-        submit_url = snapshot.get('action') or page_url
-        if not submit_url.startswith('http'):
-            submit_url = urljoin(page_url, submit_url)
+        # The snapshot may have come from FlareSolverr (JS-built form), so the
+        # action is re-checked here rather than trusted from the snapshot alone.
+        submit_url = self._same_origin_asset_url(page_url, snapshot.get('action') or page_url)
+        if not submit_url:
+            info("he: form action is not on the container origin - refusing to POST")
+            self._report_incorrect(captcha_result.captcha_id)
+            return None
 
         info(f"he: Submitting CAPTCHA solution")
         result_html = post_fn(submit_url, payload)

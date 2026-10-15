@@ -224,14 +224,19 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None,
             info(f"hide.cx: Could not resolve container from URL: {url}")
             return [], f"Konnte Container nicht aus hide.cx URL auflösen: {url}"
 
+        # Built before the branch below: a legacy /fc/Container/ URL arrives here
+        # with ``data`` already filled in, so the fetch is skipped and the per-link
+        # lookup further down read an unbound local - "cannot access local variable
+        # 'headers' where it is not associated with a value".
+        headers = {
+            'User-Agent': shared_state.values["user_agent"],
+            'Content-Type': 'application/json'
+        }
+        if api_key:
+            headers['Authorization'] = f'Bearer {api_key}'
+
         if not data:
             info(f"hide.cx: Fetching container with UUID: {container_id}")
-            headers = {
-                'User-Agent': shared_state.values["user_agent"],
-                'Content-Type': 'application/json'
-            }
-            if api_key:
-                headers['Authorization'] = f'Bearer {api_key}'
 
             container_url = f"https://api.hide.cx/containers/{container_id}"
             response = requests.get(container_url, headers=headers, timeout=30)

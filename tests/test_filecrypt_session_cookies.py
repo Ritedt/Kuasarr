@@ -133,7 +133,9 @@ class TestDispatcherSurvivesDuplicateSessionCookies(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(result["status"], "replaced")
-        self.assertEqual(result["replace_url"], "http://filecrypt.cc/Link/ABC123.html")
+        # https, because the container is: a plain-http URL here is answered with
+        # a redirect to the same host over https, which the origin guard refuses.
+        self.assertEqual(result["replace_url"], "https://filecrypt.cc/Link/ABC123.html")
         self.assertEqual(result["mirror"], "rapidgator")
         self.assertIsNotNone(result["session"])
 

@@ -877,7 +877,15 @@ class DBCDispatcher:
                     info("DLC not found! Falling back to Circle-Captcha buttons...")
                     
                     # Return replacement info for Circle-Captcha handling
-                    base_url = urlparse(url).netloc
+                    parsed_url = urlparse(url)
+                    base_url = parsed_url.netloc
+                    # Keep the scheme the container itself was served with. Building
+                    # an "http://" URL out of the bare netloc pinned the
+                    # Circle-Captcha step to an origin the container never answers
+                    # on: FileCrypt redirects it to the same host over https, the
+                    # origin guard reads that as leaving the pinned origin, and
+                    # every attempt gets refused.
+                    base_scheme = parsed_url.scheme or "https"
                     phpsessid = get_filecrypt_phpsessid(session, url)
                     if not phpsessid:
                         info("PHPSESSID cookie not found!")
@@ -892,7 +900,7 @@ class DBCDispatcher:
                         row = button.find_parent('tr')
                         mirror_tag = row.find('a', class_='external_link') if row else None
                         mirror_name = mirror_tag.get_text(strip=True) if mirror_tag else 'unknown'
-                        full_url = f"http://{base_url}/Link/{link_id}.html"
+                        full_url = f"{base_scheme}://{base_url}/Link/{link_id}.html"
                         results.append((full_url, mirror_name))
 
                     sorted_results = sorted(results, key=lambda x: 0 if 'rapidgator' in x[1].lower() else 1)
@@ -2199,13 +2207,11 @@ class DBCDispatcher:
         mirror: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Solve hide.cx links via API (no CAPTCHA needed)."""
-        from kuasarr.downloads.linkcrypters.hide import get_hide_api_key
-        
-        api_key = get_hide_api_key(self.shared_state)
-        if not api_key:
-            info("hide.cx API Key not configured - skipping")
-            return None
-        
+        # No key gate here: the public hide.cx API resolves containers and their
+        # per-link URLs without authentication, and unhide_links already sends
+        # the Authorization header only when a key is configured. Skipping every
+        # container because no key was set failed each package three times over
+        # and then marked it as failed.
         info(f"Decrypting hide.cx link via API: {url}")
         
         links, error = unhide_links(self.shared_state, url, password)

@@ -911,6 +911,10 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
                     info("DLC not found! Falling back to first available download Button...")
 
                     base_url = urlparse(url).netloc
+                    # Keep the container's own scheme, see the same line in the
+                    # dispatcher: an "http://" URL built from the bare netloc is
+                    # answered with a redirect to the same host over https.
+                    base_scheme = urlparse(url).scheme or "https"
                     phpsessid = get_filecrypt_phpsessid(session, url)
                     if not phpsessid:
                         info("PHPSESSID cookie not found! Cannot proceed with download links extraction.")
@@ -928,7 +932,7 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
                         row = button.find_parent('tr')
                         mirror_tag = row.find('a', class_='external_link') if row else None
                         mirror_name = mirror_tag.get_text(strip=True) if mirror_tag else 'unknown'
-                        full_url = f"http://{base_url}/Link/{link_id}.html"
+                        full_url = f"{base_scheme}://{base_url}/Link/{link_id}.html"
                         results.append((full_url, mirror_name))
 
                     sorted_results = sorted(results, key=lambda x: 0 if 'rapidgator' in x[1].lower() else 1)

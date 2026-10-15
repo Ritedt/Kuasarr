@@ -1,0 +1,127 @@
+# -*- coding: utf-8 -*-
+"""Tests for the same-origin guard on container-HTML derived URLs.
+
+Container markup is not ours: a release page can carry an absolute
+`src`/`action` pointing at an internal host. Every server-side fetch
+built from that markup has to stay on the container's origin.
+"""
+
+import pytest
+
+from kuasarr.providers.captcha.dbc_dispatcher import DBCDispatcher
+
+BASE = "https://www.keeplinks.org/p16/6ace7168bf656"
+
+PAGE = "https://www.example-hoster.net/download/abc123.html"
+
+REAL_FORM = """
+<html><body>
+<form id="content-protector-access-form" method="post" action="/download/abc123.html">
+  <input type="hidden" name="captcha_id" value="cp_9f3a">
+  <input type="hidden" name="myhiddenpwd" value="deadbeef">
+  <img src="/cp/captcha_9f3a.png" alt="captcha">
+  <input type="text" name="captcha_answer">
+  <input type="submit" value="Continue">
+</form>
+</body></html>
+"""
+
+FORGED_FORM = """
+<html><body>
+<form id="content-protector-access-form" method="post"
+      action="http://169.254.169.254/latest/">
+  <input type="hidden" name="captcha_id" value="cp_9f3a">
+  <input type="hidden" name="myhiddenpwd" value="deadbeef">
+  <img src="http://127.0.0.1:8080/evil.png">
+  <input type="text" name="captcha_answer">
+</form>
+</body></html>
+"""
+
+
+class TestSameOriginAssetUrl:
+    """The helper must reject anything leaving the container origin."""
+
+    @pytest.mark.parametrize("hostile", [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://127.0.0.1:8080/",
+        "http://localhost/admin",
+        "http://[::1]/",
+        "http://10.0.0.1/",
+        "http://192.168.0.1/",
+        "http://172.16.0.5/",
+        "http://169.254.1.1/",
+        "http://evil.example/steal",
+        "//evil.example/steal",
+        "file:///etc/passwd",
+        "gopher://attacker/",
+        "javascript:alert(1)",
+    ])
+    def test_rejects_foreign_targets(self, hostile):
+        """Absolute, protocol-relative and non-HTTP targets are refused."""
+        assert DBCDispatcher._same_origin_asset_url(BASE, hostile) is None
+
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_rejects_blank(self, blank):
+        """A blank src must not resolve to the container page itself."""
+        assert DBCDispatcher._same_origin_asset_url(BASE, blank) is None
+
+    def test_rejects_missing_base(self):
+        """Without a parseable base host nothing can be trusted."""
+        assert DBCDispatcher._same_origin_asset_url("not-a-url", "/rel.png") is None
+
+    @pytest.mark.parametrize("asset,expected", [
+        ("https://www.keeplinks.org/coolcaptcha/captcha.php",
+         "https://www.keeplinks.org/coolcaptcha/captcha.php"),
+        ("/coolcaptcha/captcha.php",
+         "https://www.keeplinks.org/coolcaptcha/captcha.php"),
+        ("captcha.php", "https://www.keeplinks.org/p16/captcha.php"),
+        ("//www.keeplinks.org/x.png", "https://www.keeplinks.org/x.png"),
+        ("https://www.keeplinks.org:8443/x.png",
+         "https://www.keeplinks.org:8443/x.png"),
+        ("  captcha.php?x=1  ", "https://www.keeplinks.org/p16/captcha.php?x=1"),
+    ])
+    def test_allows_same_origin(self, asset, expected):
+        """Relative paths resolve, absolute same-host URLs pass through."""
+        assert DBCDispatcher._same_origin_asset_url(BASE, asset) == expected
+
+    def test_host_comparison_is_case_insensitive(self):
+        """DNS is case-insensitive; only cross-host must be refused."""
+        assert DBCDispatcher._same_origin_asset_url(
+            BASE, "https://WWW.KEeplinks.ORG/x.png"
+        ) == "https://WWW.KEeplinks.ORG/x.png"
+        assert DBCDispatcher._same_origin_asset_url(
+            BASE, "https://WWW.KEeplinks.ORG.evil.com/x.png"
+        ) is None
+
+
+class TestHeFormSnapshot:
+    """he.to snapshots must not carry a foreign action or image URL."""
+
+    def test_real_form_is_accepted(self):
+        """A genuine Content Protector form still resolves correctly."""
+        snapshot = DBCDispatcher._he_form_snapshot_from_html(REAL_FORM, PAGE)
+        assert snapshot is not None
+        assert snapshot["action"] == "https://www.example-hoster.net/download/abc123.html"
+        assert snapshot["image_url"] == "https://www.example-hoster.net/cp/captcha_9f3a.png"
+        assert snapshot["captcha_id"] == "cp_9f3a"
+        assert ("myhiddenpwd", "deadbeef") in snapshot["fields"]
+
+    def test_action_posting_to_the_page_itself_is_allowed(self):
+        """An action resolving to the page URL is normal, not suspicious."""
+        form = REAL_FORM.replace('action="/download/abc123.html"',
+                                 'action="/download/abc123.html"')
+        snapshot = DBCDispatcher._he_form_snapshot_from_html(form, PAGE)
+        assert snapshot is not None
+
+    def test_forged_form_is_rejected(self):
+        """A form pointing at link-local metadata is refused outright."""
+        assert DBCDispatcher._he_form_snapshot_from_html(FORGED_FORM, PAGE) is None
+
+    def test_foreign_image_is_dropped_but_snapshot_survives(self):
+        """A bad image URL is cleared; the rest of the form stays usable."""
+        form = REAL_FORM.replace(
+            'src="/cp/captcha_9f3a.png"', 'src="http://127.0.0.1:8080/evil.png"')
+        snapshot = DBCDispatcher._he_form_snapshot_from_html(form, PAGE)
+        assert snapshot is not None
+        assert snapshot["image_url"] == ""

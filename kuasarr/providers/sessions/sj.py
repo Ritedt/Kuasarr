@@ -21,8 +21,14 @@ SJ_RECAPTCHA_SITE_KEY = "6LdDeqUUAAAAAB-wdU3Y3t8JA7HQDrZHW5sg21uG"
 DJ_RECAPTCHA_SITE_KEY = "6LcxeqUUAAAAAB-wdU3Y3t8JA7HQDrZHW5sg21uG"
 
 # API Endpoints
-API_BASE_SJ = "https://serienjunkies.org/api"
-API_BASE_DJ = "https://dokujunkies.org/api"
+SITE_BASE_SJ = "https://serienjunkies.org"
+SITE_BASE_DJ = "https://dokujunkies.org"
+API_BASE_SJ = SITE_BASE_SJ + "/api"
+API_BASE_DJ = SITE_BASE_DJ + "/api"
+
+# Static client-side value the download API expects as "fphash" next to the
+# reCAPTCHA token. It is a constant of the site's frontend, not a per-session value.
+JUNKIES_FPHASH = "de40959f2bba4944f523e7eb3c5ab78a"
 
 
 def create_and_persist_session(shared_state, source_type="sj", captcha_client=None):
@@ -212,6 +218,55 @@ def retrieve_and_validate_session(shared_state, source_type="sj", captcha_client
         return create_and_persist_session(shared_state, source_type, captcha_client)
 
 
+def _build_release_page_url(source_type, series_id, release_id):
+    """Build the public release page URL, used as Referer for the download API."""
+    site_base = SITE_BASE_SJ if source_type == "sj" else SITE_BASE_DJ
+    slug = "serie" if source_type == "sj" else "doku"
+    return f"{site_base}/{slug}/{series_id}/{release_id}"
+
+
+def _solve_junkies_recaptcha(shared_state, source_type, page_url):
+    """Solve the SJ/DJ reCAPTCHA v2 and return the token (None on failure)."""
+    try:
+        from kuasarr.providers.captcha import create_captcha_client
+
+        captcha_client = create_captcha_client(shared_state)
+        if not captcha_client:
+            info(f"No captcha client available for {source_type.upper()} reCAPTCHA solving")
+            return None
+
+        site_key = SJ_RECAPTCHA_SITE_KEY if source_type == "sj" else DJ_RECAPTCHA_SITE_KEY
+        result = captcha_client.solve_recaptcha_v2(
+            site_key=site_key,
+            page_url=page_url
+        )
+        if result.is_solved:
+            info(f"reCAPTCHA solved successfully for {source_type.upper()} (captcha_id: {result.captcha_id})")
+            return result.text
+
+        info(f"Failed to solve reCAPTCHA for {source_type.upper()} release page")
+        return None
+
+    except Exception as e:
+        info(f"Error solving reCAPTCHA for {source_type.upper()}: {e}")
+        return None
+
+
+def _extract_download_links(data):
+    """Normalize the download API response into a flat list of URLs."""
+    if isinstance(data, list):
+        # The API answers with a plain array of objects, each carrying a "url"
+        return [item.get("url") for item in data
+                if isinstance(item, dict) and item.get("url")]
+    if isinstance(data, dict):
+        links = data.get("links", [])
+        if isinstance(links, list):
+            return [link if isinstance(link, str) else link.get("url")
+                    for link in links
+                    if isinstance(link, str) or (isinstance(link, dict) and link.get("url"))]
+    return []
+
+
 def get_download_links_for_release(shared_state, source_type, series_id, release_id, hoster, session=None):
     """
     Generate download links for a specific release and hoster.
@@ -239,6 +294,27 @@ def get_download_links_for_release(shared_state, source_type, series_id, release
 
     preferred_hoster = shared_state.values["config"](config_section).get("preferred_hoster", "").lower()
 
+    # The download API is protected by a reCAPTCHA check that is independent of
+    # the hoster, so the token is solved once and reused for every attempt.
+    site_base = SITE_BASE_SJ if source_type == "sj" else SITE_BASE_DJ
+    release_page_url = _build_release_page_url(source_type, series_id, release_id)
+
+    recaptcha_token = _solve_junkies_recaptcha(shared_state, source_type, release_page_url)
+    if not recaptcha_token:
+        info(f"No reCAPTCHA token available for {config_section}")
+        return []
+
+    headers = {
+        'User-Agent': shared_state.values["user_agent"],
+        'Referer': release_page_url,
+        'Origin': site_base
+    }
+
+    json_data = {
+        'recaptchaToken': recaptcha_token,
+        'fphash': JUNKIES_FPHASH
+    }
+
     # If preferred hoster is set and different from requested, try preferred first
     hosters_to_try = [hoster]
     if preferred_hoster and preferred_hoster != hoster.lower():
@@ -249,22 +325,25 @@ def get_download_links_for_release(shared_state, source_type, series_id, release
             debug(f"Requesting download links for {config_section} release {release_id}, hoster: {try_hoster}")
             response = session.post(
                 f"{api_base}/releases/{release_id}/downloads/{try_hoster}",
+                headers=headers,
+                json=json_data,
                 timeout=30
             )
 
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("success"):
-                    links = data.get("links", [])
-                    if links:
-                        info(f"Retrieved {len(links)} download links from {config_section}")
-                        return links
-                else:
-                    debug(f"API returned error: {data.get('error', 'Unknown')}")
+            if 200 <= response.status_code < 300:
+                links = _extract_download_links(response.json())
+                if links:
+                    info(f"Retrieved {len(links)} download links from {config_section}")
+                    return links
+                debug("API returned no usable download links")
             elif response.status_code == 404:
                 debug(f"Hoster {try_hoster} not available for this release")
             else:
                 debug(f"Download request failed: HTTP {response.status_code}")
+                try:
+                    debug(f"Response: {response.text[:200]}")
+                except Exception:
+                    pass
 
         except Exception as e:
             debug(f"Error requesting download: {e}")

@@ -7,7 +7,33 @@ import re
 import requests
 
 from kuasarr.providers.log import info
-from kuasarr.providers.sessions.nx import retrieve_and_validate_session
+from kuasarr.providers.sessions.nx import NOX_RECAPTCHA_SITE_KEY, retrieve_and_validate_session
+
+
+def solve_nox_recaptcha(shared_state, page_url):
+    """Solve the Nox.to reCAPTCHA v2 and return the token (empty string on failure)."""
+    try:
+        from kuasarr.providers.captcha import create_captcha_client
+
+        captcha_client = create_captcha_client(shared_state)
+        if not captcha_client:
+            info("No captcha client available for NX reCAPTCHA solving")
+            return ""
+
+        result = captcha_client.solve_recaptcha_v2(
+            site_key=NOX_RECAPTCHA_SITE_KEY,
+            page_url=page_url
+        )
+        if result.is_solved:
+            info(f"reCAPTCHA solved successfully for NX (captcha_id: {result.captcha_id})")
+            return result.text
+
+        info("Failed to solve reCAPTCHA for NX release page")
+        return ""
+
+    except Exception as e:
+        info(f"Error solving reCAPTCHA for NX: {e}")
+        return ""
 
 
 def get_filer_folder_links_via_api(shared_state, url):
@@ -64,7 +90,14 @@ def get_nx_download_links(shared_state, url, mirror, title): # signature must al
         'Referer': url
     }
 
-    json_data = {}
+    # The getLinks API rejects requests without a freshly solved reCAPTCHA token.
+    # Same body field as the login request in providers/sessions/nx.py.
+    recaptcha_token = solve_nox_recaptcha(shared_state, url)
+    if not recaptcha_token:
+        info(f"Could not solve reCAPTCHA for NX release: {url}")
+        return []
+
+    json_data = {'g-recaptcha-response': recaptcha_token}
 
     url_segments = url.split('/')
     payload_url = '/'.join(url_segments[:-2]) + '/api/getLinks/' + url_segments[-1]
@@ -72,7 +105,7 @@ def get_nx_download_links(shared_state, url, mirror, title): # signature must al
     payload = nx_session.post(payload_url,
                               headers=headers,
                               json=json_data,
-                              timeout=10
+                              timeout=30
                               )
 
     if payload.status_code == 200:

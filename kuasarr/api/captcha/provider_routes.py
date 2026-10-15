@@ -127,9 +127,7 @@ def setup_provider_routes(app):
 
     @app.get("/captcha/hide")
     def serve_hide_captcha():
-        """Handle hide.cx links - decrypt via API (no CAPTCHA needed)."""
-        from kuasarr.downloads.linkcrypters.hide import get_hide_api_key
-        
+        """Handle hide.cx links - decrypt via the public API (no CAPTCHA needed)."""
         payload = decode_payload()
 
         if "error" in payload:
@@ -143,41 +141,6 @@ def setup_provider_routes(app):
 
         if not urls:
             return render_fail(f"No download links available for package: {title}")
-
-        api_key = get_hide_api_key(shared_state)
-        if not api_key:
-            return render_centered_html(f"""
-            <!DOCTYPE html>
-            <html>
-            <body>
-            <h1><img src="{images.logo}" type="image/png" alt="Kuasarr logo" class="logo"/>Kuasarr</h1>
-            <p><b>Package:</b> {title}</p>
-            <div class="info-box" style="background: #fff3cd; border: 1px solid #ffc107; padding: 1rem; border-radius: 8px; margin: 1rem 0;">
-                <h3 style="color: #856404; margin-top: 0;">⚠️ hide.cx API Key erforderlich</h3>
-                <p style="color: #856404; margin-bottom: 0.5rem;">
-                    Um hide.cx Links zu entschlüsseln, wird ein API Key benötigt.
-                </p>
-                <p style="color: #856404; margin-bottom: 0.5rem;">
-                    <b>So erhältst du einen kostenlosen API Key:</b>
-                </p>
-                <ol style="color: #856404; margin-bottom: 0.5rem; padding-left: 1.5rem;">
-                    <li>Erstelle einen kostenlosen Account auf <a href="https://hide.cx" target="_blank">hide.cx</a></li>
-                    <li>Gehe zu Settings → Account → Application API Keys</li>
-                    <li>Erstelle einen neuen API Key</li>
-                    <li>Trage den Key in Kuasarr unter Settings → HideCX → api_key ein</li>
-                </ol>
-            </div>
-            <p>
-                {render_button("Zu den Settings", "primary", {"onclick": "location.href='/settings'"})}
-            </p>
-            <p>
-                {render_button("Delete Package", "secondary", {"onclick": f"location.href='/captcha/delete/{package_id}'"})}
-            </p>
-            <p>
-                {render_button("Back", "secondary", {"onclick": "location.href='/'"})}
-            </p>
-            </body>
-            </html>""")
 
         first_url = urls[0][0] if isinstance(urls[0], (list, tuple)) else urls[0]
         

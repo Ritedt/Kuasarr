@@ -2,13 +2,31 @@
 # Kuasarr
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
+import json
 import re
 from typing import List, Dict, Any, Optional, Tuple
+from urllib.parse import parse_qs, urlencode, urlsplit
+from uuid import uuid4
 
 import requests
 
+from kuasarr.constants import FLARESOLVERR_REQUEST_TIMEOUT_SECONDS
+from kuasarr.downloads.linkcrypters.hide_episode_js import build_hide_episode_script
 from kuasarr.providers.log import info, debug
+from kuasarr.providers.network.cloudflare import (
+    flaresolverr_create_session,
+    flaresolverr_destroy_session,
+    flaresolverr_request,
+)
 from kuasarr.providers.statistics import StatsHelper
+
+# access_status values that mean the container will never yield links again.
+# Retrying them just burns a captcha round-trip and re-queues a dead package.
+HIDE_DEAD_ACCESS_STATUSES = frozenset({"offline", "expired", "deleted", "private"})
+
+# Per-link equivalent of the above: a single hoster link can also go stale
+# without the container as a whole changing its access_status.
+HIDE_DEAD_LINK_STATUSES = frozenset({"offline", "expired", "deleted", "dead"})
 
 
 def get_hide_api_key(shared_state) -> Optional[str]:
@@ -49,12 +67,142 @@ def resolve_legacy_container(shared_state, legacy_id: str) -> Optional[dict]:
         return None
 
 
-def unhide_links(shared_state, url: str, password: Optional[str] = None) -> Tuple[List[str], Optional[str]]:
-    """Decrypt hide.cx container links via API."""
+def get_hide_episode_selection_enabled(shared_state) -> bool:
+    """Whether the hide.cx container links should be narrowed down to one episode."""
+    from kuasarr.storage.config import Config
+    return bool(Config('HideCX').get('episode_selection'))
+
+
+def _parse_episode_selection(url: str) -> Optional[Tuple[int, int]]:
+    """Read ``?season=X&episode=Y`` from a hide.cx container URL.
+
+    Returns a ``(season, episode)`` tuple, or None when the URL carries no (or an
+    incomplete/unusable) selection - in which case every link is used.
+    """
+    query = parse_qs(urlsplit(url).query, keep_blank_values=True)
+    has_season = 'season' in query
+    has_episode = 'episode' in query
+
+    if not has_season and not has_episode:
+        return None
+    if has_season != has_episode:
+        debug("hide.cx: Unvollständige Episodenangabe in der URL, alle Links werden verwendet.")
+        return None
+
+    try:
+        if len(query['season']) != 1 or len(query['episode']) != 1:
+            raise ValueError("mehrdeutige Episodenangabe")
+        season = int(query['season'][0])
+        episode = int(query['episode'][0])
+        if season < 0 or episode <= 0:
+            raise ValueError("Episodennummer ausserhalb des gueltigen Bereichs")
+    except (KeyError, TypeError, ValueError) as e:
+        debug(f"hide.cx: Episodenangabe in der URL nicht auswertbar ({e}), "
+              f"alle Links werden verwendet.")
+        return None
+
+    return season, episode
+
+
+def get_hide_episode_link_ids(shared_state, container_id: str,
+                              selection: Tuple[int, int]) -> Optional[List[str]]:
+    """Resolve which link ids of a container belong to one selected episode.
+
+    ``GET /containers/{id}`` returns every link of a container, but a container
+    that spans several episodes/seasons makes hide.cx's Vue app show only the
+    links of the episode the user picked. That filtering exists purely in the
+    rendered DOM, so the page is loaded through FlareSolverr and the
+    ``selectedEpisode`` of the ContainerLink component is switched - the script
+    then reports the link ids the UI ended up displaying.
+
+    Returns None whenever the selection cannot be determined (no FlareSolverr,
+    script error, episode absent). The caller must then fall back to all links.
+    """
+    from kuasarr.storage.config import Config
+    if not Config('FlareSolverr').get('url'):
+        debug("hide.cx: Kein FlareSolverr konfiguriert, alle Links werden verwendet.")
+        return None
+
+    try:
+        season, episode = int(selection[0]), int(selection[1])
+    except (IndexError, TypeError, ValueError):
+        debug(f"hide.cx: Episodenauswahl {selection!r} ist ungültig.")
+        return None
+
+    session_id = f"hidecx_ep_{uuid4().hex[:12]}"
+    if not flaresolverr_create_session(shared_state, session_id):
+        info("hide.cx: FlareSolverr-Session für die Episodenauswahl konnte nicht erstellt werden.")
+        return None
+
+    script = build_hide_episode_script(container_id, (season, episode))
+    target = (f"https://hide.cx/container/{container_id}"
+              f"?{urlencode({'season': season, 'episode': episode})}")
+
+    try:
+        response = flaresolverr_request(
+            shared_state,
+            target,
+            cmd="request.get",
+            timeout=FLARESOLVERR_REQUEST_TIMEOUT_SECONDS,
+            session_id=session_id,
+            execute_js=script,
+        )
+    except Exception as e:
+        info(f"hide.cx: Episodenauswahl via FlareSolverr fehlgeschlagen: {e}")
+        return None
+    finally:
+        flaresolverr_destroy_session(shared_state, session_id)
+
+    if response is None:
+        info("hide.cx: FlareSolverr lieferte keine Antwort für die Episodenauswahl.")
+        return None
+
+    try:
+        data = json.loads(response.execute_js_result or "{}")
+    except (ValueError, TypeError) as e:
+        info(f"hide.cx: Episodenauswahl lieferte kein auswertbares Ergebnis: {e}")
+        return None
+
+    if not isinstance(data, dict):
+        debug(f"hide.cx: Unerwartetes Format der Episodenauswahl: {str(data)[:200]}")
+        return None
+
+    if data.get('error'):
+        info(f"hide.cx: Episodenauswahl nicht möglich: {data['error']}")
+        return None
+
+    ids = data.get('ids')
+    token = f"S{season:02d}E{episode:02d}"
+    if data.get('selected') != token or not isinstance(ids, list):
+        info("hide.cx: Episodenauswahl wurde nicht bestätigt, alle Links werden verwendet.")
+        return None
+    if any(not isinstance(link_id, str) or not link_id for link_id in ids):
+        info("hide.cx: Ungültige Link-IDs aus der Episodenauswahl, alle Links werden verwendet.")
+        return None
+    if not ids:
+        info("hide.cx: Episode hat keine Links, alle Links werden verwendet.")
+        return None
+
+    # Preserve the order the Vue app showed, drop duplicates
+    return list(dict.fromkeys(ids))
+
+
+def unhide_links(shared_state, url: str, password: Optional[str] = None,
+                 episode: Optional[Tuple[int, int]] = None) -> Tuple[List[str], Optional[str]]:
+    """Decrypt hide.cx container links via API.
+
+    The public API needs no authentication: GET /containers/{id} returns the
+    link list and GET /containers/{id}/links/{link_id} resolves each real
+    hoster URL. A configured API key is only sent when present, for the case
+    that hide.cx later gates part of the API behind accounts.
+
+    ``episode`` optionally narrows the result down to a single ``(season,
+    episode)`` selection, mirroring what the hide.cx web UI shows for a
+    container that spans several episodes. It needs FlareSolverr and the
+    'HideCX' > 'episode_selection' setting; without them every link is returned.
+    """
     api_key = get_hide_api_key(shared_state)
-    if not api_key:
-        return [], "hide.cx API Key nicht konfiguriert. Bitte unter Settings > HideCX > api_key eintragen."
-    
+
     try:
         links = []
         data = None
@@ -80,13 +228,14 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None) -> Tupl
             info(f"hide.cx: Fetching container with UUID: {container_id}")
             headers = {
                 'User-Agent': shared_state.values["user_agent"],
-                'Authorization': f'Bearer {api_key}',
                 'Content-Type': 'application/json'
             }
+            if api_key:
+                headers['Authorization'] = f'Bearer {api_key}'
 
             container_url = f"https://api.hide.cx/containers/{container_id}"
             response = requests.get(container_url, headers=headers, timeout=30)
-            
+
             if response.status_code == 401:
                 info("hide.cx API: Unauthorized - API Key ungültig")
                 return [], "hide.cx API Key ungültig. Bitte unter Settings > HideCX > api_key korrigieren."
@@ -99,6 +248,10 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None) -> Tupl
                     if unlock_response.status_code != 200:
                         return [], f"hide.cx Container-Passwort falsch oder Zugriff verweigert."
                     data = unlock_response.json()
+                    if not isinstance(data, dict) or "links" not in data:
+                        # 200 with an error body - the unlock did not succeed,
+                        # and "links" would silently fall back to [] below.
+                        return [], "hide.cx Unlock-Antwort enthielt keine Link-Liste."
                 else:
                     return [], "hide.cx Container ist passwortgeschützt. Passwort erforderlich."
             elif response.status_code != 200:
@@ -108,13 +261,55 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None) -> Tupl
                 data = response.json()
 
         access_status = data.get("access_status", "unknown")
-        if access_status == "offline":
-            info(f"hide.cx: Container is OFFLINE - no retry needed")
+        if access_status in HIDE_DEAD_ACCESS_STATUSES:
+            info(f"hide.cx: Container access_status is '{access_status}' - no retry needed")
             StatsHelper(shared_state).increment_failed_decryptions_automatic()
-            return [], "PERMANENT:hide.cx Container ist offline - Links nicht mehr verfügbar"
+            return [], f"PERMANENT:hide.cx Container ist '{access_status}' - Links nicht mehr verfügbar"
 
-        for link in data.get("links", []):
+        container_links = data.get("links", [])
+
+        # A container can bundle several episodes; the API hands out all of them.
+        # Keep only what the hide.cx UI shows for the selected episode - and fall
+        # back to the full list whenever that selection cannot be resolved.
+        if episode is not None:
+            selected_ids = get_hide_episode_link_ids(shared_state, container_id, episode)
+            if selected_ids is not None:
+                allowed = set(selected_ids)
+                filtered = [link for link in container_links
+                            if isinstance(link, dict) and link.get("id") in allowed]
+                info(f"hide.cx: Episodenauswahl S{episode[0]:02d}E{episode[1]:02d} "
+                     f"liefert {len(filtered)} von {len(container_links)} Links")
+                container_links = filtered
+            else:
+                info("hide.cx: Episodenauswahl nicht verfügbar, alle Links werden verwendet.")
+
+        for link in container_links:
+            link_status = link.get("link_status")
+            if link_status and link_status.lower() in HIDE_DEAD_LINK_STATUSES:
+                debug(f"hide.cx: Skipping {link_status} link {link.get('id')}")
+                continue
+
             hoster_url = link.get("hoster_url")
+            link_id = link.get("id")
+
+            # hoster_url is null for anonymous callers - the real URL lives
+            # behind a per-link endpoint that returns {"url": ...}.
+            if not hoster_url and link_id:
+                try:
+                    link_response = requests.get(
+                        f"https://api.hide.cx/containers/{container_id}/links/{link_id}",
+                        headers=headers,
+                        timeout=30,
+                    )
+                    link_response.raise_for_status()
+                    hoster_url = link_response.json().get("url")
+                except requests.exceptions.RequestException as e:
+                    debug(f"hide.cx: Could not resolve link {link_id}: {e}")
+                    continue
+                except ValueError as e:
+                    debug(f"hide.cx: Invalid JSON for link {link_id}: {e}")
+                    continue
+
             if hoster_url and hoster_url not in links:
                 links.append(hoster_url)
                 debug(f"hide.cx: Found link: {hoster_url[:60]}...")
@@ -124,11 +319,16 @@ def unhide_links(shared_state, url: str, password: Optional[str] = None) -> Tupl
             info(f"hide.cx: Successfully decrypted {len(links)} links")
             StatsHelper(shared_state).increment_captcha_decryptions_automatic()
         else:
-            all_offline = all(link.get("link_status") == "offline" for link in data.get("links", []))
-            if all_offline and data.get("links"):
-                info("hide.cx: All links in container are OFFLINE - no retry needed")
+            raw_links = data.get("links") or []
+            all_dead = all(
+                isinstance(link, dict)
+                and (link.get("link_status") or "").lower() in HIDE_DEAD_LINK_STATUSES
+                for link in raw_links
+            )
+            if all_dead and raw_links:
+                info("hide.cx: All links in container are unusable - no retry needed")
                 StatsHelper(shared_state).increment_failed_decryptions_automatic()
-                return [], "PERMANENT:hide.cx Alle Links im Container sind offline"
+                return [], "PERMANENT:hide.cx Alle Links im Container sind nicht mehr verfügbar"
             info("hide.cx: No links found in container response")
             StatsHelper(shared_state).increment_failed_decryptions_automatic()
 
@@ -151,8 +351,7 @@ def decrypt_links_if_hide(shared_state: Any, items: List[Any]) -> Dict[str, Any]
 
     api_key = get_hide_api_key(shared_state)
     if not api_key:
-        info("hide.cx API Key not configured")
-        return {"status": "no_api_key", "results": [], "error": "hide.cx API Key nicht konfiguriert."}
+        debug("hide.cx: No API key configured - using the public API (supported)")
 
     hide_urls: List[str] = []
     for item in items:
@@ -165,11 +364,15 @@ def decrypt_links_if_hide(shared_state: Any, items: List[Any]) -> Dict[str, Any]
         return {"status": "none", "results": []}
 
     info(f"Found {len(hide_urls)} hide.cx URLs; decrypting...")
+    episode_selection_enabled = get_hide_episode_selection_enabled(shared_state)
     decrypted_links: List[str] = []
     last_error: Optional[str] = None
     for url in hide_urls:
         try:
-            links, error = unhide_links(shared_state, url)
+            episode = _parse_episode_selection(url) if episode_selection_enabled else None
+            if episode is not None:
+                debug(f"hide.cx: Episodenauswahl aus URL: S{episode[0]:02d}E{episode[1]:02d}")
+            links, error = unhide_links(shared_state, url, episode=episode)
             if error:
                 last_error = error
                 debug(f"Error decrypting {url}: {error}")

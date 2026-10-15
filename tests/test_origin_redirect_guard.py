@@ -24,6 +24,12 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _route(self):
         path = self.path.split("?")[0]
+        if path == "/loop":
+            # An open redirect chain that stays on the origin.
+            self.send_response(302)
+            self.send_header("Location", "/loop")
+            self.end_headers()
+            return True
         if path == "/start":
             self.send_response(302)
             self.send_header("Location", TARGET["location"])
@@ -133,3 +139,16 @@ class TestRedirectGuard:
         """Without a usable origin host the session is returned untouched."""
         plain = requests.Session()
         assert DBCDispatcher._same_origin_guard_for(plain, "not-a-url") is plain
+
+    def test_redirect_loop_on_the_origin_is_capped(self, origin_server):
+        """A same-origin redirect loop must raise, not spin forever.
+
+        Wrapping ``Session.send`` bypasses ``requests``' own hop counting, so
+        the guard has to do it itself.
+        """
+        session = requests.Session()
+        session.max_redirects = 3
+        guarded = DBCDispatcher._same_origin_guard_for(session, f"{origin_server}/loop")
+
+        with pytest.raises(requests.TooManyRedirects):
+            guarded.get(f"{origin_server}/loop", timeout=10)

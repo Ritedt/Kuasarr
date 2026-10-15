@@ -77,8 +77,8 @@ class TestSameOriginAssetUrl:
          "https://www.keeplinks.org/coolcaptcha/captcha.php"),
         ("captcha.php", "https://www.keeplinks.org/p16/captcha.php"),
         ("//www.keeplinks.org/x.png", "https://www.keeplinks.org/x.png"),
-        ("https://www.keeplinks.org:8443/x.png",
-         "https://www.keeplinks.org:8443/x.png"),
+        ("https://www.keeplinks.org:443/x.png",
+         "https://www.keeplinks.org:443/x.png"),
         ("  captcha.php?x=1  ", "https://www.keeplinks.org/p16/captcha.php?x=1"),
     ])
     def test_allows_same_origin(self, asset, expected):
@@ -93,6 +93,38 @@ class TestSameOriginAssetUrl:
         assert DBCDispatcher._same_origin_asset_url(
             BASE, "https://WWW.KEeplinks.ORG.evil.com/x.png"
         ) is None
+
+
+class TestOriginOf:
+    """An origin is scheme + host + port, not just the host."""
+
+    def test_default_ports_are_filled_in(self):
+        """An omitted port means the scheme default, not "any port"."""
+        assert DBCDispatcher._origin_of("https://host/x") == ("https", "host", 443)
+        assert DBCDispatcher._origin_of("http://host/x") == ("http", "host", 80)
+
+    @pytest.mark.parametrize("url", ["", "not-a-url", "/relative", "//host/x"])
+    def test_rejects_unusable_urls(self, url):
+        """Without scheme and host there is no origin to compare against."""
+        assert DBCDispatcher._origin_of(url) is None
+
+    @pytest.mark.parametrize("same_host_different_origin", [
+        "https://www.keeplinks.org:8443/x.png",   # other port
+        "http://www.keeplinks.org/p16/x.png",      # other scheme
+        "https://www.keeplinks.org:80/x.png",      # other port
+    ])
+    def test_same_host_other_port_or_scheme_is_rejected(self, same_host_different_origin):
+        """A different port or scheme is a different origin.
+
+        ``https://host`` and ``https://host:8443`` may well be an internal
+        service on the same machine - host equality is not enough.
+        """
+        assert DBCDispatcher._same_origin_asset_url(BASE, same_host_different_origin) is None
+
+    def test_explicit_default_port_equals_implicit(self):
+        """:443 and the implicit default are the same origin."""
+        assert DBCDispatcher._origin_of("https://host:443/x") == DBCDispatcher._origin_of(
+            "https://host/x")
 
 
 class TestHeFormSnapshot:

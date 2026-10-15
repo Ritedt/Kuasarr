@@ -1125,16 +1125,36 @@ class DBCDispatcher:
         # A resolved URL equal to base_url is otherwise legitimate - a form
         # action that posts back to the page itself is normal.
         resolved = urljoin(base_url, stripped)
-        try:
-            base_host = urlparse(base_url).hostname
-            asset_host = urlparse(resolved).hostname
-        except ValueError:
+        base_origin = DBCDispatcher._origin_of(base_url)
+        if base_origin is None:
             return None
-        if not base_host or not asset_host:
-            return None
-        if base_host.lower() != asset_host.lower():
+        if DBCDispatcher._origin_of(resolved) != base_origin:
             return None
         return resolved
+
+    @staticmethod
+    def _origin_of(url: str) -> Optional[tuple]:
+        """Normalize a URL to (scheme, host, port) for origin comparison.
+
+        Host alone is not an origin: ``http://container:9999`` is a different
+        origin than ``https://container`` and may well be an internal service
+        on the same machine. Comparing the triple keeps those apart.
+        """
+        try:
+            parsed = urlparse(url)
+        except ValueError:
+            return None
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+        if not scheme or not host:
+            return None
+        try:
+            port = parsed.port
+        except ValueError:
+            return None
+        if port is None:
+            port = {"http": 80, "https": 443}.get(scheme)
+        return (scheme, host, port)
 
     @staticmethod
     def _same_origin_guard_for(session: requests.Session, base_url: str) -> requests.Session:
@@ -1146,11 +1166,16 @@ class DBCDispatcher:
         session sends - for the captcha POSTs that is the form's hidden fields
         including ``myhiddenpwd``. ``requests`` has no redirect hook, so
         ``send`` is wrapped and every hop is checked before it is followed.
+
+        The hop count is bounded here because wrapping ``send`` bypasses
+        ``requests``' own ``max_redirects`` handling - an open redirect chain
+        on a hostile container would otherwise spin forever.
         """
-        origin_host = (urlparse(base_url).hostname or "").lower()
-        if not origin_host:
+        origin = DBCDispatcher._origin_of(base_url)
+        if origin is None:
             return session
 
+        max_hops = session.max_redirects if session.max_redirects else 30
         original_send = session.send
 
         def send(request, **kwargs):
@@ -1159,11 +1184,14 @@ class DBCDispatcher:
 
             history = []
             while allow_redirects and response.is_redirect:
-                target = urljoin(response.url, response.headers.get("Location", ""))
-                host = (urlparse(target).hostname or "").lower()
-                if host != origin_host:
+                if len(history) >= max_hops:
                     raise requests.TooManyRedirects(
-                        f"Refusing to follow redirect off the container origin: {host}")
+                        f"Exceeded {max_hops} redirects on the container origin")
+                target = urljoin(response.url, response.headers.get("Location", ""))
+                target_origin = DBCDispatcher._origin_of(target)
+                if target_origin != origin:
+                    raise requests.TooManyRedirects(
+                        f"Refusing to follow redirect off the container origin: {target_origin}")
                 history.append(response)
                 next_request = requests.Request(
                     "GET", target, headers=response.request.headers).prepare()

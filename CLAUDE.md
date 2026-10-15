@@ -27,7 +27,7 @@ Kuasarr is a Python-based fork of [quasarr](https://github.com/rix1337/quasarr) 
 * **Packaging**: pyproject.toml + setup.py + MANIFEST.in
 * **Distribution**: Docker (GHCR: `ghcr.io/ritedt/kuasarr`), multi-arch (amd64, arm64, arm/v7)
 * **Config**: `kuasarr.ini` (INI format), mounted at `/config/`
-* **Versioning**: `version.json` (single source of truth)
+* **Versioning**: git tag `vMAJOR.MINOR.PATCH` is the source of truth — `version.json` is injected at build time and the committed copy is stale. See [docs/Release-Prozess.md](docs/Release-Prozess.md)
 
 ## Repository Structure
 
@@ -139,9 +139,10 @@ These must be running and reachable by Kuasarr:
 
 ## Release Process
 
-* Versioning in `version.json`
-* Docker images published to GHCR: `ghcr.io/ritedt/kuasarr`
-* Tags available on GitHub Container Registry
+Merging a PR into `main` builds and publishes the image automatically — there is no manual publish step. Full description in [docs/Release-Prozess.md](docs/Release-Prozess.md).
+
+* Version derived from the highest git tag `vMAJOR.MINOR.PATCH`, patch bumped; `Hier_Version_Ändern.txt` overrides it only if higher
+* Docker images published to GHCR: `ghcr.io/ritedt/kuasarr:<version>` and `:latest` (multi-arch amd64 + arm64)
 * CHANGELOG.md tracks changes per release
 
 <!-- mulch:start -->

@@ -7,20 +7,30 @@ and integrates with the existing Filecrypt decryption logic.
 
 from __future__ import annotations
 
+import base64
 import json
 import random
 import re
 import threading
 import time
-from typing import Any, Dict, Iterable, Optional, Tuple
-from urllib.parse import urlparse
+from contextlib import contextmanager
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
+from urllib.parse import urlencode, urljoin, urlparse
+from uuid import uuid4
 
 import requests
 from bs4 import BeautifulSoup
 
 from kuasarr.providers import shared_state
 from kuasarr.providers.captcha import push_jobs
-from kuasarr.providers.network.cloudflare import is_cloudflare_challenge, ensure_session_cf_bypassed
+from kuasarr.providers.captcha.math_captcha import solve_math_captcha
+from kuasarr.providers.network.cloudflare import (
+    flaresolverr_create_session,
+    flaresolverr_destroy_session,
+    flaresolverr_request,
+    is_cloudflare_challenge,
+    ensure_session_cf_bypassed,
+)
 from kuasarr.providers.captcha import create_captcha_client
 from kuasarr.providers.captcha.base_client import (
     CaptchaResult,
@@ -50,10 +60,91 @@ DEFAULT_DISPATCH_INTERVAL_SECONDS = 10
 MAX_BACKOFF_MULTIPLIER = 8
 PROCESSING_STATUS = "processing"  # job is actively being worked on this tick
 
+# Keeplinks serves two different image captchas from the same container page.
+# "Cool" is a distorted alphanumeric image, "Simple" is a plain 4 character word.
+# Both are served from their own endpoint and each has its own form field name.
+KEEPLINKS_CAPTCHA_ENDPOINTS = {
+    "cool": "https://www.keeplinks.org/coolcaptcha/captcha.php",
+    "simple": "https://www.keeplinks.org/simplecaptcha/captcha.php",
+}
+# Field the solved answer has to be posted back in. Keeplinks uses a different
+# name per variant, which is why the answer cannot simply be written into
+# whatever input happens to be called "captcha".
+KEEPLINKS_ANSWER_FIELDS = {
+    "cool": "captcha_cool",
+    "simple": "norobot",
+}
+KEEPLINKS_ANSWER_LENGTH = 4
+
+# ToLink renders its "text" captcha as ASCII art and then runs OCR over it.
+# Digit/letter glyphs get confused for each other constantly, so the raw solver
+# output is post-corrected before it goes back into the form.
+TOLINK_NUMBER_SUBSTITUTIONS = (
+    ("5", "S"), ("0", "O"), ("9", "O"), ("1", "I"),
+    ("8", "B"), ("6", "G"), ("2", "Z"), ("7", "!"),
+)
+TOLINK_LETTER_SUBSTITUTIONS = (("T", "I"), ("l", "I"))
+TOLINK_SUBMIT_LABEL = "Weiter zu den Links"
+
+# he.to wraps its captcha form in a Content Protector overlay. FlareSolverr has
+# to run inside the browser to read the form state and the captcha image, because
+# the plain HTML does not carry a usable image source for every page variant.
+HE_FORM_SNAPSHOT_JS = """
+return (async () => {
+  const form = document.querySelector(
+    'form[id^="content-protector-access-form"]'
+  );
+  if (!form) return '';
+
+  let imageBase64 = '';
+  const image = form.querySelector('img[src]');
+  if (image) {
+    const response = await fetch(new URL(image.src, location.href), {
+      credentials: 'include'
+    });
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    imageBase64 = btoa(binary);
+  }
+
+  return JSON.stringify({
+    action: form.action || location.href,
+    fields: Array.from(new FormData(form).entries()),
+    captchaId: form.querySelector('[name="captcha_id"]')?.value || '',
+    imageBase64
+  });
+})()
+"""
+
+# Hoster URL shapes that identify a real download link. Shared by the per-site
+# extractors so a new site does not need its own copy of the list.
+DOWNLOAD_LINK_PATTERNS = (
+    r'rapidgator\.net/file/',
+    r'rg\.to/file/',
+    r'ddownload\.com/[a-z0-9]+/',
+    r'uploaded\.net/file/',
+    r'uploaded\.to/file/',
+    r'ul\.to/[a-z0-9]+',
+    r'nitroflare\.com/view/',
+    r'turbobit\.net/[a-z0-9]+/',
+    r'1fichier\.com/\?[a-z0-9]+',
+    r'katfile\.com/[a-z0-9]+/',
+    r'mexashare\.com/[a-z0-9]+/',
+    r'depositfiles\.com/files/',
+    r'filefactory\.com/file/',
+)
+
 
 class PermanentLinkFailure(Exception):
     """Raised when a link permanently fails (e.g., offline) and should not be retried."""
     pass
+
+
+def _he_post_unavailable(target: str, payload: List[Tuple[str, str]]) -> Optional[str]:
+    """Stand-in for ``post_fn`` when no browser session could be obtained."""
+    debug(f"he: no browser session available, cannot submit to {target}")
+    return None
 
 
 class DBCDispatcher:
@@ -399,12 +490,26 @@ class DBCDispatcher:
         elif "filecrypt" in link_url.lower() or "filecrypt" in mirror.lower():
             return self._solve_filecrypt_with_dbc(title, link_url, password, mirror)
         elif "keeplinks" in link_url.lower() or "keeplinks" in mirror.lower():
+            # Handles both the 'cool' and the 'simple' Keeplinks captcha.
             return self._solve_keeplinks_with_dbc(title, link_url, password, mirror)
         elif "tolink" in link_url.lower() or "tolink" in mirror.lower():
+            # Handles the image captcha, the ASCII text captcha and reCAPTCHA.
             return self._solve_tolink_with_dbc(title, link_url, password, mirror)
+        elif self._is_he_container(link_url):
+            return self._solve_he_with_dbc(title, link_url, password, mirror)
         else:
             # For other link types, try generic approach
             return self._solve_generic_link(title, link_url, password)
+
+    @staticmethod
+    def _is_he_container(url: str) -> bool:
+        """Whether *url* points at an he.to / hit-parade container page.
+
+        Checked against the hostname on purpose: a plain substring test for
+        "he.to" also matches unrelated hosts such as "cache.tool".
+        """
+        host = urlparse(url).hostname or ''
+        return host == 'he.to' or host.endswith('.he.to') or host == 'www.he.to'
 
     def _solve_filecrypt_with_dbc(
         self,
@@ -553,20 +658,10 @@ class DBCDispatcher:
         recaptcha_div = soup.find("div", {"class": "g-recaptcha"})
         debug(f"DBC: reCAPTCHA div found: {bool(recaptcha_div)}")
         if recaptcha_div:
-            site_key = recaptcha_div.get("data-sitekey", "")
-            if site_key:
-                info("reCAPTCHA detected, solving via DBC...")
-                debug(f"DBC: reCAPTCHA sitekey: {site_key[:30]}...")
-                try:
-                    result = self._client.solve_recaptcha_v2(
-                        site_key=site_key,
-                        page_url=url,
-                    )
-                    if result.is_solved:
-                        return result.text
-                except (DBCError, CaptchaClientError) as e:
-                    info(f"reCAPTCHA error: {e}")
-        
+            token = self._solve_recaptcha_token(url, soup)
+            if token:
+                return token
+
         # Check for image captcha
         captcha_img = soup.find("img", {"id": "captcha_img"})
         debug(f"DBC: Image captcha found: {bool(captcha_img)}")
@@ -584,7 +679,36 @@ class DBCDispatcher:
                         return result.text
                 except Exception as e:
                     info(f"Image captcha error: {e}")
-        
+
+        return None
+
+    def _solve_recaptcha_token(self, url: str, soup: BeautifulSoup) -> Optional[str]:
+        """Solve a reCAPTCHA v2 challenge on *url* and return its token.
+
+        Shared by every site that layers reCAPTCHA on top of its own captcha, so
+        the site key extraction and the error handling only exist once.
+        """
+        recaptcha_div = soup.find("div", {"class": "g-recaptcha"})
+        if not recaptcha_div:
+            return None
+
+        site_key = recaptcha_div.get("data-sitekey", "")
+        if not site_key or not self._client:
+            return None
+
+        info("reCAPTCHA detected, solving via captcha service...")
+        debug(f"DBC: reCAPTCHA sitekey: {site_key[:30]}...")
+        try:
+            result = self._client.solve_recaptcha_v2(
+                site_key=site_key,
+                page_url=url,
+            )
+            if result.is_solved:
+                return result.text
+            info(f"reCAPTCHA solving failed: {result.status}")
+        except (DBCError, CaptchaClientError) as e:
+            info(f"reCAPTCHA error: {e}")
+
         return None
 
     def _extract_filecrypt_links(
@@ -835,15 +959,16 @@ class DBCDispatcher:
         mirror: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Solve Keeplinks.org using DBC for image captcha solving.
-        
-        Keeplinks uses a simple image captcha (coolcaptcha) that DBC can solve.
-        
+
+        Keeplinks serves one of two image captchas from the same container page
+        (coolcaptcha or simplecaptcha); both are solved by DBC and handled by
+        :meth:`_solve_keeplinks_captcha`.
+
         Flow:
         1. GET the page
         2. POST to proceed past "Click To Proceed"
-        3. Get CAPTCHA image and solve via DBC
-        4. POST CAPTCHA solution
-        5. Extract download links
+        3. Extract links if they are already visible
+        4. Otherwise solve and submit the CAPTCHA
         """
         info(f"Attempting to decrypt Keeplinks: {url}")
         
@@ -911,93 +1036,215 @@ class DBCDispatcher:
                 info(f"Keeplinks: Found {len(links)} links (no CAPTCHA solving needed)")
                 return {"status": "success", "links": links}
             
-            # Step 4: If no links found, try to find and solve CAPTCHA
-            captcha_img = soup.find('img', src=re.compile(r'captcha', re.IGNORECASE))
-            if not captcha_img:
-                info("Keeplinks: No CAPTCHA image and no links found")
-                return None
-            
-            captcha_url = captcha_img.get('src', '')
-            if not captcha_url.startswith('http'):
-                captcha_url = f"https://www.keeplinks.org{captcha_url}" if captcha_url.startswith('/') else f"https://www.keeplinks.org/{captcha_url}"
-            
-            debug(f"Keeplinks: CAPTCHA image URL: {captcha_url}")
-            
-            # Download CAPTCHA image
-            captcha_response = session.get(captcha_url, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
-            if captcha_response.status_code != 200:
-                info(f"Keeplinks: Failed to download CAPTCHA image")
-                return None
-            
-            # Step 4: Solve CAPTCHA via DBC (image captcha)
-            if not self._client:
-                info("Keeplinks: DBC client not initialized")
-                return None
-            
-            debug(f"Keeplinks: Solving image CAPTCHA ({len(captcha_response.content)} bytes)")
-            captcha_result = self._client.solve_captcha(captcha_response.content)
-            
-            if not captcha_result or not captcha_result.text:
-                info("Keeplinks: DBC failed to solve CAPTCHA")
-                return None
-            
-            captcha_token = captcha_result.text
-            info(f"Keeplinks: CAPTCHA solved: {captcha_token}")
-            
-            # Step 5: Build POST data and submit CAPTCHA solution
-            captcha_form = soup.find('form', {'name': 'frmprotect'})
-            if not captcha_form:
-                info("Keeplinks: Could not find CAPTCHA form")
-                return None
-            
-            post_data = {}
-            for input_elem in captcha_form.find_all('input'):
-                name = input_elem.get('name')
-                value = input_elem.get('value', '')
-                if name:
-                    if name == 'captcha_cool':
-                        post_data[name] = captcha_token
-                    else:
-                        post_data[name] = value
-            
-            debug(f"Keeplinks: Submitting CAPTCHA solution")
-            response = session.post(url, data=post_data, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
-            
-            if response.status_code != 200:
-                info(f"Keeplinks: CAPTCHA POST failed with status {response.status_code}")
-                return None
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Check for error messages
-            error_msg = soup.find(text=re.compile(r'wrong|invalid|incorrect', re.IGNORECASE))
-            if error_msg:
-                info(f"Keeplinks: CAPTCHA was rejected")
-                return None
-            
-            # Step 6: Extract download links
-            links = self._extract_keeplinks_download_links(soup)
-            
-            if not links:
-                info("Keeplinks: No download links found after CAPTCHA submission")
-                return None
-            
-            # Filter by mirror if specified
-            if mirror:
-                mirror_lower = mirror.lower()
-                filtered_links = [link for link in links if mirror_lower in link.lower()]
-                if filtered_links:
-                    links = filtered_links
-            
-            info(f"Keeplinks: Successfully extracted {len(links)} download links")
-            return {"status": "success", "links": links}
-            
+            # Step 4: If no links found, solve the CAPTCHA (cool or simple)
+            return self._solve_keeplinks_captcha(session, soup, url, headers, password, mirror)
+
         except requests.RequestException as e:
             info(f"Keeplinks: Request error - {e}")
             return None
         except Exception as e:
             info(f"Keeplinks: Unexpected error - {e}")
             return None
+
+    @staticmethod
+    def _detect_keeplinks_captcha(soup: BeautifulSoup) -> Tuple[Optional[str], Optional[str]]:
+        """Identify which Keeplinks captcha is on the page.
+
+        Two signals are consulted: the hidden ``captchatype`` input and the
+        endpoint the captcha image is loaded from. Cool wins when both appear,
+        because that is the variant Keeplinks advertises on the container page.
+
+        Returns:
+            ``(variant, captcha_image_url)``, or ``(None, None)`` when the page
+            carries no captcha at all.
+        """
+        hidden_type_input = soup.find('input', {'name': 'captchatype'})
+        captchatype_val = ''
+        if hidden_type_input:
+            try:
+                captchatype_val = (hidden_type_input.get('value') or '').strip()
+            except Exception as exc:
+                debug(f"Keeplinks: could not read captchatype: {exc}")
+
+        simple_img = soup.find('img', src=re.compile(r'simplecaptcha/captcha\.php'))
+        cool_img = soup.find('img', src=re.compile(r'coolcaptcha/captcha\.php'))
+
+        if cool_img or captchatype_val == 'Cool':
+            return 'cool', KEEPLINKS_CAPTCHA_ENDPOINTS['cool']
+        if simple_img or captchatype_val == 'Simple':
+            return 'simple', KEEPLINKS_CAPTCHA_ENDPOINTS['simple']
+
+        return None, None
+
+    @staticmethod
+    def _normalize_keeplinks_answer(variant: str, solved_text: str) -> str:
+        """Clean the raw solver output into the shape Keeplinks expects.
+
+        Cool is a distorted alphanumeric image, so every non-letter is noise.
+        Simple is a 4 character word and the solver tends to repeat glyphs
+        ("aabb" for "ab"), which is collapsed here.
+        """
+        if variant == 'cool':
+            return re.sub(r'[^A-Za-z]', '', solved_text or '')
+
+        cleaned = (solved_text or '').strip()
+        if not cleaned:
+            return ''
+
+        deduped = cleaned[0]
+        for char in cleaned[1:]:
+            if char != deduped[-1]:
+                deduped += char
+
+        if len(deduped) >= KEEPLINKS_ANSWER_LENGTH:
+            return deduped[:KEEPLINKS_ANSWER_LENGTH]
+        return deduped
+
+    @staticmethod
+    def _same_origin_asset_url(base_url: str, asset_url: str) -> Optional[str]:
+        """Resolve a captcha/asset URL and keep it on the container's origin.
+
+        The container HTML is attacker-influenceable, so an absolute ``src``
+        such as ``http://169.254.169.254/x.png`` would otherwise be fetched
+        verbatim. Relative paths are resolved against the container page.
+        Returns None when the resolved URL leaves the container's origin.
+        """
+        if not asset_url:
+            return None
+        stripped = asset_url.strip()
+        if not stripped:
+            return None
+        resolved = urljoin(base_url, stripped)
+        if resolved == base_url:
+            # urljoin(base, "") == base - that would re-fetch the container
+            # page itself instead of a captcha image.
+            return None
+        try:
+            base_host = urlparse(base_url).hostname
+            asset_host = urlparse(resolved).hostname
+        except ValueError:
+            return None
+        if not base_host or not asset_host:
+            return None
+        if base_host.lower() != asset_host.lower():
+            return None
+        return resolved
+
+    def _solve_keeplinks_captcha(
+        self,
+        session: requests.Session,
+        soup: BeautifulSoup,
+        url: str,
+        headers: dict,
+        password: str,
+        mirror: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Solve the Keeplinks image captcha (cool or simple) and submit it."""
+        variant, captcha_url = self._detect_keeplinks_captcha(soup)
+        if not variant:
+            info("Keeplinks: No CAPTCHA image and no links found")
+            return None
+
+        info(f"Keeplinks: {variant} captcha detected")
+
+        if not self._client:
+            info("Keeplinks: DBC client not initialized")
+            return None
+
+        debug(f"Keeplinks: CAPTCHA image URL: {captcha_url}")
+        captcha_url = self._same_origin_asset_url(url, captcha_url)
+        if not captcha_url:
+            info("Keeplinks: CAPTCHA image URL is not on the container origin - refusing to fetch")
+            return None
+        captcha_response = session.get(
+            captcha_url, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS)
+        )
+        if captcha_response.status_code != 200:
+            info("Keeplinks: Failed to download CAPTCHA image")
+            return None
+
+        debug(f"Keeplinks: Solving image CAPTCHA ({len(captcha_response.content)} bytes)")
+        captcha_result = self._client.solve_captcha(captcha_response.content)
+
+        if not captcha_result or not captcha_result.text:
+            info("Keeplinks: DBC failed to solve CAPTCHA")
+            return None
+
+        solved_text = captcha_result.text
+        answer = self._normalize_keeplinks_answer(variant, solved_text)
+        info(f"Keeplinks: CAPTCHA solved: '{solved_text}' -> '{answer}'")
+
+        if not answer:
+            info(f"Keeplinks: Unusable solver response '{solved_text}'")
+            self._report_incorrect(captcha_result.captcha_id)
+            return None
+
+        # Keeplinks wants the full hidden field set next to the answer - posting
+        # only the answer field gets the container rejected.
+        hiddenpwd_input = soup.find('input', {'name': 'hiddenpwd'})
+        hiddenpwd_val = (hiddenpwd_input.get('value', '') if hiddenpwd_input else '') or ''
+        password_field_exists = soup.find('input', {'id': 'password'}) is not None
+
+        post_data = {
+            'myhiddenpwd': hiddenpwd_val,
+            'hiddenaction': 'Q2hlY2tJbmZv',
+            'captchatype': 'Cool' if variant == 'cool' else 'Simple',
+            'hiddencaptcha': '1',
+            'hiddenpwd': hiddenpwd_val,
+            KEEPLINKS_ANSWER_FIELDS[variant]: answer,
+        }
+        if password_field_exists and password:
+            post_data['password'] = password
+
+        debug(f"Keeplinks: Submitting {variant} CAPTCHA solution")
+        response = session.post(
+            url, data=post_data, headers=headers,
+            allow_redirects=True,
+            timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+        )
+
+        if response.status_code != 200:
+            info(f"Keeplinks: CAPTCHA POST failed with status {response.status_code}")
+            return None
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # A rejection is signalled by the same captcha image coming back, which is
+        # more reliable than scraping the localized error text.
+        if soup.find('img', src=re.compile(re.escape(captcha_url))):
+            info(f"Keeplinks: Rejected solution '{answer}'")
+            self._report_incorrect(captcha_result.captcha_id)
+            return None
+
+        error_msg = soup.find('div', {'class': 'msg-error'})
+        if error_msg:
+            info(f"Keeplinks: Error message: {error_msg.get_text(strip=True)}")
+            return None
+
+        links = self._extract_keeplinks_download_links(soup)
+        if not links:
+            info("Keeplinks: No download links found after CAPTCHA submission")
+            return None
+
+        # Filter by mirror if specified
+        if mirror:
+            mirror_lower = mirror.lower()
+            filtered_links = [link for link in links if mirror_lower in link.lower()]
+            if filtered_links:
+                links = filtered_links
+
+        info(f"Keeplinks: Successfully extracted {len(links)} download links")
+        return {"status": "success", "links": links}
+
+    def _report_incorrect(self, captcha_id: Optional[int]) -> None:
+        """Tell the captcha service the answer was wrong, so we get a refund."""
+        if not captcha_id or not self._client:
+            return
+        try:
+            self._client.report_incorrect(captcha_id)
+            debug(f"Reported incorrect CAPTCHA {captcha_id} to solver")
+        except (DBCError, CaptchaClientError) as exc:
+            info(f"Could not report incorrect CAPTCHA {captcha_id}: {exc}")
 
     def _extract_keeplinks_download_links(self, soup: BeautifulSoup) -> list:
         """Extract download links from a Keeplinks page.
@@ -1118,15 +1365,19 @@ class DBCDispatcher:
                 captcha_img = soup.find('img', {'class': re.compile(r'captcha', re.IGNORECASE)})
             
             if not captcha_img:
+                # ToLink also serves an ASCII "text" captcha instead of a PNG.
+                if soup.find('form', {'id': 'challange'}):
+                    info("ToLink: No image CAPTCHA - trying ASCII text captcha")
+                    return self._solve_tolink_text_captcha(session, soup, url, headers, password, mirror)
                 info("ToLink: No CAPTCHA image found and no links available")
                 return None
-            
+
             captcha_url = captcha_img.get('src', '')
-            if not captcha_url.startswith('http'):
-                # Build absolute URL
-                from urllib.parse import urljoin
-                captcha_url = urljoin(url, captcha_url)
-            
+            captcha_url = self._same_origin_asset_url(url, captcha_url)
+            if not captcha_url:
+                info("ToLink: CAPTCHA image URL is not on the container origin - refusing to fetch")
+                return None
+
             debug(f"ToLink: CAPTCHA image URL: {captcha_url}")
             
             # Download CAPTCHA image
@@ -1175,7 +1426,6 @@ class DBCDispatcher:
             debug(f"ToLink: Submitting CAPTCHA solution")
             form_action = captcha_form.get('action', '')
             if form_action and not form_action.startswith('http'):
-                from urllib.parse import urljoin
                 form_action = urljoin(url, form_action)
             submit_url = form_action if form_action else url
             
@@ -1219,29 +1469,12 @@ class DBCDispatcher:
 
     def _extract_tolink_download_links(self, soup: BeautifulSoup) -> list:
         """Extract download links from a ToLink page.
-        
+
         Similar to Keeplinks extraction but adapted for ToLink's structure.
         """
         links = []
-        
-        # Patterns for valid download links
-        hoster_patterns = [
-            r'rapidgator\.net/file/',
-            r'rg\.to/file/',
-            r'ddownload\.com/[a-z0-9]+/',
-            r'uploaded\.net/file/',
-            r'uploaded\.to/file/',
-            r'ul\.to/[a-z0-9]+',
-            r'nitroflare\.com/view/',
-            r'turbobit\.net/[a-z0-9]+/',
-            r'1fichier\.com/\?[a-z0-9]+',
-            r'katfile\.com/[a-z0-9]+/',
-            r'mexashare\.com/[a-z0-9]+/',
-            r'depositfiles\.com/files/',
-            r'filefactory\.com/file/',
-        ]
-        
-        combined_pattern = '|'.join(hoster_patterns)
+
+        combined_pattern = '|'.join(DOWNLOAD_LINK_PATTERNS)
         
         # Look for all links matching hoster patterns
         for link in soup.find_all('a', href=True):
@@ -1259,8 +1492,619 @@ class DBCDispatcher:
                 if href not in links:
                     links.append(href)
                     debug(f"ToLink: Found download link: {href[:60]}...")
-        
+
         return links
+
+    @staticmethod
+    def _extract_tolink_ascii_text(soup: BeautifulSoup) -> Optional[str]:
+        """Pull the ASCII art captcha text out of a ToLink challenge page.
+
+        ToLink marks the captcha block up in two different ways depending on the
+        theme: either as a short single-line ``<pre>`` or as a multi-line block
+        inside a div/span/code. Both are sniffed, and the block is only accepted
+        when it is dense enough in ASCII drawing characters to actually be art
+        rather than page boilerplate.
+
+        The thresholds below (20 chars / no newline for ``<pre>``, 50 chars total
+        plus 3 newlines plus 20 drawing characters for the block form) look far too
+        tight for four rows of ASCII art, but they are what the original solver
+        checks - verified against the bytecode of the reference implementation, not
+        guessed. Keep them as they are.
+        """
+        text_captcha_content = None
+
+        for pre in soup.find_all('pre'):
+            text = pre.get_text()
+            if not text:
+                continue
+            if len(text.strip()) > 20:
+                continue
+            if '\n' in text:
+                continue
+            text_captcha_content = text
+            break
+
+        if not text_captcha_content:
+            for tag in soup.find_all(['div', 'span', 'code']):
+                text = tag.get_text()
+                if not text:
+                    continue
+                # Total length, not width per line - see the docstring.
+                if len(text.strip()) > 50:
+                    continue
+                if text.count('\n') < 3:
+                    continue
+                # Real ASCII art is dense in drawing characters.
+                special_chars = sum(1 for c in text if c in '|/-\\_[]{}()=+*#@')
+                if special_chars <= 20:
+                    continue
+                text_captcha_content = text
+                break
+
+        if not text_captcha_content:
+            return None
+        return text_captcha_content.strip()
+
+    @staticmethod
+    def _render_tolink_ascii_png(ascii_text: str) -> Optional[bytes]:
+        """Render ToLink's ASCII art into a PNG the captcha service can read.
+
+        The captcha service only accepts image captchas, so the plain text has to
+        be drawn first. Returns PNG bytes, or ``None`` when Pillow is unavailable.
+        """
+        try:
+            import io
+
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError as exc:
+            info(f"ToLink: Pillow is required for the ASCII captcha: {exc}")
+            return None
+
+        font_size = 15
+        line_height = font_size + 4
+        padding = 10
+        hint_height = 25
+
+        font_paths = [
+            '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
+        ]
+        font = None
+        for path in font_paths:
+            try:
+                font = ImageFont.truetype(path, font_size)
+                debug(f"ToLink: Using font: {path}")
+                break
+            except OSError:
+                continue
+        if font is None:
+            try:
+                font = ImageFont.load_default()
+                debug("ToLink: Using default font")
+            except OSError as exc:
+                info(f"ToLink: No usable font for the ASCII captcha: {exc}")
+                return None
+
+        lines = ascii_text.split('\n')
+        if not lines:
+            return None
+
+        try:
+            max_width = max(font.getlength(line) for line in lines)
+        except AttributeError:
+            # Very old Pillow builds have no getlength; 7px per char is close enough.
+            max_width = max(len(line) for line in lines) * 7
+
+        img_width = int(max_width + padding * 2)
+        img_height = int(len(lines) * line_height + padding * 2 + hint_height)
+
+        image = Image.new('RGB', (img_width, img_height), color=(17, 21, 23))
+        draw = ImageDraw.Draw(image)
+
+        try:
+            hint_font = ImageFont.truetype(font_paths[0], 12) if font_paths else font
+        except OSError:
+            hint_font = font
+        draw.text((padding, 5), 'ASCII art letters (A-Z only, case matters):',
+                  fill=(255, 200, 100), font=hint_font)
+
+        y = padding + hint_height
+        for line in lines:
+            draw.text((padding, y), line, fill=(200, 200, 200), font=font)
+            y += line_height
+
+        buffer = io.BytesIO()
+        image.save(buffer, format='PNG')
+        buffer.seek(0)
+        return buffer.getvalue()
+
+    @staticmethod
+    def _correct_tolink_text_token(text_token: str) -> str:
+        """Fix the glyph confusions OCR makes on ToLink's ASCII art.
+
+        The substitutions are two tables applied in order and are taken verbatim
+        from the reference implementation (its ``get_tolink_links``), verified
+        against the compiled bytecode rather than inferred from the site hint:
+
+        * ``number_subs`` - most entries map a digit onto the letter it visually
+          resembles (``5``-``S``, ``0``/``9``-``O``, ``1``-``I``, ``8``-``B``,
+          ``6``-``G``, ``2``-``Z``). The last one is the exception: ``7`` maps to
+          ``!``, which is not a letter at all. That looks wrong next to the page
+          hint "A-Z only", but it is what the reference does - do not "fix" it.
+        * ``letter_subs`` - ``T``-``I`` and ``l``-``I``, i.e. letters that OCR
+          confuses with each other.
+
+        (A second build of the reference ships ``q``-``a`` instead of ``7``-``!``
+        and adds ``l``-``I`` to the number table; the first table is kept because
+        it is the one with a matching ``letter_subs`` pair.)
+        """
+        corrected = text_token or ''
+        for old, new in TOLINK_NUMBER_SUBSTITUTIONS:
+            corrected = corrected.replace(old, new)
+        for old, new in TOLINK_LETTER_SUBSTITUTIONS:
+            corrected = corrected.replace(old, new)
+        return corrected
+
+    def _solve_tolink_text_captcha(
+        self,
+        session: requests.Session,
+        soup: BeautifulSoup,
+        url: str,
+        headers: dict,
+        password: str,
+        mirror: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Solve ToLink's ASCII text captcha (plus an optional reCAPTCHA) and submit."""
+        challenge_form = soup.find('form', {'id': 'challange'})
+        if not challenge_form:
+            info("ToLink: No challenge form found")
+            return None
+
+        csrf_input = soup.find('input', {'name': 'csrf'})
+        if not csrf_input:
+            info("ToLink: Could not find CSRF token")
+            return None
+        csrf_token = csrf_input.get('value', '') or ''
+
+        captcha_text_id_input = soup.find('input', {'name': 'captcha-text[id]'})
+        captcha_text_id = (
+            (captcha_text_id_input.get('value', '') if captcha_text_id_input else '') or ''
+        )
+
+        password_field_exists = soup.find('input', {'id': 'password'}) is not None
+        recaptcha_exists = soup.find('div', {'class': 'g-recaptcha'}) is not None
+        ascii_text = self._extract_tolink_ascii_text(soup)
+
+        info(
+            f"ToLink: Challenge detected (password: {password_field_exists}, "
+            f"reCAPTCHA: {recaptcha_exists}, textCaptcha: {ascii_text is not None})"
+        )
+
+        if not ascii_text and not password_field_exists and not recaptcha_exists:
+            info("ToLink: Nothing to solve on the challenge page")
+            return None
+
+        if not self._client:
+            info("ToLink: DBC client not initialized")
+            return None
+
+        # An arithmetic captcha can be answered locally, no credits burned.
+        answer = solve_math_captcha(ascii_text) if ascii_text else None
+
+        captcha_id = None
+        if ascii_text and not answer:
+            info(f"ToLink: Solving ASCII text captcha ({len(ascii_text)} chars)")
+            debug(f"ToLink: ASCII art content:\n{ascii_text}")
+
+            image_bytes = self._render_tolink_ascii_png(ascii_text)
+            if not image_bytes:
+                return None
+
+            debug(f"ToLink: Rendered ASCII captcha to PNG ({len(image_bytes)} bytes)")
+            captcha_result = self._client.solve_captcha(image_bytes)
+            if not captcha_result or not captcha_result.text:
+                info("ToLink: Text captcha solving failed")
+                return None
+
+            captcha_id = captcha_result.captcha_id
+            # The service returns the string with line breaks - they have to go
+            # before the glyph substitutions run.
+            answer = ''.join(c for c in captcha_result.text if not c.isspace())
+            info(f"ToLink: Text CAPTCHA {captcha_id} solved: '{answer}'")
+        elif answer:
+            info(f"ToLink: Local math captcha solved: '{ascii_text}' -> '{answer}'")
+
+        # reCAPTCHA is layered on top of some containers; solve it separately.
+        recaptcha_token = None
+        if recaptcha_exists:
+            info("ToLink: Solving reCAPTCHA via captcha service")
+            recaptcha_token = self._solve_recaptcha_token(url, soup)
+            if not recaptcha_token:
+                info("ToLink: Could not solve reCAPTCHA")
+                return None
+
+        post_data = {
+            'csrf': csrf_token,
+            'captcha-text[id]': captcha_text_id,
+            'captcha-text[input]': self._correct_tolink_text_token(answer) if answer else '',
+            'submit': TOLINK_SUBMIT_LABEL,
+        }
+        if password_field_exists and password:
+            post_data['password'] = password
+        if recaptcha_token:
+            post_data['g-recaptcha-response'] = recaptcha_token
+
+        post_headers = dict(headers)
+        post_headers['Content-Type'] = 'application/x-www-form-urlencoded'
+
+        info(f"ToLink: Submitting text CAPTCHA solution")
+        response = session.post(
+            url, data=post_data, headers=post_headers,
+            allow_redirects=True,
+            timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+        )
+
+        if response.status_code != 200:
+            info(f"ToLink: POST failed with status {response.status_code}")
+            return None
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # The challenge form is still on the page -> the answer was wrong.
+        if soup.find('form', {'id': 'challange'}):
+            info(f"ToLink: Text captcha rejected (submitted: '{post_data['captcha-text[input]']}')")
+            self._report_incorrect(captcha_id)
+            return None
+
+        links = self._extract_tolink_download_links(soup)
+        if not links:
+            info("ToLink: Could not extract links after ASCII captcha submit")
+            return None
+
+        # Filter by mirror if specified
+        if mirror:
+            mirror_lower = mirror.lower()
+            filtered_links = [link for link in links if mirror_lower in link.lower()]
+            if filtered_links:
+                links = filtered_links
+
+        info(f"ToLink: Successfully extracted {len(links)} download links (ASCII captcha)")
+        return {"status": "success", "links": links}
+
+    @staticmethod
+    def _decode_he_form_snapshot(raw_snapshot: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Parse the JSON that :data:`HE_FORM_SNAPSHOT_JS` returns.
+
+        Returns ``None`` when the browser found no Content Protector form, which
+        means the page is already unlocked.
+        """
+        if not raw_snapshot:
+            return None
+
+        try:
+            snapshot = json.loads(raw_snapshot)
+        except (TypeError, ValueError) as exc:
+            debug(f"he: could not decode form snapshot: {exc}")
+            return None
+
+        normalized_fields = []
+        try:
+            for field in snapshot.get('fields') or []:
+                name = (field[0] or '').strip()
+                value = field[1]
+                if not name:
+                    return None
+                if isinstance(value, list):
+                    # Repeatable fields arrive as a list of values.
+                    normalized_fields.extend((name, str(item)) for item in value)
+                else:
+                    normalized_fields.append((name, str(value)))
+        except (TypeError, ValueError, IndexError) as exc:
+            debug(f"he: malformed form fields: {exc}")
+            return None
+
+        try:
+            image = base64.b64decode(snapshot.get('imageBase64') or '', validate=True)
+        except (TypeError, ValueError) as exc:
+            debug(f"he: could not decode captcha image: {exc}")
+            image = b''
+
+        return {
+            'action': snapshot.get('action') or '',
+            'fields': normalized_fields,
+            'captcha_id': snapshot.get('captchaId') or '',
+            'image': image,
+        }
+
+    @staticmethod
+    def _he_form_snapshot_from_html(html: str, page_url: str) -> Optional[Dict[str, Any]]:
+        """Build the same snapshot shape straight from the HTML.
+
+        Used for pages that FlareSolverr did not have to touch, where the form is
+        plain markup and the captcha image can be fetched with a normal request.
+        """
+        soup = BeautifulSoup(html or '', 'html.parser')
+        form = soup.find('form', id=re.compile(r'content-protector-access-form'))
+        if not form:
+            return None
+
+        action = form.get('action') or page_url
+        fields = [
+            (inp['name'], inp.get('value', '') or '')
+            for inp in form.find_all('input')
+            if inp.get('name')
+        ]
+        captcha_id_input = form.find('input', {'name': 'captcha_id'})
+        image_tag = form.find('img', src=True)
+
+        return {
+            'action': urljoin(page_url, action),
+            'fields': fields,
+            'captcha_id': (captcha_id_input.get('value', '') if captcha_id_input else '') or '',
+            'image_url': urljoin(page_url, image_tag['src']) if image_tag else '',
+        }
+
+    @staticmethod
+    def _replace_he_captcha_answer(fields: List[Tuple[str, str]], answer: str) -> List[Tuple[str, str]]:
+        """Swap the placeholder value of the ``captcha_answer`` field."""
+        return [
+            (name, answer if name == 'captcha_answer' else value)
+            for name, value in fields
+        ]
+
+    def _extract_he_download_links(self, soup: BeautifulSoup) -> list:
+        """Collect the unlocked download links from an he.to container page."""
+        links = []
+
+        # Once unlocked he.to marks the container explicitly; fall back to the
+        # still-present protector form for the theme that does not.
+        anchors = soup.select('#unlocked a[href], .content-protector-access-form a[href]')
+        seen = set()
+        for anchor in anchors:
+            href = (anchor.get('href') or '').strip()
+            if not href or not href.startswith('http') or href in seen:
+                continue
+            seen.add(href)
+            links.append(href)
+
+        if links:
+            debug(f"he: Found {len(links)} links in the unlocked container")
+            return links
+
+        return self._extract_tolink_download_links(soup)
+
+    def _solve_he_with_dbc(
+        self,
+        title: str,
+        url: str,
+        password: str,
+        mirror: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Solve the he.to / hit-parade Content Protector captcha.
+
+        Flow:
+        1. Load the container (FlareSolverr when Cloudflare is in the way, plain
+           requests otherwise) and snapshot the Content Protector form
+        2. Download the captcha image and solve it via the captcha service
+        3. POST the form back with the answer in ``captcha_answer``
+        4. Extract the now-unlocked download links
+        """
+        info(f"Attempting to decrypt he.to container: {url}")
+
+        if not self._client:
+            info("he: captcha client not initialized")
+            return None
+
+        try:
+            # The whole flow stays inside the context manager: the browser session
+            # that carries the Cloudflare cookies must survive until the POST.
+            with self._he_open_container(url) as (page_url, page_html, snapshot, post_fn):
+                return self._he_solve_with_snapshot(
+                    page_url, page_html, snapshot, post_fn, url, mirror)
+        except Exception as exc:
+            info(f"he: could not load container: {exc}")
+            return None
+
+    def _he_solve_with_snapshot(
+        self,
+        page_url: str,
+        page_html: str,
+        snapshot: Optional[Dict[str, Any]],
+        post_fn: Any,
+        url: str,
+        mirror: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Snapshot -> solve -> POST -> extract. Split out so the whole sequence
+        can run inside :meth:`_he_open_container`."""
+        if not snapshot:
+            snapshot = self._he_form_snapshot_from_html(page_html, page_url)
+
+        if not snapshot:
+            links = self._extract_he_download_links(BeautifulSoup(page_html, 'html.parser'))
+            if links:
+                info(f"he: Container already unlocked - {len(links)} links")
+                return {"status": "success", "links": links}
+            info("he: No Content Protector form and no links found")
+            return None
+
+        if not snapshot.get('captcha_id') or not snapshot.get('fields'):
+            info("he: Content Protector form is incomplete")
+            return None
+
+        image = snapshot.get('image')
+        if not image and snapshot.get('image_url'):
+            image = self._he_fetch_image(snapshot['image_url'])
+
+        if not image or len(image) < 100:
+            info("he: Could not read the CAPTCHA image")
+            return None
+
+        debug(f"he: Solving CAPTCHA image ({len(image)} bytes)")
+        captcha_result = self._client.solve_captcha(image)
+        if not captcha_result or not captcha_result.text:
+            info("he: DBC failed to solve CAPTCHA")
+            return None
+
+        answer = captcha_result.text.strip()
+        info(f"he: CAPTCHA {captcha_result.captcha_id} solved: '{answer}'")
+        if not answer:
+            self._report_incorrect(captcha_result.captcha_id)
+            return None
+
+        payload = self._replace_he_captcha_answer(snapshot['fields'], answer)
+        submit_url = snapshot.get('action') or page_url
+        if not submit_url.startswith('http'):
+            submit_url = urljoin(page_url, submit_url)
+
+        info(f"he: Submitting CAPTCHA solution")
+        result_html = post_fn(submit_url, payload)
+
+        if not result_html:
+            info("he: Could not submit the Content Protector form")
+            self._report_incorrect(captcha_result.captcha_id)
+            return None
+
+        soup = BeautifulSoup(result_html, 'html.parser')
+        links = self._extract_he_download_links(soup)
+
+        if not links:
+            # The form is still there -> the answer was wrong.
+            if soup.find('form', id=re.compile(r'content-protector-access-form')):
+                info(f"he: CAPTCHA rejected (submitted '{answer}')")
+                self._report_incorrect(captcha_result.captcha_id)
+                return None
+            info("he: No download links found after CAPTCHA submission")
+            return None
+
+        # Filter by mirror if specified
+        if mirror:
+            mirror_lower = mirror.lower()
+            filtered_links = [link for link in links if mirror_lower in link.lower()]
+            if filtered_links:
+                links = filtered_links
+
+        info(f"he: Successfully extracted {len(links)} download links")
+        return {"status": "success", "links": links}
+
+    @contextmanager
+    def _he_open_container(self, url: str) -> Iterator[Tuple[str, str, Optional[Dict[str, Any]], Any]]:
+        """Fetch the container page and keep its browser session alive.
+
+        Yields ``(page_url, html, snapshot, post_fn)``. ``snapshot`` is filled
+        when FlareSolverr had to render the page, because he.to assembles the
+        Content Protector form in the browser; on a plain page it stays ``None``
+        and the HTML snapshot is authoritative. ``post_fn(target, payload)``
+        submits the form and returns the response HTML (or ``None``).
+
+        This is a context manager because the FlareSolverr branch needs a
+        dedicated browser session for *both* the snapshot GET and the POST. That
+        session is created with a random id and destroyed again when the block is
+        left - including on exceptions - so nothing piles up inside FlareSolverr.
+        """
+        headers = {'User-Agent': self.shared_state.values["user_agent"]}
+        session = requests.Session()
+
+        try:
+            response = session.get(url, headers=headers,
+                                   timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
+            cf_protected = response.status_code == 403 or is_cloudflare_challenge(response.text)
+        except requests.RequestException as exc:
+            debug(f"he: direct GET failed: {exc}")
+            cf_protected = True
+            response = None
+
+        if not cf_protected:
+            page_url = response.url
+
+            def plain_post(target: str, payload: List[Tuple[str, str]]) -> Optional[str]:
+                post_headers = dict(headers)
+                post_headers['Content-Type'] = 'application/x-www-form-urlencoded'
+                post_headers['Referer'] = page_url
+                try:
+                    posted = session.post(
+                        target, data=dict(payload), headers=post_headers,
+                        allow_redirects=True,
+                        timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+                    )
+                except requests.RequestException as exc:
+                    info(f"he: submit failed: {exc}")
+                    return None
+                return posted.text
+
+            yield page_url, response.text, None, plain_post
+            return
+
+        # Cloudflare: drive the page through FlareSolverr and keep the browser
+        # session alive so the POST reuses its cookies.
+        info("he: Cloudflare protection detected - using FlareSolverr")
+        session_id = f"kuasarr-he-{uuid4().hex[:12]}"
+        if not flaresolverr_create_session(self.shared_state, session_id):
+            info("he: could not create FlareSolverr session")
+            yield url, "", None, _he_post_unavailable
+            return
+
+        try:
+            def browser_post(target: str, payload: List[Tuple[str, str]]) -> Optional[str]:
+                try:
+                    posted = flaresolverr_request(
+                        self.shared_state,
+                        target,
+                        cmd="request.post",
+                        post_data=urlencode(payload),
+                        session_id=session_id,
+                        execute_js=HE_FORM_SNAPSHOT_JS,
+                        wait=2,
+                    )
+                except RuntimeError as exc:
+                    info(f"he: FlareSolverr submit failed: {exc}")
+                    return None
+                if posted is None:
+                    info("he: FlareSolverr returned no answer for the submit")
+                    return None
+                return posted.text
+
+            try:
+                page = flaresolverr_request(
+                    self.shared_state,
+                    url,
+                    cmd="request.get",
+                    session_id=session_id,
+                    execute_js=HE_FORM_SNAPSHOT_JS,
+                    wait=2,
+                )
+            except RuntimeError as exc:
+                info(f"he: FlareSolverr not available: {exc}")
+                page = None
+
+            if page is None:
+                yield url, "", None, _he_post_unavailable
+                return
+
+            debug(f"he: FlareSolverr loaded the container ({page.status_code})")
+            snapshot = self._decode_he_form_snapshot(page.execute_js_result)
+            # The FlareSolverr HTML has no server-rendered form, so the browser
+            # snapshot is the only source of truth here.
+            yield page.url, page.text, snapshot, browser_post
+        finally:
+            flaresolverr_destroy_session(self.shared_state, session_id)
+
+    def _he_fetch_image(self, image_url: str) -> bytes:
+        """Download the he.to captcha image with a plain request."""
+        headers = {'User-Agent': self.shared_state.values["user_agent"],
+                   'Referer': image_url}
+        try:
+            response = requests.get(image_url, headers=headers,
+                                    timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
+        except requests.RequestException as exc:
+            info(f"he: could not download CAPTCHA image: {exc}")
+            return b''
+
+        content_type = response.headers.get('Content-Type', 'unknown')
+        if 'image' not in content_type:
+            info(f"he: CAPTCHA response is not an image: {content_type}")
+            return b''
+
+        return response.content
 
     def _solve_hide_cx(
         self,

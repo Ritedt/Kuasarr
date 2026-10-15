@@ -136,10 +136,23 @@ class TestRedirectGuard:
         assert len(response.history) == 1
         assert response.history[0].status_code == 302
 
-    def test_unparsable_base_url_leaves_session_alone(self, origin_server):
-        """Without a usable origin host the session is returned untouched."""
-        plain = requests.Session()
-        assert DBCDispatcher._same_origin_guard_for(plain, "not-a-url") is plain
+    def test_unparsable_base_url_refuses_every_redirect(self, origin_server):
+        """An unpinnable base URL must fail closed, not switch the guard off.
+
+        Returning the session untouched would leave the caller with a session
+        that looks guarded and follows redirects anyway - and the redirect is
+        the one thing that must never happen.
+        """
+        TARGET["reached"] = []
+        TARGET["location"] = f"{origin_server}/final"
+
+        session = DBCDispatcher._same_origin_guard_for(
+            requests.Session(), "not-a-url")
+
+        with pytest.raises(requests.TooManyRedirects):
+            session.get(f"{origin_server}/start", timeout=10)
+
+        assert TARGET["reached"] == []
 
     def test_redirect_loop_on_the_origin_is_capped(self, origin_server):
         """A same-origin redirect loop must raise, not spin forever.

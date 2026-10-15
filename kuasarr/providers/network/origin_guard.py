@@ -55,13 +55,19 @@ def same_origin_guard_for(session: requests.Session, base_url: str) -> requests.
     session sends. ``requests`` has no redirect hook, so ``send`` is wrapped
     and every hop is checked before it is followed.
 
+    A base URL that cannot be pinned to an origin does not disable the guard -
+    the session is wrapped anyway and every redirect is refused. Failing open
+    there would be indistinguishable from success for the caller.
+
     The hop count is bounded here because wrapping ``send`` bypasses
     ``requests``' own ``max_redirects`` handling - an open redirect chain
     on a hostile container would otherwise spin forever.
     """
+    # An unpinnable base URL must not silently disable the guard: that hands
+    # this path back to the redirect-following the guard exists to prevent, and
+    # the caller cannot tell an unpinned session from a pinned one. ``origin``
+    # stays None here so the comparison below refuses every redirect.
     origin = origin_of(base_url)
-    if origin is None:
-        return session
 
     max_hops = session.max_redirects or _DEFAULT_MAX_REDIRECTS
     original_send = session.send
@@ -77,7 +83,7 @@ def same_origin_guard_for(session: requests.Session, base_url: str) -> requests.
                     f"Exceeded {max_hops} redirects on the container origin")
             target = urljoin(response.url, response.headers.get("Location", ""))
             target_origin = origin_of(target)
-            if target_origin != origin:
+            if origin is None or target_origin != origin:
                 raise requests.TooManyRedirects(
                     f"Refusing to follow redirect off the container origin: {target_origin}")
             history.append(response)

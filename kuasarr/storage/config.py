@@ -114,7 +114,13 @@ class Config(object):
             ("hosters", "secret", "")  # Komma-separierte Liste von Hoster-IDs (verschlüsselt)
         ],
         'HideCX': [
-            ("api_key", "secret", "")  # hide.cx API Key (kostenlos unter Settings > Account > Application API Keys)
+            # Optional. hide.cx resolves links without any authentication; a key is
+            # only sent when set, in case part of the API becomes gated later.
+            ("api_key", "secret", ""),
+            # Container mit mehreren Episoden/Staffeln auf die per ?season=&episode=
+            # gewaehlte Episode beschraenken. Braucht FlareSolverr; ohne sie (oder bei
+            # Fehlern) werden wie bisher alle Links des Containers verwendet.
+            ("episode_selection", "bool", "false")
         ],
         'Connection': [
             ("internal_address", "str", ""),

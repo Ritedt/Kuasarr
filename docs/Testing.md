@@ -19,6 +19,9 @@ python -X utf8 -m unittest discover -s tests
 
 The `-X utf8` flag avoids noisy Windows console encoding issues in log output.
 
+For black-box testing of a **running container** (Newznab/SABnzbd API, log
+interpretation, known pitfalls), see [Container-Test-Playbook.md](Container-Test-Playbook.md).
+
 ## When to Change Tests
 
 Unit tests should change only when:

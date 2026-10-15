@@ -36,6 +36,37 @@ def get_poster_link(shared_state, imdb_id):
     return poster_link
 
 
+# IMDb answers direct requests with an AWS WAF challenge. Its JavaScript sets a
+# cookie and reloads, so the page only carries a title once the browser had time
+# to run it. FlareSolverr does not recognise WAF as a challenge ("Challenge not
+# detected!") and evaluates the page as soon as it fires load, which happens
+# before the cookie exists. Waiting afterwards is what makes the title show up.
+# Measured against imdb.com: 0 s yields the 2 kB challenge page, 8 s the real
+# page, 15 s no better than 8.
+IMDB_WAF_SETTLE_SECONDS = 8
+
+# Marker AWS WAF puts into its challenge page. FlareSolverr passes that page
+# through unchanged and reports status 200, so without this the challenge is
+# indistinguishable from an empty IMDb response.
+_AWS_WAF_MARKER = "awsWafCookieDomainList"
+
+# How long a failed lookup is served from cache before being retried. A plain
+# miss gets the historic hour; a WAF challenge gets minutes, because IMDb lifts
+# it on its own within a few and no local change is needed to fix it.
+IMDB_NOT_FOUND_CACHE_SECONDS = 60 * 60
+IMDB_WAF_CHALLENGE_CACHE_SECONDS = 5 * 60
+
+
+def _is_waf_challenge(response) -> bool:
+    """True if a response is the AWS WAF interstitial rather than real content."""
+    if response is None:
+        return False
+    try:
+        return _AWS_WAF_MARKER in (response.text or "")
+    except Exception:
+        return False
+
+
 _TITLE_SANITIZE_RE = re.compile(r"[^a-zA-Z0-9äöüÄÖÜß&-']")
 _MULTI_SPACE_RE = re.compile(r'\s{2,}')
 # Trailing suffixes that IMDb appends to page <title> values
@@ -98,7 +129,7 @@ def _extract_title_from_html(raw_html):
 
 def get_localized_title(shared_state, imdb_id, language='de'):
     # Cache localized title lookups to avoid parallel/repeated IMDb requests.
-    # Successful hits: 24 h.  Not-found: 1 h so transient blocks don't persist.
+    # Successful hits: 24 h (purge window); failures use their own retry_after.
     cache_key = f"{imdb_id}_{language}"
     context = "recents_imdb_titles"
     threshold = 60 * 60 * 24  # 24 hours (purge window)
@@ -108,9 +139,10 @@ def get_localized_title(shared_state, imdb_id, language='de'):
         entry = recently_searched[cache_key]
         if entry["title"] is not None:
             return entry["title"]
-        # None entry: re-try after 1 hour
+        # None entry: re-try once the stored retry window has passed. Entries
+        # written before retry_after existed fall back to the old full hour.
         cache_age = (datetime.now() - entry["timestamp"]).total_seconds()
-        if cache_age < 60 * 60:
+        if cache_age < entry.get("retry_after", IMDB_NOT_FOUND_CACHE_SECONDS):
             return None
 
     headers = {
@@ -129,12 +161,18 @@ def get_localized_title(shared_state, imdb_id, language='de'):
         response is None
         or response.status_code in (403, 202)
         or (response.status_code == 200 and not response.text.strip())
-        or "awsWafCookieDomainList" in (response.text if response.text else "")
+        or _is_waf_challenge(response)
     )
     if needs_flaresolverr:
         try:
             info(f"IMDb request blocked for {imdb_id} (status {getattr(response, 'status_code', 'none')}), retrying via FlareSolverr")
-            response = flaresolverr_get(shared_state, imdb_url)
+            response = flaresolverr_get(shared_state, imdb_url, wait=IMDB_WAF_SETTLE_SECONDS)
+            if _is_waf_challenge(response):
+                # FlareSolverr reports success for the challenge page, so say
+                # what actually happened instead of leaving the log with a
+                # bare "no title for IMDb".
+                info(f"AWS WAF challenge still present for IMDb {imdb_id} after "
+                     f"{IMDB_WAF_SETTLE_SECONDS}s via FlareSolverr - IMDb is not reachable right now")
         except Exception as e:
             info(f"FlareSolverr fallback for IMDb {imdb_id} failed: {e}")
 
@@ -143,7 +181,17 @@ def get_localized_title(shared_state, imdb_id, language='de'):
 
     if not localized_title:
         debug(f"Could not get localized title for {imdb_id} in {language} from IMDb")
-        recently_searched[cache_key] = {"title": None, "timestamp": datetime.now()}
+        # A WAF challenge is transient: IMDb recovers on its own and nothing on
+        # our side has to change. Caching it for the full hour would keep
+        # serving the failure long after IMDb answers again, so it gets the
+        # short TTL.
+        retry_after = IMDB_WAF_CHALLENGE_CACHE_SECONDS if _is_waf_challenge(response) \
+            else IMDB_NOT_FOUND_CACHE_SECONDS
+        recently_searched[cache_key] = {
+            "title": None,
+            "timestamp": datetime.now(),
+            "retry_after": retry_after,
+        }
         shared_state.update(context, recently_searched)
         return None
 

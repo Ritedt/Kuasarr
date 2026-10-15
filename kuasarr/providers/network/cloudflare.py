@@ -414,15 +414,24 @@ def flaresolverr_get(
     shared_state,
     url: str,
     timeout: Optional[int] = None,
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    wait: Optional[int] = None
 ) -> FlareSolverrResponse:
-    """Core function for performing a GET request via FlareSolverr only."""
+    """Core function for performing a GET request via FlareSolverr only.
+
+    ``wait`` is what lets a JavaScript challenge finish. AWS WAF on imdb.com
+    answers with an interstitial whose JavaScript sets a cookie and reloads;
+    FlareSolverr reports ``Challenge not detected!`` for it and evaluates the
+    page on ``load``, which fires before that cookie exists. Without the wait
+    the caller receives the challenge page instead of the content.
+    """
     return flaresolverr_request(
         shared_state,
         url,
         cmd="request.get",
         timeout=timeout,
         session_id=session_id,
+        wait=wait,
     )
 
 

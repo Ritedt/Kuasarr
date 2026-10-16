@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup
 
 from kuasarr.constants import (
     HTTP_DEFAULT_TIMEOUT_SECONDS,
-    HTTP_EXTENDED_TIMEOUT_SECONDS,
+    KEEPLINKS_TIMEOUT_SECONDS,
     get_timeout,
 )
 from kuasarr.providers.captcha.dbc_dispatcher import (
@@ -100,11 +100,11 @@ class CaptchaImageRequestTest(unittest.TestCase):
         _, kwargs = self.image_call
         self.assertEqual(kwargs["headers"]["User-Agent"], USER_AGENT)
 
-    def test_image_get_uses_the_extended_timeout(self):
+    def test_image_get_uses_the_keeplinks_timeout(self):
         _, kwargs = self.image_call
         self.assertEqual(kwargs["timeout"],
-                         get_timeout(HTTP_EXTENDED_TIMEOUT_SECONDS))
-        self.assertGreater(get_timeout(HTTP_EXTENDED_TIMEOUT_SECONDS),
+                         get_timeout(KEEPLINKS_TIMEOUT_SECONDS))
+        self.assertGreater(get_timeout(KEEPLINKS_TIMEOUT_SECONDS),
                            get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
 
     def test_image_url_is_the_captcha_endpoint(self):

@@ -68,7 +68,7 @@ from kuasarr.downloads.linkcrypters.filecrypt import (
 from kuasarr.downloads.linkcrypters.hide import unhide_links
 from kuasarr.constants import (
     HTTP_DEFAULT_TIMEOUT_SECONDS,
-    HTTP_EXTENDED_TIMEOUT_SECONDS,
+    KEEPLINKS_TIMEOUT_SECONDS,
     get_timeout,
 )
 
@@ -1191,8 +1191,8 @@ class DBCDispatcher:
         try:
             # Step 1: Initial GET request
             debug(f"Keeplinks: Initial GET request")
-            response = session.get(url, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
-            
+            response = session.get(url, headers=headers, timeout=get_timeout(KEEPLINKS_TIMEOUT_SECONDS))
+
             if response.status_code != 200:
                 info(f"Keeplinks: Initial request failed with status {response.status_code}")
                 return None
@@ -1222,7 +1222,7 @@ class DBCDispatcher:
                     # Weiterreichen des kompletten Formulars schickt ein leeres
                     # captcha_cool zusammen mit hiddencaptcha=1 und captchatype
                     # mit, was den Captcha-Zustand der Session verfaelscht.
-                    response = session.post(url, data={'showpageval': '1'}, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
+                    response = session.post(url, data={'showpageval': '1'}, headers=headers, timeout=get_timeout(KEEPLINKS_TIMEOUT_SECONDS))
                     
                     if response.status_code != 200:
                         info(f"Keeplinks: Proceed POST failed with status {response.status_code}")
@@ -1369,7 +1369,7 @@ class DBCDispatcher:
                 'Referer': url,
                 'Accept': KEEPLINKS_IMAGE_ACCEPT,
             },
-            timeout=get_timeout(HTTP_EXTENDED_TIMEOUT_SECONDS),
+            timeout=get_timeout(KEEPLINKS_TIMEOUT_SECONDS),
         )
         if captcha_response.status_code != 200:
             info("Keeplinks: Failed to download CAPTCHA image")
@@ -1433,10 +1433,14 @@ class DBCDispatcher:
             post_data['password'] = password
 
         debug(f"Keeplinks: Submitting {variant} CAPTCHA solution")
+        # Dieser POST ist der einzige Request, der den Container wirklich
+        # entsperrt. Er braucht deshalb KEEPLINKS_TIMEOUT_SECONDS und nicht
+        # das HTTP-Default - eine falsche Antwort kommt in ~0,08 s zurueck,
+        # eine richtige laesst den Server entschluesseln und rendern.
         response = session.post(
             url, data=post_data, headers=headers,
             allow_redirects=True,
-            timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+            timeout=get_timeout(KEEPLINKS_TIMEOUT_SECONDS),
         )
 
         if response.status_code != 200:

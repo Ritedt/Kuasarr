@@ -11,11 +11,16 @@ from kuasarr.storage.config import Config
 
 
 def render_centered_html(inner_content, footer_content=""):
-    # Inject API key into WebUI when auth is disabled OR browser is authenticated
+    # Inject the browser token into WebUI when auth is disabled OR browser is authenticated
     api_key = ""
     if not is_auth_enabled() or is_browser_authenticated():
         try:
-            api_key = Config("API").get("key") or ""
+            # Browser-Token, nicht der Maschinen-Key: was hier im HTML
+            # landet, ist fuer jeden lesbar, der die Seite bekommt. Der
+            # Master-Key gehoert Radarr/Sonarr (#99).
+            from kuasarr.providers.auth import get_browser_token
+
+            api_key = get_browser_token() or ""
         except Exception:
             api_key = ""
 

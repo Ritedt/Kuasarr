@@ -15,6 +15,7 @@ STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'stat
 WEBUI_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'webui', 'dist'))
 from kuasarr.api.arr import setup_arr_routes
 from kuasarr.api.captcha import setup_captcha_routes
+from kuasarr.api.error_handler import json_error, setup_error_handlers
 from kuasarr.api.categories import setup_categories_routes
 from kuasarr.api.config import setup_config
 from kuasarr.api.hosters import setup_hosters_routes
@@ -24,7 +25,15 @@ from kuasarr.api.search import setup_search_routes
 from kuasarr.api.packages import setup_packages_routes
 from kuasarr.api.statistics import setup_statistics
 from kuasarr.providers import shared_state
-from kuasarr.providers.auth import add_auth_hook, add_auth_routes, require_api_key
+from kuasarr.providers.auth import (
+    add_auth_hook,
+    add_auth_routes,
+    require_api_key,
+    require_csrf_token,
+    get_browser_token,
+    get_csrf_token,
+    rotate_browser_token,
+)
 from kuasarr.providers.log import debug
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html, render_success_no_wait
 from kuasarr.providers.ui.spa import try_serve_spa
@@ -40,6 +49,7 @@ def get_api(shared_state_dict, shared_state_lock):
 
     add_auth_routes(app)
     add_auth_hook(app, whitelist=[".user.js"])
+    setup_error_handlers(app)
 
     setup_arr_routes(app)
     setup_captcha_routes(app)
@@ -118,7 +128,10 @@ def get_api(shared_state_dict, shared_state_lock):
 
         # Legacy HTML fallback
         protected = shared_state.get_db("protected").retrieve_all_titles()
-        api_key = Config('API').get('key')
+        # Browser-Token statt Maschinen-Key: dieser Wert landet im HTML der
+        # Legacy-Seite und damit fuer jeden lesbar, der sie bekommt (#99).
+        api_key = get_browser_token()
+        csrf_token = get_csrf_token()
         jd_config = Config('JDownloader')
         jd_user = jd_config.get('user') or ""
         jd_device_cfg = jd_config.get('device') or ""
@@ -199,11 +212,24 @@ def get_api(shared_state_dict, shared_state_lock):
                     </div>
 
                     <p>
-                        <button class="btn-subtle btn-sm" onclick="showConfirm(
-                            '🔄 Regenerate API Key',
-                            '<p>This will invalidate the current API key. You will need to update it in Radarr/Sonarr.</p>',
-                            'function(){{ location.href=\\'/regenerate-api-key\\'; }}'
-                        )">🔄 Regenerate API Key</button>
+                        <!-- POST statt GET: die Route rotiert einen Zustand und
+                             ist CSRF-geschuetzt. Ein GET laesst sich per img-Tag
+                             ausloesen, ein POST nicht. -->
+                        <form method="post" action="/regenerate-api-key" onsubmit="return confirm(
+                            'Regenerate API Key?\\n\\nThis invalidates the current API key. You will need to update it in Radarr/Sonarr.'
+                        )">
+                            <input type="hidden" name="csrf_token" value="{csrf_token}">
+                            <button type="submit" class="btn-subtle btn-sm">🔄 Regenerate API Key</button>
+                        </form>
+                        <form method="post" action="/regenerate-browser-token" onsubmit="return confirm(
+                            'Regenerate the browser token?\\n\\nOnly this web interface is logged out. Radarr/Sonarr keep working.'
+                        )" style="margin-top: 0.5rem;">
+                            <!-- Getrennt von /regenerate-api-key: nach einer XSS in der
+                                 SPA muss das gestohlene Token entzogen werden koennen,
+                                 ohne die *arr-Integration mitzunehmen. -->
+                            <input type="hidden" name="csrf_token" value="{csrf_token}">
+                            <button type="submit" class="btn-subtle btn-sm">🔑 Regenerate WebUI Token</button>
+                        </form>
                     </p>
                 </div>
             </details>
@@ -459,11 +485,12 @@ def get_api(shared_state_dict, shared_state_lock):
             }})
             .then(r => r.json())
             .then(data => {{
-              if (data.success) {{
+              if (data.data && data.data.success) {{
                 statusEl.innerHTML = '<span style="color:var(--success-color)">✅ Connected! Reloading...</span>';
                 setTimeout(() => location.reload(), 1500);
               }} else {{
-                statusEl.innerHTML = '<span style="color:var(--error-color)">❌ ' + (data.error || 'Failed to connect.') + '</span>';
+                var msg = (data.error && data.error.message) || 'Failed to connect.';
+                statusEl.innerHTML = '<span style="color:var(--error-color)">❌ ' + msg + '</span>';
               }}
             }})
             .catch(e => {{
@@ -476,15 +503,96 @@ def get_api(shared_state_dict, shared_state_lock):
 
     @app.get('/api/key')
     def get_api_key():
-        """Return the API key for authenticated browser sessions.
+        """Liefert das Token, mit dem sich die WebUI ausweist.
 
-        This endpoint is protected by browser auth (session cookie or Basic Auth).
-        The React SPA calls it on startup to obtain the key without it being
-        embedded in the HTML source.
+        Das ist bewusst *nicht* der Maschinen-Key aus `[API]`. Vorher stand
+        hier der vollwertige Key im Klartext in der Antwort - und damit
+        im Modul-Scope des Browsers. Wer die WebUI erreichte, bekam damit
+        denselben Schluessel, mit dem Radarr/Sonarr den Newznab- und
+        SABnzbd-Zugang nutzen. Das Browser-Token gilt fuer dieselben
+        Routen, laesst sich aber unabhaengig rotieren (siehe
+        `rotate_browser_token`), ohne die *arr-Integration zu trennen.
+
+        Geschuetzt durch Browser-Auth (Session-Cookie oder Basic Auth),
+        sobald eine konfiguriert ist. Ohne konfigurierte WebUI-Auth ist
+        die gesamte WebUI offen - nicht nur diese Route.
         """
         response.content_type = 'application/json'
-        api_key = Config('API').get('key') or ''
-        return json.dumps({'data': {'key': api_key}})
+        return json.dumps({'data': {'key': get_browser_token()}})
+
+    @app.get('/api/csrf')
+    def get_csrf_token_route():
+        """Liefert das CSRF-Token fuer die React-WebUI aus.
+
+        Das Cookie `kuasarr_csrf` wurde bisher nur auf der serverseitig
+        gerenderten Legacy-Seite `/settings/core` gesetzt. Die SPA rendert
+        diese Seite nie, das Cookie existierte dort also nie - und
+        `validate_csrf_token` liefert bei fehlendem Cookie immer False. Damit
+        scheiterten `POST /api/categories` und `POST /api/notifications` aus
+        der SPA heraus immer mit 403.
+
+        Bewusst ohne `@require_api_key`: die SPA holt den Token vor dem ersten
+        authentifizierten Aufruf. Geschuetzt ist der Endpunkt durch die
+        Browser-Auth - ohne konfigurierte WebUI-Auth ist auch die ganze
+        WebUI nicht geschuetzt, dann gibt es hier nichts zu schuetzen.
+        """
+        response.content_type = 'application/json'
+        return json.dumps({'data': {'csrf_token': get_csrf_token()}})
+
+    @app.get('/api/version')
+    @require_api_key
+    def get_version_route():
+        """Liefert die laufende Version fuer die WebUI.
+
+        Der Sidebar-Fuss zeigte fest `v1.0.0`, weil es keinen Endpunkt gab,
+        aus dem die SPA ihre Version haette ziehen koennen. Der Wert darf
+        auf keinen Fall fest im Bundle stehen - dann ist er beim naechsten
+        Release wieder falsch.
+
+        `current` kommt lokal aus `version.json` und ist damit immer
+        verfuegbar. Die Remote-Felder kommen aus dem Cache des
+        Update-Checkers: ein GitHub-Aufruf wuerde hier bis zu 10 Sekunden
+        blockieren, und die Sidebar darf daran nicht haengen. Mit
+        `?refresh=1` wird live geprueft.
+        """
+        from kuasarr.providers import version as version_provider
+
+        current = version_provider.get_version()
+        # `last_checked_version` wird beim ersten Start mit der *laufenden*
+        # Version belegt (`kuasarr/__init__.py`). Ungeprueft weiterzureichen
+        # hiesse: bei jeder aktuellen Installation meldet die WebUI ein
+        # Update, das es nicht gibt. Nur was sich davon unterscheidet, zaehlt.
+        cached = shared_state.values.get('last_checked_version')
+        payload = {
+            'current': current,
+            'latest_stable': None,
+            'latest_prerelease': None,
+            'update_available': (
+                cached if cached and cached.lstrip('v') != current.lstrip('v') else None
+            ),
+            'releases_url': version_provider.LATEST_RELEASE_LINK,
+        }
+
+        if request.query.get('refresh') == '1':
+            try:
+                payload.update(version_provider.get_release_info())
+            except Exception as e:
+                # Kein Netz ist kein Fehler der WebUI. Die lokale Version
+                # steht bereits, der Rest bleibt null.
+                debug(f'Version route: remote check failed: {e}')
+                payload['error'] = 'Could not reach GitHub for release information'
+
+            # `get_release_info()` liefert bewusst kein fertiges
+            # `update_available` - es kann nicht wissen, was der Aufrufer
+            # gerade als "aktuell" fuehrt. Hier wird es aus dem Vergleich
+            # gebildet, statt es ungeprueft zu uebernehmen.
+            latest = payload.get('latest_stable')
+            payload['update_available'] = (
+                latest if latest and version_provider.is_newer(latest, current) else None
+            )
+
+        response.content_type = 'application/json'
+        return json.dumps({'data': payload})
 
     @app.get('/api/statistics')
     @require_api_key
@@ -528,13 +636,20 @@ def get_api(shared_state_dict, shared_state_lock):
     def jd_config_get():
         response.content_type = 'application/json'
         jd_cfg = Config('JDownloader')
+        # `password` bleibt bewusst leer - das gespeicherte Passwort wird nie
+        # ausgeliefert. `password_set` sagt dem Formular stattdessen, ob
+        # ueberhaupt eins hinterlegt ist. Ohne das musste der Nutzer das
+        # Passwort bei *jedem* Speichern neu tippen, weil `validateForm` es
+        # verlangte und das Feld beim Laden leer war.
+        #
+        # `auto_reconnect`/`max_downloads`/`max_speed` sind entfernt: sie
+        # wurden nie gelesen und nie persistiert. Das Formular tat so, als
+        # waeren sie wirksam (#95).
         return json.dumps({'data': {
             'email': jd_cfg.get('user') or '',
             'password': '',
+            'password_set': bool(jd_cfg.get('password')),
             'device_name': jd_cfg.get('device') or '',
-            'auto_reconnect': True,
-            'max_downloads': 3,
-            'max_speed': 0,
         }})
 
     @app.post('/api/jdownloader/verify')
@@ -559,6 +674,19 @@ def get_api(shared_state_dict, shared_state_lock):
     @app.post('/api/jdownloader/save')
     @require_api_key
     def jd_save():
+        """Speichert die JDownloader-Zugangsdaten.
+
+        Setzt in jedem Fehlerzweig einen echten Statuscode. Vorher lieferten
+        alle Zweige HTTP 200 mit ``success: false`` - und ``fetchApi`` wirft
+        nur bei ``!response.ok``. Falsche E-Mail, fehlendes Geraet oder
+        falsches Passwort wurden deshalb als "Settings saved successfully!"
+        angezeigt (#95).
+
+        ``password`` darf leer bleiben, wenn bereits eines hinterlegt ist:
+        das GET liefert das gespeicherte Passwort niemals aus, also kann der
+        Nutzer es nicht unveraendert mitschicken, ohne es jedes Mal neu zu
+        tippen.
+        """
         response.content_type = 'application/json'
         try:
             data = json.loads(request.body.read().decode('utf-8'))
@@ -566,26 +694,36 @@ def get_api(shared_state_dict, shared_state_lock):
             password = data.get('password', '').strip()
             device = (data.get('device_name') or data.get('device') or '').strip()
         except Exception:
-            return json.dumps({'success': False, 'error': 'Invalid request'})
+            return json_error(400, 'Invalid request')
 
-        if not user or not password or not device:
-            return json.dumps({'success': False, 'error': 'All fields required'})
+        config = Config('JDownloader')
+
+        if not user or not device:
+            return json_error(400, 'E-Mail und Geraetename sind erforderlich')
+
+        if not password:
+            # Kein neues Passwort -> das gespeicherte weiterverwenden.
+            password = config.get('password') or ''
+            if not password:
+                return json_error(400, 'E-Mail, Passwort und Geraetename sind erforderlich')
 
         import re
         if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', user):
-            return json.dumps({'success': False, 'error': 'Invalid email format'})
+            return json_error(400, 'Invalid email format')
 
         from kuasarr.providers.jdownloader import set_device
         ok = set_device(user, password, device)
         if not ok:
-            return json.dumps({'success': False, 'error': 'Connection failed. Please verify credentials and device name.'})
+            return json_error(
+                502,
+                'Connection failed. Please verify credentials and device name.'
+            )
 
-        config = Config('JDownloader')
         config.save('user', user)
         config.save('password', password)
         config.save('device', device)
 
-        return json.dumps({'success': True})
+        return json.dumps({'data': {'success': True}})
 
     @app.post('/api/jdownloader/config')
     @require_api_key
@@ -593,12 +731,38 @@ def get_api(shared_state_dict, shared_state_lock):
         # WebUI uses POST /api/jdownloader/config to save settings
         return jd_save()
 
-    @app.get('/regenerate-api-key')
+    @app.post('/regenerate-api-key')
+    @require_csrf_token
     def regenerate_api_key():
+        """Rotiert den Master-API-Key.
+
+        War als GET registriert: ein `<img src="http://kuasarr:9999/regenerate-api-key">`
+        auf irgendeiner Seite im LAN genuegte, um den Key zu rotieren und
+        Radarr/Sonarr abzutrennen - Browser-Same-Origin-Policies greifen bei
+        einem GET aus einem img-Tag nicht.
+        """
         new_key = shared_state.generate_api_key()
         return render_success_no_wait(
             "API Key regenerated",
             f'<p>New key: <code>{new_key}</code></p><p>Update it in Radarr/Sonarr before continuing.</p>'
+        )
+
+    @app.post('/regenerate-browser-token')
+    @require_csrf_token
+    def regenerate_browser_token_route():
+        """Rotiert nur das Token, mit dem sich die WebUI ausweist.
+
+        Ohne diese Route waere die Trennung aus #99 wertlos: nach einer XSS
+        in der SPA muss der Betreiber das gestohlene Token entziehen koennen,
+        ohne Radarr/Sonarr zu trennen - und `POST /regenerate-api-key`
+        rotiert genau das mit. Diese Route aendert ausschliesslich
+        `WebUI.api_token`; der Master-Key in `API.key` bleibt unberuehrt.
+        """
+        rotate_browser_token()
+        return render_success_no_wait(
+            "Browser token regenerated",
+            '<p>The web interface token was replaced. Radarr/Sonarr keep '
+            'working. Reload this page to obtain the new token.</p>'
         )
 
     # SPA catch-all: serve index.html for all non-API routes

@@ -3,6 +3,7 @@
 # Project by Ritedt (Fork von https://github.com/rix1337/Quasarr)
 
 import re
+from contextlib import contextmanager
 
 from bottle import request, response
 
@@ -21,6 +22,11 @@ from kuasarr.storage.sqlite_database import DataBase
 NOTIFICATION_TYPES = get_user_configurable_notification_types()
 NOTIFICATION_SETTINGS_TABLE = "notification_settings"
 
+# Schluessel fuer die Schalter, die nicht an einen NotificationType gebunden
+# sind: der globale Schalter der WebUI und der Enabled-Schalter je Provider.
+NOTIFICATION_GLOBAL_ENABLED_KEY = "notifications_global_enabled"
+NOTIFICATION_PROVIDER_ENABLED_KEY_PREFIX = "notifications_provider_enabled_"
+
 
 def _notification_toggle_key(provider, notification_type):
     return f"{provider}_{notification_type.value}"
@@ -28,6 +34,10 @@ def _notification_toggle_key(provider, notification_type):
 
 def _notification_silent_key(provider, notification_type):
     return f"{provider}_{notification_type.value}_silent"
+
+
+def notification_provider_enabled_key(provider):
+    return f"{NOTIFICATION_PROVIDER_ENABLED_KEY_PREFIX}{provider}"
 
 
 def _coerce_bool(value, default=False):
@@ -57,6 +67,26 @@ def _read_notification_silent(notification_settings_db, key):
     return _read_notification_setting(notification_settings_db, key, default=False)
 
 
+def read_notification_global_enabled(notification_settings_db, default=True):
+    """Liest den globalen Benachrichtigungsschalter der WebUI."""
+    return _read_notification_setting(
+        notification_settings_db,
+        NOTIFICATION_GLOBAL_ENABLED_KEY,
+        default=default,
+    )
+
+
+def read_notification_provider_enabled(
+    notification_settings_db, provider, default=True
+):
+    """Liest den Enabled-Schalter eines Providers."""
+    return _read_notification_setting(
+        notification_settings_db,
+        notification_provider_enabled_key(provider),
+        default=default,
+    )
+
+
 def _read_notification_settings():
     notification_config = Config("Notifications")
     notification_settings_db = DataBase(NOTIFICATION_SETTINGS_TABLE)
@@ -67,6 +97,20 @@ def _read_notification_settings():
         "telegram_chat_id": notification_config.get("telegram_chat_id") or "",
         "toggles": {"discord": {}, "telegram": {}},
         "silent": {"discord": {}, "telegram": {}},
+        # Hauptschalter und Provider-Schalter gehoeren in den Laufzeitzustand,
+        # weil der Versandweg ausschliesslich `shared_state.values` liest. Ohne
+        # diese Spiegelung wuerden die Schalter in der Datenbank landen, von
+        # `GET /api/notifications` zurueckgelesen und in der Oberflaeche
+        # angezeigt - ohne die Zustellung je zu beeinflussen.
+        "global_enabled": read_notification_global_enabled(
+            notification_settings_db
+        ),
+        "provider_enabled": {
+            provider: read_notification_provider_enabled(
+                notification_settings_db, provider
+            )
+            for provider in NOTIFICATION_PROVIDERS
+        },
     }
 
     for provider in NOTIFICATION_PROVIDERS:
@@ -195,16 +239,91 @@ def save_notification_settings(shared_state):
     }
 
 
-def send_notification_test(shared_state):
-    data = request.json
-    if not isinstance(data, dict):
+# Der Test benutzt die Einstellungen aus dem Request, nicht die gespeicherten.
+_TEST_SETTING_KEYS = {
+    "webhook_url": "discord_webhook",
+    "bot_token": "telegram_bot_token",
+    "chat_id": "telegram_chat_id",
+}
+
+
+def _build_test_settings(stored_settings, provided_settings):
+    """Mischt die uebergebenen Einstellungen mit den gespeicherten.
+
+    Leere oder fehlende Felder fallen auf die gespeicherten Werte zurueck:
+    ein halb ausgefuelltes Formular soll testbar sein, ohne dass ein
+    Nachbarfeld aus der alten Konfiguration stammen muss.
+    """
+    settings = dict(stored_settings or {})
+    if not isinstance(provided_settings, dict):
+        return settings
+
+    for provided_key, stored_key in _TEST_SETTING_KEYS.items():
+        if provided_key not in provided_settings:
+            continue
+        value = str(provided_settings.get(provided_key) or "").strip()
+        if value:
+            settings[stored_key] = value
+
+    return settings
+
+
+@contextmanager
+def _temporary_notification_settings(shared_state, settings):
+    """Legt die Test-Zugangsdaten fuer die Dauer des Tests in den Shared State.
+
+    Die Provider (``discord.send`` / ``telegram.send``) lesen ihre
+    Zugangsdaten ausschliesslich aus ``shared_state``.  Damit der Testknopf
+    prueft, was der Nutzer gerade eingetragen hat, werden die Zugangsdaten
+    hier kurzzeitig ueberschrieben und danach unveraendert zurueckgesetzt -
+    gespeichert wird dabei nichts.
+    """
+    values = getattr(shared_state, "values", None)
+    if not isinstance(values, dict):
+        yield
+        return
+
+    previous = values.get("notification_settings")
+    merged = dict(previous) if isinstance(previous, dict) else {}
+    for stored_key in _TEST_SETTING_KEYS.values():
+        merged[stored_key] = settings.get(stored_key, "") or ""
+
+    values["notification_settings"] = merged
+    try:
+        yield
+    finally:
+        if previous is None:
+            values.pop("notification_settings", None)
+        else:
+            values["notification_settings"] = previous
+
+
+def send_notification_test(shared_state, payload=None):
+    """Sendet eine Testnachricht an einen Provider.
+
+    ``payload`` ist der bereits gelesene Request-Body
+    (``{"provider": ..., "settings": {...}}``).  Wird er nicht uebergeben,
+    wird er - wie bisher - direkt aus dem Request gelesen.
+    """
+    if payload is None:
+        payload = request.json
+    if not isinstance(payload, dict):
         return {"success": False, "message": "Invalid JSON payload"}
 
-    provider = str(data.get("provider", "")).strip().lower()
+    provider = str(payload.get("provider", "")).strip().lower()
     if provider not in NOTIFICATION_PROVIDERS:
-        return {"success": False, "message": "Unknown provider"}
+        return {
+            "success": False,
+            "message": (
+                f"Unknown provider '{payload.get('provider', '')}'. "
+                f"Supported providers: {', '.join(NOTIFICATION_PROVIDERS)}"
+            ),
+        }
 
-    settings = refresh_notification_settings(shared_state)
+    settings = _build_test_settings(
+        refresh_notification_settings(shared_state),
+        payload.get("settings"),
+    )
     title = "Kuasarr Notification Test"
     test_image_url = KUASARR_AVATAR
 
@@ -227,7 +346,8 @@ def send_notification_test(shared_state):
             return {"success": False, "message": "Failed to build Discord test message"}
 
         try:
-            sent = discord.send(shared_state, message, silent=False)
+            with _temporary_notification_settings(shared_state, settings):
+                sent = discord.send(shared_state, message, silent=False)
         except Exception as e:
             info(f"Discord test notification error: {e}")
             return {
@@ -261,9 +381,10 @@ def send_notification_test(shared_state):
 
     telegram_destination = None
     try:
-        sent = telegram.send(shared_state, message, silent=False)
-        if not sent:
-            telegram_destination = telegram.inspect_destination(shared_state)
+        with _temporary_notification_settings(shared_state, settings):
+            sent = telegram.send(shared_state, message, silent=False)
+            if not sent:
+                telegram_destination = telegram.inspect_destination(shared_state)
     except Exception as e:
         info(f"Telegram test notification error: {e}")
         return {

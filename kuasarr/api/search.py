@@ -4,11 +4,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import threading
 from base64 import urlsafe_b64decode
+from collections import OrderedDict
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from bottle import Bottle, HTTPError, request, response
@@ -21,11 +24,95 @@ from kuasarr.providers.ui.html_templates import render_centered_html, render_but
 from kuasarr.providers.log import debug, info
 from kuasarr.search import get_search_results
 
+# Felder der Anfrage, die der Scraper nicht bedienen kann. Sie werden nicht
+# stillschweigend verworfen, sondern im Response als "nicht unterstuetzt"
+# ausgewiesen - ein verworfenes Feld, das im UI funktionierend aussieht, ist
+# der eigentliche Fehler.
+SORT_FIELDS_SUPPORTED = ("size", "age")
+
+# Anfragefelder, die ``POST /api/search`` auswertet. Alles andere wird als
+# unbekannt gemeldet statt kommentarlos verworfen zu werden.
+_KNOWN_REQUEST_FIELDS = (
+    "query",
+    "mirror",
+    "category",
+    "limit",
+    "offset",
+    "min_size",
+    "max_size",
+    "sort_by",
+    "sort_order",
+)
+
+# Groesse des Ergebnis-Caches fuer die Kurzform ``result_id`` (Issue #94).
+_RESULT_CACHE_MAX = 500
+
 
 def setup_search_routes(app: Bottle) -> None:
+    # Der Cache lebt im Closure von ``setup_search_routes``: die WebUI klickt
+    # wenige Sekunden nach der Suche auf einen Treffer, ohne den Kontext des
+    # Ergebnisses erneut mitsenden zu muessen. Begrenzt auf die letzten N
+    # Treffer, damit der Speicher nicht wachsen kann.
+    result_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    result_cache_lock = threading.Lock()
+
+    def _remember_result(result: Dict[str, Any]) -> None:
+        """Legt ein Suchergebnis unter seiner ID fuer den Download ab."""
+        result_id = result.get("id")
+        if not result_id:
+            return
+        with result_cache_lock:
+            result_cache[result_id] = result
+            result_cache.move_to_end(result_id)
+            while len(result_cache) > _RESULT_CACHE_MAX:
+                result_cache.popitem(last=False)
+
+    def _recall_result(result_id: str) -> Optional[Dict[str, Any]]:
+        """Holt ein Suchergebnis zurueck, oder ``None`` wenn es nicht (mehr) gibt."""
+        with result_cache_lock:
+            cached = result_cache.get(result_id)
+            if cached is not None:
+                result_cache.move_to_end(result_id)
+            return cached
+
     def _json(payload: Any) -> Any:
         response.content_type = "application/json"
         return payload
+
+    def _as_int(value: Any, default: int = 0) -> int:
+        """Liest eine Zahl aus einer unzuverlaessigen Quelle (Query oder JSON)."""
+        if value is None or value == "":
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _as_optional_int(value: Any) -> Optional[int]:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _result_id(link: Optional[str], hostname: str, title: str, source: Optional[str]) -> str:
+        """Erzeugt die stabile ID eines Suchergebisses.
+
+        Konstruktion: SHA-256 ueber ``hostname|link`` (bzw. ueber ``source``
+        bzw. ueber ``title``, falls kein Link mitgeliefert wurde), auf 16
+        Hex-Zeichen gekuerzt.
+
+        Bewusst deterministisch und ohne Zeitstempel oder Zufall: die WebUI
+        benutzt die ID als React-Key und schickt sie beim Download zurueck. Ein
+        ``uuid4`` wuerde bei jedem Rendern einen neuen Key erzeugen und damit
+        die Zeile remounten. Link plus Hostname ist genau das Paar, das ein
+        Ergebnis eindeutig beschreibt - Titel und Datum koennen sich zwischen
+        zwei Suchlaeufen aendern, der Link nicht.
+        """
+        basis = link or source or title or ""
+        seed = f"{hostname or ''}|{basis}".encode("utf-8")
+        return hashlib.sha256(seed).hexdigest()[:16]
 
     def _format_size(size_bytes: Optional[int]) -> Dict[str, Optional[str]]:
         if size_bytes is None:
@@ -99,7 +186,26 @@ def setup_search_routes(app: Bottle) -> None:
             debug("Fehler beim Dekodieren des Download-Payloads")
             return None
 
-    def _normalise_result(raw: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalise_result(raw: Dict[str, Any], category: str = "") -> Dict[str, Any]:
+        """Baut ein Suchergebnis in die Form, die die WebUI erwartet.
+
+        Die React-WebUI typisiert ein Ergebnis als ``SearchResult`` und greift
+        ohne Nil-Guards darauf zu: ``formatBytes(result.size)`` erwartet eine
+        Zahl, ``result.age.localeCompare(...)`` einen String, ``result.grabs``
+        eine Zahl fuer die Sortierung. Deshalb liefert dieses Objekt:
+
+        * ``id``       - stabile ID (siehe ``_result_id``), React-Key und
+                         Aufrufsparameter fuer ``POST /api/search/download``
+        * ``size``     - Groesse in Bytes als Zahl, nie ``None`` (0 = unbekannt);
+                         die menschenlesbare Form liegt daneben in
+                         ``size_formatted``/``size.bytes``
+        * ``hoster``   - der Hoster als String (Alias von ``hostname``)
+        * ``age``      - das Datum als String (Alias von ``date.label``)
+        * ``grabs``    - 0, weil die DDL-Scraper keine Grab-Zaehlung liefern;
+                         ``seeders``/``leechers`` fehlen bewusst komplett, damit
+                         die WebUI sie als ``undefined`` ausblendet
+        * ``link``     - der Payload-Link, ueber den der Download laeuft
+        """
         details = raw.get("details") or {}
         decoded = _decode_payload(details.get("link"))
 
@@ -112,17 +218,30 @@ def setup_search_routes(app: Bottle) -> None:
 
         date_info = _parse_date(details.get("date"))
         size_info = _format_size(size_bytes)
+        size_value = size_info.get("bytes") or 0
 
         source = details.get("source") or (decoded.get("url") if decoded else "")
+        link = details.get("link") or ""
 
         return {
+            "id": _result_id(link, hostname, title, source),
             "title": title,
+            # Zahl in Bytes - ``formatBytes(result.size)`` in Search.tsx
+            "size": size_value,
+            "size_bytes": size_value,
+            "size_formatted": size_info.get("formatted") or "Unbekannt",
+            "category": category or "unknown",
+            "hoster": hostname,
             "hostname": hostname,
-            "mirror": mirror,
-            "size": size_info,
+            "mirror": mirror or "",
+            "url": source or "",
+            # Alias fuer die Datumsspalte der WebUI
+            "age": date_info.get("label") or "Unbekannt",
             "date": date_info,
-            "link": details.get("link"),
-            "source": source,
+            # DDL-Portale liefern keine Grab-/Seed-/Leech-Zaehler
+            "grabs": 0,
+            "link": link,
+            "source": source or "",
             "imdb_id": details.get("imdb_id") or (decoded.get("imdb_id") if decoded else None),
             "password": decoded.get("password") if decoded else "",
         }
@@ -140,7 +259,124 @@ def setup_search_routes(app: Bottle) -> None:
 
         return {"hostnames": hosters, "mirrors": mirrors, "date": date_range}
 
+    def _apply_size_range(results: List[Dict[str, Any]], min_size: Optional[int],
+                          max_size: Optional[int]) -> List[Dict[str, Any]]:
+        """Schneidet die Trefferliste auf eine Byte-Grenze zu.
+
+        ``get_search_results`` kann keine Groessengrenze an die Scraper
+        durchreichen - die Grenze wird also erst auf den fertig normalisierten
+        Ergebnissen angewendet. Ein Ergebnis ohne bekannte Groesse (0 Bytes)
+        faellt dabei durch, weil es keine belegbare Groesse hat.
+        """
+        if min_size is None and max_size is None:
+            return results
+
+        def _within(result: Dict[str, Any]) -> bool:
+            size = result.get("size") or 0
+            if min_size is not None and size < min_size:
+                return False
+            if max_size is not None and size > max_size:
+                return False
+            return True
+
+        return [result for result in results if _within(result)]
+
+    def _sort_results(results: List[Dict[str, Any]], sort_by: str,
+                      sort_order: str) -> List[Dict[str, Any]]:
+        """Sortiert die Trefferliste. Ohne ``sort_by`` bleibt die Reihenfolge des Scrapers."""
+        if not sort_by:
+            return results
+
+        if sort_by == "size":
+            key: Callable[[Dict[str, Any]], Any] = lambda result: result.get("size") or 0
+        elif sort_by == "age":
+            # ISO-Datum sortiert lexikografisch korrekt; fehlende Daten landen vorn
+            key = lambda result: (result.get("date") or {}).get("iso") or ""
+        else:
+            return results
+
+        return sorted(results, key=key, reverse=(sort_order == "desc"))
+
+    def _paginate(results: List[Dict[str, Any]], offset: int,
+                  limit: int) -> Tuple[List[Dict[str, Any]], int]:
+        """Schneidet ``offset``/``limit`` ab und liefert (Seite, Gesamtzahl)."""
+        total = len(results)
+        start = max(0, offset)
+        if limit > 0:
+            return results[start:start + limit], total
+        return results[start:], total
+
+    def _collect_unsupported(payload: Dict[str, Any], sort_by: str) -> List[Dict[str, str]]:
+        """Sammelt die Anfragefelder, die der Scraper nicht bedienen kann.
+
+        Statt sie stillschweigend zu verwerfen, werden sie mit Grund
+        zurueckgemeldet. Sonst sieht ein Filter im UI funktionierend aus, der
+        in Wirklichkeit nichts filtert.
+        """
+        unsupported: List[Dict[str, str]] = []
+
+        def _flag(field: str, reason: str) -> None:
+            unsupported.append({"field": field, "reason": reason})
+
+        if str(payload.get("category") or "").strip():
+            _flag("category",
+                  "get_search_results() kennt keine Kategorie. Kuasarr-Kategorien sind "
+                  "Regex-Muster fuer die Zuordnung nach dem Download, kein Suchparameter.")
+
+        if sort_by and sort_by not in SORT_FIELDS_SUPPORTED:
+            if sort_by == "grabs":
+                _flag("sort_by",
+                      "Die DDL-Scraper liefern keine Grab-Zaehlung, nach der sortiert "
+                      "werden koennte. 'grabs' ist immer 0.")
+            else:
+                _flag("sort_by",
+                      "Der Scraper liefert keine Relevanzbewertung. Ohne sort_by "
+                      "liefern die Portale die Ergebnisse nach Datum, neueste zuerst.")
+
+        for unknown in payload:
+            if unknown not in _KNOWN_REQUEST_FIELDS:
+                _flag(unknown, "Unbekanntes Feld - die Such-API wertet es nicht aus.")
+
+        return unsupported
+
+    def _resolve_by_id(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Loest die Kurzform ``result_id`` auf ein Suchergebnis auf.
+
+        Die WebUI schickt beim Klick auf eine Trefferzeile nur die ID. Der
+        Kontext steckt im Cache aus ``/api/search`` - fehlt er dort, ist das
+        ein echter 404 und kein stiller No-Op mit ``success: false``.
+        """
+        cached = _recall_result(result_id)
+        if not cached:
+            raise HTTPError(
+                404,
+                f"Unbekannte result_id '{result_id}'. Der Treffer stammt nicht (mehr) "
+                f"aus einer aktuellen Suche - bitte die Suche wiederholen."
+            )
+
+        link = cached.get("link") or ""
+        decoded = _decode_payload(link) if link else None
+        if not decoded:
+            raise HTTPError(
+                404,
+                f"Zu result_id '{result_id}' ist kein gueltiger Download-Link mehr "
+                f"hinterlegt. Bitte die Suche wiederholen."
+            )
+
+        return {
+            "result_id": result_id,
+            "title": payload.get("package_name") or cached.get("title") or "Unbekannt",
+            "link": link,
+            "decoded": decoded,
+            "password": payload.get("password") or cached.get("password") or "",
+        }
+
     def _parse_items(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Die bestehende Langform ``items: [{link, title}, ...]``.
+
+        Wird weiterhin unterstuetzt, damit Aufrufer, die den kompletten
+        Treffer mitschicken (z. B. die Legacy-Seite ``/search``), nicht brechen.
+        """
         items_raw = payload.get("items")
         if not isinstance(items_raw, list) or not items_raw:
             raise HTTPError(400, "Mindestens ein Eintrag muss ausgewählt werden")
@@ -156,9 +392,11 @@ def setup_search_routes(app: Bottle) -> None:
             if not decoded:
                 continue
             parsed_items.append({
+                "result_id": item.get("id"),
                 "title": item.get("title") or decoded.get("title") or "Unbekannt",
                 "link": link,
                 "decoded": decoded,
+                "password": decoded.get("password") or "",
             })
 
         if not parsed_items:
@@ -183,7 +421,7 @@ def setup_search_routes(app: Bottle) -> None:
             url,
             mirror,
             size_mb,
-            decoded.get("password") or "",
+            item.get("password") or decoded.get("password") or "",
             imdb_id=imdb_id,
         )
 
@@ -197,6 +435,7 @@ def setup_search_routes(app: Bottle) -> None:
                 captcha_pending = False
 
         return {
+            "result_id": item.get("result_id"),
             "title": result.get("title", title),
             "package_id": package_id,
             "success": bool(result.get("success")),
@@ -558,7 +797,7 @@ def setup_search_routes(app: Bottle) -> None:
                     meta.appendChild(mirrorSpan);
                     
                     const sizeSpan = document.createElement('span');
-                    sizeSpan.textContent = 'Größe: ' + String(item.size && item.size.formatted ? item.size.formatted : 'Unbekannt');
+                    sizeSpan.textContent = 'Größe: ' + String(item.size_formatted || 'Unbekannt');
                     meta.appendChild(sizeSpan);
                     
                     const dateSpan = document.createElement('span');
@@ -637,7 +876,7 @@ def setup_search_routes(app: Bottle) -> None:
 
                     const data = await res.json();
                     console.log('[SearchUI] Suchantwort erhalten', data);
-                    state.results = Array.isArray(data.results) ? data.results : [];
+                    state.results = Array.isArray(data.data) ? data.data : [];
                     state.filtered = state.results;
                     state.filters = data.filters || state.filters;
 
@@ -669,7 +908,9 @@ def setup_search_routes(app: Bottle) -> None:
                     }
                     const data = await res.json();
                     console.log('[SearchUI] Downloadantwort', data);
-                    const messages = data.results.map(entry => {
+                    const downloadData = data.data || {};
+                    const entries = Array.isArray(downloadData.results) ? downloadData.results : [];
+                    const messages = entries.map(entry => {
                         if (entry.captcha_required) {
                             return '⚠️ ' + String(entry.title || '') + ': CAPTCHA erforderlich.';
                         }
@@ -854,11 +1095,52 @@ def setup_search_routes(app: Bottle) -> None:
     @app.post('/api/search')
     @require_api_key
     def search_api() -> Dict[str, Any]:
+        """Sucht DDL-Releases fuer die WebUI.
+
+        Anfrage (JSON)::
+
+            query      Pflicht, Freitext
+            mirror     optional, auf einen Mirror einschraenken (Scraper)
+            limit      optional, Anzahl pro Seite (Default: alle)
+            offset     optional, Versatz fuer die Paginierung (Default: 0)
+            min_size   optional, Untergrenze in Bytes
+            max_size   optional, Obergrenze in Bytes
+            sort_by    optional: "size" | "age" (Default: Reihenfolge des Scrapers)
+            sort_order optional: "asc" | "desc" (Default: "asc")
+            category   derzeit ohne Wirkung, wird im Response gemeldet
+
+        Antwort::
+
+            {
+              "data": [ <SearchResult>, ... ],
+              "filters": {"hostnames": [...], "mirrors": [...],
+                          "date": {"min": "...", "max": "..."}},
+              "meta": {"total": 42, "offset": 0, "limit": 20, "returned": 20},
+              "unsupported": [{"field": "category", "reason": "..."}]
+            }
+
+        ``data`` ist bewusst eine Liste und kein Objekt mit ``results`` - so
+        greifen die uebrigen ``/api``-Routen darauf zu (``fetchApi`` liest
+        ``response.data``). ``filters`` steht daneben, nicht darin.
+
+        ``limit``/``offset``/``min_size``/``max_size``/``sort_*`` werden hier
+        angewendet und nicht an ``get_search_results`` durchgereicht: dessen
+        Paginierung laeuft vor jeder Groessengrenze, sonst wuerden die Filter
+        sich gegenseitig ins Leere sortieren. Die Portale liefern ohnehin erst
+        die komplette Liste, das Umlegen kostet also keinen zusaetzlichen
+        Netzwerkverkehr.
+        """
         payload = request.json or {}
         query = str(payload.get("query", "")).strip()
 
         if not query:
             raise HTTPError(400, "Suchbegriff fehlt")
+
+        category = str(payload.get("category") or "").strip()
+        sort_by = str(payload.get("sort_by") or "").strip().lower()
+        sort_order = str(payload.get("sort_order") or "asc").strip().lower()
+        if sort_order not in ("asc", "desc"):
+            sort_order = "asc"
 
         info(f"WebUI-Suche gestartet: '{query}'")
 
@@ -869,27 +1151,105 @@ def setup_search_routes(app: Bottle) -> None:
             mirror=payload.get("mirror"),
         )
 
-        normalised = [_normalise_result(entry) for entry in results_raw]
+        normalised = [_normalise_result(entry, category=category) for entry in results_raw]
         filters = _collect_filters(normalised)
+        for result in normalised:
+            _remember_result(result)
 
-        return _json({
-            "results": normalised,
+        unsupported = _collect_unsupported(payload, sort_by)
+        filtered = _apply_size_range(normalised, _as_optional_int(payload.get("min_size")),
+                                     _as_optional_int(payload.get("max_size")))
+        sorted_results = _sort_results(filtered, sort_by, sort_order)
+        page, total = _paginate(sorted_results, _as_int(payload.get("offset")),
+                                _as_int(payload.get("limit")))
+
+        response_payload: Dict[str, Any] = {
+            "data": page,
             "filters": filters,
-        })
+            "meta": {
+                "total": total,
+                "offset": _as_int(payload.get("offset")),
+                "limit": _as_int(payload.get("limit")),
+                "returned": len(page),
+            },
+        }
+        if unsupported:
+            response_payload["unsupported"] = unsupported
+
+        return _json(response_payload)
 
     @app.post('/api/search/download')
     @require_api_key
     def search_download_api() -> Dict[str, Any]:
+        """Legt die Pakete zu einem oder mehreren Suchtreffern an.
+
+        Anfrage (JSON) - beide Formen sind gueltig und koennen gemischt sein::
+
+            result_id    Kurzform: die stabile ``id`` aus ``POST /api/search``
+            items        Langform: [{"link": "...", "title": "..."}, ...]
+            package_name optional, Titel des Pakets (ueberschreibt den Titel)
+            password     optional, Passwort (ueberschreibt das aus dem Link)
+            category_id  derzeit ohne Wirkung, wird im Response gemeldet
+
+        Ohne ``result_id`` und ohne ``items`` ist das ein 400. Eine unbekannte
+        ``result_id`` ist ein 404 - kein HTTP 200 mit ``success: false``, das
+        niemand auswertet.
+
+        Antwort::
+
+            {
+              "data": {
+                "total": 2,
+                "succeeded": 1,
+                "failed": 1,
+                "results": [
+                  {"result_id": "…", "title": "…", "package_id": "…",
+                   "success": true, "captcha_required": false},
+                  …
+                ]
+              }
+            }
+
+        ``captcha_required`` heisst: das Paket liegt im ``protected``-Store und
+        wartet auf eine CAPTCHA-Loesung. ``package_id`` ist ``None``, wenn die
+        Meldung nicht ankam oder abgelehnt wurde.
+        """
         payload = request.json or {}
-        items = _parse_items(payload)
+        items_payload = payload.get("items")
+        result_id = str(payload.get("result_id") or "").strip()
+
+        if not result_id and not items_payload:
+            raise HTTPError(
+                400,
+                "Mindestens ein Eintrag muss ausgewählt werden: entweder "
+                "'result_id' oder 'items' mit den gewünschten Treffern."
+            )
+
+        items: List[Dict[str, Any]] = []
+        if items_payload:
+            items.extend(_parse_items({"items": items_payload}))
+        if result_id:
+            items.append(_resolve_by_id(result_id, payload))
 
         info(f"WebUI-Downloadauftrag: {len(items)} Elemente")
 
         results = [_download_item(item) for item in items]
 
-        return _json({
+        data = {
+            "total": len(results),
+            "succeeded": sum(1 for entry in results if entry.get("success")),
+            "failed": sum(1 for entry in results if not entry.get("success")),
             "results": results,
-        })
+        }
+
+        if str(payload.get("category_id") or "").strip():
+            data["unsupported"] = [{
+                "field": "category_id",
+                "reason": "download() kennt keine Kategorie - die Zuordnung laeuft "
+                          "ueber die Kategorien-Patterns nach dem Download.",
+            }]
+
+        return _json({"data": data})
 
     @app.get('/api/search/status')
     @require_api_key

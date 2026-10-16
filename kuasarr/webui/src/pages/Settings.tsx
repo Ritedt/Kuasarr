@@ -63,9 +63,6 @@ interface JDFormData {
   email: string;
   password: string;
   deviceName: string;
-  autoReconnect: boolean;
-  maxDownloads: number;
-  maxSpeed: number;
 }
 
 type FeedbackResult = { success: boolean; message: string } | null;
@@ -172,10 +169,11 @@ function JDownloaderTab() {
     email: '',
     password: '',
     deviceName: '',
-    autoReconnect: true,
-    maxDownloads: 3,
-    maxSpeed: 0,
   });
+  // Steht im Backend eins hinterlegt? Dann darf das Formular beim Speichern
+  // leer bleiben - das Passwort wird nie ausgeliefert und kann sonst nicht
+  // unveraendert mitgeschickt werden.
+  const [passwordSet, setPasswordSet] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const [result, setResult] = useState<FeedbackResult>(null);
@@ -196,12 +194,10 @@ function JDownloaderTab() {
     if (jdConfig) {
       setFormData({
         email: jdConfig.email || '',
-        password: jdConfig.password || '',
+        password: '',
         deviceName: jdConfig.device_name || '',
-        autoReconnect: jdConfig.auto_reconnect ?? true,
-        maxDownloads: jdConfig.max_downloads || 3,
-        maxSpeed: jdConfig.max_speed || 0,
       });
+      setPasswordSet(!!jdConfig.password_set);
     }
   }, [jdConfig]);
 
@@ -212,6 +208,9 @@ function JDownloaderTab() {
     }
   }, [jdStatus, setJdStatus, setJdConnected]);
 
+  // `onSuccess` feuert nur, wenn `saveJDownloaderConfig` nicht geworfen hat -
+  // und das passiert bei jedem echten HTTP-Fehler (400/502). Das fruehere
+  // flache `success`-Feld gab es hier gar nicht mehr.
   const saveMutation = useMutation({
     mutationFn: saveJDownloaderConfig,
     onSuccess: () => {
@@ -228,13 +227,25 @@ function JDownloaderTab() {
     const errors: Partial<Record<keyof JDFormData, string>> = {};
     if (!formData.email.trim()) errors.email = 'Email is required';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) errors.email = 'Please enter a valid email';
-    if (!formData.password.trim()) errors.password = 'Password is required';
+    // Ohne gespeichertes Passwort muss eines getippt werden - das Backend
+    // antwortet sonst mit 400.
+    if (!formData.password.trim() && !passwordSet) errors.password = 'Password is required';
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
 
   const handleVerify = async () => {
-    if (!validateForm()) return;
+    // "Test Connection" prueft genau das, was getippt wurde - da hilft das
+    // gespeicherte Passwort nicht, weil es nie zurueckkommt.
+    if (!formData.email.trim()) {
+      setFormErrors({ email: 'Email is required' });
+      return;
+    }
+    if (!formData.password.trim()) {
+      setFormErrors({ password: 'Enter the password to test the connection' });
+      return;
+    }
+    setFormErrors({});
     setIsVerifying(true);
     setResult(null);
     try {
@@ -260,11 +271,10 @@ function JDownloaderTab() {
     if (!validateForm()) return;
     saveMutation.mutate({
       email: formData.email,
+      // Leer lassen heisst "gespeichertes behalten"; das Backend entscheidet,
+      // ob es eines gibt.
       password: formData.password,
       device_name: formData.deviceName || undefined,
-      auto_reconnect: formData.autoReconnect,
-      max_downloads: formData.maxDownloads,
-      max_speed: formData.maxSpeed,
     });
   };
 
@@ -347,7 +357,7 @@ function JDownloaderTab() {
                 <Input
                   label="Password"
                   type={showPassword ? 'text' : 'password'}
-                  placeholder="••••••••"
+                  placeholder={passwordSet ? '••••••••  (unchanged)' : '••••••••'}
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                   error={formErrors.password}
@@ -358,8 +368,9 @@ function JDownloaderTab() {
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
                   }
-                  required
+                  required={!passwordSet}
                 />
+                <SecretHelper isSet={passwordSet && !formData.password} />
               </div>
             </div>
             <Input
@@ -368,31 +379,6 @@ function JDownloaderTab() {
               value={formData.deviceName}
               onChange={(e) => setFormData({ ...formData, deviceName: e.target.value })}
               helperText="Leave empty to use the default device"
-            />
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Input
-                label="Max Concurrent Downloads"
-                type="number"
-                min={1}
-                max={20}
-                value={formData.maxDownloads.toString()}
-                onChange={(e) => setFormData({ ...formData, maxDownloads: parseInt(e.target.value) || 3 })}
-                leftIcon={<Gauge className="h-4 w-4" />}
-              />
-              <Input
-                label="Max Speed (KB/s, 0 = unlimited)"
-                type="number"
-                min={0}
-                value={formData.maxSpeed.toString()}
-                onChange={(e) => setFormData({ ...formData, maxSpeed: parseInt(e.target.value) || 0 })}
-                leftIcon={<Zap className="h-4 w-4" />}
-              />
-            </div>
-            <Toggle
-              label="Auto Reconnect"
-              description="Automatically reconnect if connection is lost"
-              checked={formData.autoReconnect}
-              onChange={(checked) => setFormData({ ...formData, autoReconnect: checked })}
             />
             <FeedbackBanner result={result} />
             <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-bg-tertiary">
@@ -878,7 +864,10 @@ function HostnamesTab() {
   const saveMutation = useMutation({
     mutationFn: saveHostnamesSettings,
     onSuccess: (res) => {
-      const restart = res.requires_restart || [];
+      // Das Backend legt `requires_restart` flach neben `success`/`message`;
+      // `saveHostnamesSettings` holt es dort ab. Aus `data` gelesen waere es
+      // immer leer - die Restart-Hinweise zu AL, DD und NX kaemen nie durch.
+      const restart = res.requires_restart;
       setRestartSites(restart);
       setResult({
         success: true,

@@ -39,6 +39,9 @@ _RATE_LIMIT_MAX_REQUESTS = 10  # max requests per window
 _rate_limit_store = {}  # Simple in-memory store: {key: [(timestamp, count), ...]}
 _rate_limit_lock = threading.Lock()
 
+# Serialisiert die Erzeugung des Browser-Tokens, falls es in der Config fehlt.
+_browser_token_lock = threading.Lock()
+
 # Stable secret derived from PASS (restart-safe)
 _SECRET_KEY = hashlib.sha256(_AUTH_PASS.encode("utf-8")).digest()
 
@@ -188,8 +191,13 @@ def require_csrf_token(func):
                     pass
 
             if not token or not validate_csrf_token(token):
-                response.status = 403
-                return json.dumps({"success": False, "error": "Invalid or missing CSRF token"})
+                # `abort` statt eines flachen `{"success": false, ...}`:
+                # `fetchApi` liest `error.error.message`, bekam davor
+                # aber `undefined` und zeigte dem Nutzer nur "HTTP 403"
+                # ohne jede Begruendung. Der zentrale Fehlerhandler in
+                # `kuasarr.api.error_handler` baut daraus die erwartete
+                # Huellte - und fuer Legacy-Seiten weiterhin HTML.
+                abort(403, "Invalid or missing CSRF token")
         return func(*args, **kwargs)
     return wrapper
 
@@ -529,7 +537,7 @@ def add_auth_hook(app, whitelist=None):
                     request_api_key = _get_request_api_key()
                     if not request_api_key:
                         return abort(401, "Missing API Key")
-                    if request_api_key != api_key:
+                    if not _api_key_is_valid(request_api_key, api_key):
                         return abort(403, "Invalid API Key")
                     return callback(*args, **kwargs)
 
@@ -573,6 +581,78 @@ def _get_request_api_key():
         return auth_header[7:].strip()
 
     return None
+
+
+# ============================================================================
+# Browser-Token
+# ============================================================================
+
+def get_browser_token():
+    """Liefert das Token, mit dem sich die React-WebUI ausweist.
+
+    Bewusst ein eigenes Token und nicht der Maschinen-Key. Vorher gab
+    ``GET /api/key`` den vollwertigen Key im Klartext aus; wer die WebUI
+    erreichte, bekam damit denselben Schluessel, mit dem Radarr/Sonarr den
+    Newznab- und SABnzbd-Zugang nutzen. Ein XSS in der SPA oder eine
+    Browser-Extension laesst sich damit auf Maschinen-Zugriffe umlegen.
+
+    Der Token gilt fuer dieselben Routen wie der Maschinen-Key, laesst sich
+    aber unabhaengig rotieren - siehe ``rotate_browser_token``.
+    """
+    token = Config("WebUI").get("api_token")
+    if token:
+        return token
+
+    # Fehlt der Key, wird er hier erzeugt. Das Lock ist noetig, weil
+    # `Config` fehlende Keys in einer *bestehenden* Sektion nie nachtraegt:
+    # auf einer Installation von vor dem Browser-Token ist `api_token` also
+    # dauerhaft leer. Ohne Lock rotierten parallele Aufrufe gegeneinander,
+    # die zuletzt gespeicherte Version gewann - und der Aufrufer, der zur
+    # selben Zeit sein Token in die Antwort geschrieben hatte, haette eines,
+    # das nicht mehr gueltig ist. Der Doppelcheck unter dem Lock stellt sicher,
+    # dass pro Prozess hoechstens einmal rotiert wird.
+    with _browser_token_lock:
+        token = Config("WebUI").get("api_token")
+        if not token:
+            token = rotate_browser_token()
+    return token
+
+
+def _constant_time_equals(candidate, expected) -> bool:
+    """Zeitkonstanter Vergleich, der auch Nicht-ASCII uebersteht.
+
+    ``secrets.compare_digest`` verweigert ``str``-Argumente mit Zeichen
+    ausserhalb ASCII und wirft dann ``TypeError`` - aus einem falschen
+    API-Key wuerde so ein 500 statt eines 403. Ueber HTTP-Header ist das
+    von aussen ausloesbar, ohne dass der Betreiber etwas falsch konfiguriert
+    haben muss. Ueber UTF-8-Bytes vergleicht ``compare_digest`` weiterhin
+    zeitkonstant, nur eben fuer beliebiges Text.
+    """
+    if not expected or not candidate:
+        return False
+    return secrets.compare_digest(
+        candidate.encode("utf-8"), expected.encode("utf-8")
+    )
+
+
+def _api_key_is_valid(candidate, master_key):
+    """Prueft einen mitgeschickten Schluessel gegen beide gueltigen Werte.
+
+    Maschinen-Key fuer Radarr/Sonarr, Browser-Token fuer die WebUI. Der
+    Vergleich laeuft ueber ``compare_digest``, damit die Pruefung nicht
+    zeitlich verraet, wie weit der Kandidat richtig liegt.
+    """
+    if _constant_time_equals(candidate, master_key):
+        return True
+    browser_token = Config("WebUI").get("api_token")
+    return _constant_time_equals(candidate, browser_token)
+
+
+def rotate_browser_token():
+    """Erzeugt und speichert ein neues Browser-Token."""
+    token = secrets.token_urlsafe(32)
+    Config("WebUI").save("api_token", token)
+    return token
 
 
 def require_api_key(func):

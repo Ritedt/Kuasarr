@@ -23,6 +23,10 @@ class Config(object):
         'WebUI': [
             ("user", "secret", ""),
             ("password", "secret", ""),
+            # Eigenes Token fuer den React-Browser. Getrennt vom
+            # Maschinen-Key, damit ein aus dem Browser abgefischter
+            # Schlüssel nicht gleichzeitig Radarr/Sonarr entzieht.
+            ("api_token", "secret", ""),
         ],
         'JDownloader': [
             ("user", "secret", ""),

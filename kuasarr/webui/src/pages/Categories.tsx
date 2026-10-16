@@ -106,17 +106,24 @@ export default function CategoriesPage() {
   const [formData, setFormData] = useState<CategoryFormData>(initialFormData);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof CategoryFormData, string>>>({});
+  const [mutationError, setMutationError] = useState<string | null>(null);
 
   const { data: categories = [], isLoading } = useQuery({
     queryKey: ['categories'],
     queryFn: getCategories,
   });
 
+  // Das Backend beantwortet Validierungsfehler jetzt mit 400 und einer
+  // Fehlerhuelle. Ohne `onError` blieb das Modal offen und der Grund ungesehen.
   const createMutation = useMutation({
     mutationFn: createCategory,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['categories'] });
+      setMutationError(null);
       closeModal();
+    },
+    onError: (error) => {
+      setMutationError(error.message || 'Failed to create category');
     },
   });
 
@@ -124,7 +131,11 @@ export default function CategoriesPage() {
     mutationFn: ({ id, data }: { id: string; data: Partial<Category> }) => updateCategory(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['categories'] });
+      setMutationError(null);
       closeModal();
+    },
+    onError: (error) => {
+      setMutationError(error.message || 'Failed to update category');
     },
   });
 
@@ -184,6 +195,7 @@ export default function CategoriesPage() {
     setEditingCategory(null);
     setFormData(initialFormData);
     setFormErrors({});
+    setMutationError(null);
     setIsModalOpen(true);
   };
 
@@ -192,6 +204,7 @@ export default function CategoriesPage() {
     setEditingCategory(null);
     setFormData(initialFormData);
     setFormErrors({});
+    setMutationError(null);
   };
 
   const handleToggleEnabled = (id: string, enabled: boolean) => {
@@ -312,6 +325,12 @@ export default function CategoriesPage() {
               />
             </div>
           </div>
+          {mutationError && (
+            <div className="p-4 rounded-lg flex items-start gap-3 bg-kuasarr-error/10 border border-kuasarr-error/30">
+              <AlertCircle className="h-5 w-5 text-kuasarr-error mt-0.5 shrink-0" />
+              <p className="text-sm text-kuasarr-error">{mutationError}</p>
+            </div>
+          )}
           <div className="flex justify-end gap-3 pt-4">
             <Button type="button" variant="ghost" onClick={closeModal}>
               Cancel

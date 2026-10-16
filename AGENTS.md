@@ -58,6 +58,50 @@ Never, at any point, add the hostnames of any sources Kuasarr supports to any fi
 
 Sensitive values (passwords, tokens, API keys) must never be hardcoded — always read from ENV or INI.
 
+## The Two API Keys
+
+Kuasarr recognizes **two** API credentials, and they are not interchangeable in spirit:
+
+| Key | Stored in | Used by | Obtainable via |
+| --- | --- | --- | --- |
+| Master-Key | `Config('API')['key']` | Radarr, Sonarr, LazyLibrarian | printed on the console at first start |
+| Browser-Token | `Config('WebUI')['api_token']` | the React WebUI only | `GET /api/key` |
+
+`GET /api/key` deliberately returns the browser token, never the master key. A key lifted from a browser (devtools, a screenshot, an XSS) must not compromise the whole `*arr` integration — and that only holds because the browser token can be revoked on its own.
+
+- `POST /regenerate-browser-token` replaces **only** `WebUI.api_token`. Radarr/Sonarr are unaffected. This is the button to reach for after an XSS in the SPA.
+- `POST /regenerate-api-key` rotates the **master** key and, with it, the browser token. This breaks every `*arr` until they are reconfigured. Use it when the master key itself leaked.
+
+Both are `POST` with `@require_csrf_token`; `GET /regenerate-api-key` used to exist and an `<img src=…>` was enough to rotate it. Both are reachable from the API-Settings block on the legacy `/` page, which carries the token as a hidden `csrf_token` field.
+
+The browser token is accepted everywhere the master key is accepted; nothing rejects it server-side. The separation protects the master key, it is not a second permission level.
+
+## API Response Contract
+
+Every route under `/api/` answers with `{"data": <payload>}` on success. Failures are normalized centrally by `kuasarr/api/error_handler.py` into:
+
+```json
+{"error": {"code": "<stable-slug>", "message": "<human readable>"}}
+```
+
+The error shape always comes with a matching HTTP status (400/401/403/404/405/409/429/500/502). Returning HTTP 200 with `{"success": false}` is a bug: the client only throws on `!response.ok` and would silently render an empty page.
+
+Two caveats on what the central handler does and does not cover. It normalizes **errors**; it cannot touch a handler that returns `200 {"success": false}` on purpose, because no exception is raised. The legacy routes `/api/notifications/{save,test/discord,test/telegram}` still do exactly that and are read as such by the legacy page's JavaScript — fix them only together with that page.
+
+Some routes are shared with the legacy HTML pages, whose inline JavaScript branches on `data.success`. `/api/packages/{delete,pause,resume}` still answer `200 {"success": true}` for that reason, and the SPA ignores the body. Do not "normalize" those to `{"data": …}` without moving the legacy page to the new shape in the same change.
+
+Routes outside `/api/` keep returning HTML, which the legacy pages (`/search`, `/packages`, `/captcha/...`) depend on; the handler emits a minimal escaped HTML error page for those instead of JSON.
+
+## CSRF
+
+`@require_csrf_token` compares `X-CSRF-Token` against the `kuasarr_csrf` cookie; the SPA obtains both from `GET /api/csrf`. `GET /regenerate-api-key` was changed to `POST` for the same reason — a `GET` that mutates state can be triggered by an `<img>` tag, with no way for the server to tell the request apart from a real one.
+
+Currently guarded: `POST /api/categories`, `POST|DELETE /api/categories/<id>`, `POST /api/notifications`, `POST /api/notifications/test`, `POST /api/settings/core`, `POST /regenerate-api-key`.
+
+**Open gap:** 25 of the 31 `/api` write routes are unguarded — `POST /api` (the *arr shim), `/api/search`, `/api/search/download`, `/api/packages/{delete,pause,resume}`, `/api/jdownloader/{config,save,verify}`, `/api/settings` and `/api/settings/*-config`, `/api/hosters/*`, `/api/hostnames`, `/api/dbc_credentials`, and the legacy `/api/notifications/{save,settings,test/discord,test/telegram}`. They still require the API key, which a cross-site form cannot supply, so they are not exploitable from a third-party page — but they are not double-submit protected either.
+
+They are left unguarded deliberately, not overlooked. `POST /api` is the Newznab/SABnzbd shim and must keep working without a CSRF header. For the others the client is already ready: `fetchApi` in `kuasarr/webui/src/lib/api.ts` attaches `X-CSRF-Token` to every mutating call, so the decorator can be added without touching the frontend. Do that per route and verify the matching legacy caller still sends the header, rather than sweeping all 25 at once — `POST /api` must stay out of it.
+
 ## Terminology
 
 When referring to integrations such as `NK` or `DW`, always call them `sources`.

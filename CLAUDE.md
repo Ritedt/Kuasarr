@@ -98,6 +98,7 @@ docker run -d \\
 * Optional HTTP Basic Auth via `KUASARR\_WEBUI\_USER` + `KUASARR\_WEBUI\_PASS`
 * API endpoints (`/api`, `/download/`, `/dbc/api/`) are **never** protected — Radarr/Sonarr use API key only
 * Disabled by default (backwards compatible)
+* Two credentials: the master key (`API.key`) for Radarr/Sonarr and a separate browser token (`WebUI.api_token`) that `GET /api/key` hands to the SPA — so a key read out of the browser does not compromise the `*arr` integration. See `AGENTS.md` → "The Two API Keys"
 
 ## Agent Guidelines
 

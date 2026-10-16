@@ -495,7 +495,14 @@ class DBCDispatcher:
                                     return False
                                 info(f"Download failed for {title} (Circle-Captcha)")
                         
-            except (DBCInsufficientCredits, CaptchaInsufficientCredits):
+            except (DBCInsufficientCredits, CaptchaInsufficientCredits,
+                    DBCServiceOverload, CaptchaServiceOverload):
+                # Muss hier ebenfalls durchgereicht werden: die Overload-
+                # Klassen sind Geschwister der Credits-Klassen, keine
+                # Unterklassen. Ohne diesen Zweig faellt der Fehler in den
+                # `except (DBCError, CaptchaClientError)` darunter, `_run_once`
+                # sieht ihn nie und der Backoff greift nicht - obwohl der
+                # Dienst genau dann gerade nicht verfuegbar ist.
                 raise
             except PermanentLinkFailure as exc:
                 info(f"Permanent failure for {link_url}: {exc}")
@@ -662,9 +669,18 @@ class DBCDispatcher:
             while circle_captcha and i < 3:
                 random_x = str(random.randint(100, 200))
                 random_y = str(random.randint(100, 200))
-                output = session.post(url, data=f"buttonx.x={random_x}&buttonx.y={random_y}",
-                                      headers={'User-Agent': self.shared_state.values["user_agent"],
-                                               'Content-Type': 'application/x-www-form-urlencoded'})
+                try:
+                    output = session.post(url, data=f"buttonx.x={random_x}&buttonx.y={random_y}",
+                                          headers={'User-Agent': self.shared_state.values["user_agent"],
+                                                   'Content-Type': 'application/x-www-form-urlencoded'},
+                                          timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
+                except requests.RequestException as e:
+                    # Ohne Timeout blockiert dieser POST unbegrenzt. Der Dispatcher
+                    # läuft single-threaded (max_concurrent = 1), ein hängender POST
+                    # friert also die komplette Queue ein - daher bricht der Loop
+                    # kontrolliert ab, statt den Fehler weiterzugeben.
+                    info(f"Filecrypt circle-captcha skip failed: {e}")
+                    break
                 url = output.url
                 soup = BeautifulSoup(output.text, 'html.parser')
                 circle_captcha = bool(soup.find_all("div", {"class": "circle_captcha"}))
@@ -678,7 +694,8 @@ class DBCDispatcher:
             if token:
                 output = session.post(url, data=f"cap_token={token}",
                                       headers={'User-Agent': self.shared_state.values["user_agent"],
-                                               'Content-Type': 'application/x-www-form-urlencoded'})
+                                               'Content-Type': 'application/x-www-form-urlencoded'},
+                                      timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
                 url = output.url
             else:
                 info("No captcha token received, trying to continue without token...")
@@ -865,7 +882,8 @@ class DBCDispatcher:
         if len(mirrors) > 1:
             current_richness = _filecrypt_page_richness(soup)
             for mirror_url in mirrors:
-                mirror_output = session.get(mirror_url, headers=headers)
+                mirror_output = session.get(mirror_url, headers=headers,
+                                           timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
                 mirror_soup = BeautifulSoup(mirror_output.text, 'html.parser')
                 if _filecrypt_page_richness(mirror_soup) > current_richness:
                     debug(f"DBC: Mirror {mirror_url} liefert eine bessere Seite.")
@@ -922,7 +940,11 @@ class DBCDispatcher:
                         dlc_link = f"https://{domain}/DLC/{dlc_secret}.dlc?{episode}&{season}"
                     else:
                         dlc_link = f"https://{domain}/DLC/{dlc_secret}.dlc"
-                    dlc_file = session.get(dlc_link, headers=headers).content
+                    # Timeout wie bei allen anderen Aufrufen in diesem Pfad:
+                    # der Dispatcher laeuft single-threaded, ein haengender GET
+                    # wuerde die komplette Queue einfrieren.
+                    dlc_file = session.get(dlc_link, headers=headers,
+                                           timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS)).content
                     links.extend(DLC(self.shared_state, dlc_file).decrypt())
                     break
                 except:
@@ -1054,7 +1076,14 @@ class DBCDispatcher:
                 
                 time.sleep(2)
                 
-            except Exception as e:
+            except (DBCInsufficientCredits, CaptchaInsufficientCredits,
+                    DBCServiceOverload, CaptchaServiceOverload):
+                # Beide Klassen erben von DBCError/CaptchaClientError und damit von
+                # RuntimeError. Ein Broad-Except schluckte sie hier - _run_once
+                # erkennt sie nicht mehr und der Backoff bleibt aus. Erst _run_once
+                # entscheidet, was bei leeren Credits oder Überlastung zu tun ist.
+                raise
+            except (DBCError, CaptchaClientError, requests.RequestException) as e:
                 info(f"Circle-Captcha attempt {attempt + 1} failed: {e}")
                 time.sleep(2)
         

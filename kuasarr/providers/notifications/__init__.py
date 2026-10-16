@@ -24,7 +24,19 @@ def _get_notification_settings(shared_state):
 
 
 def _provider_case_enabled(shared_state, provider, notification_type):
-    toggles = _get_notification_settings(shared_state).get("toggles")
+    settings = _get_notification_settings(shared_state)
+
+    # Hauptschalter und Provider-Schalter zuerst. Beide werden von der WebUI
+    # angeboten und von `POST /api/notifications` gespeichert - wenn sie hier
+    # nicht geprueft werden, zeigen sie einen Zustand an, den es nicht gibt.
+    if not settings.get("global_enabled", True):
+        return False
+
+    provider_enabled = settings.get("provider_enabled")
+    if isinstance(provider_enabled, dict) and not provider_enabled.get(provider, True):
+        return False
+
+    toggles = settings.get("toggles")
     if not isinstance(toggles, dict):
         return True
 

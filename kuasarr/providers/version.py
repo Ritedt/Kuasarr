@@ -40,36 +40,72 @@ def get_version():
 
 def get_latest_version():
     """
-    Query GitHub Releases API for the latest release of Kuasarr.
+    Query GitHub Releases API for the latest stable release of Kuasarr.
     Returns the tag name string (e.g. "1.5.0" or "1.4.2a1").
     Raises RuntimeError on HTTP errors.
+
+    Bewusst nur stabile Releases: `newer_version_available()` schreibt
+    sonst bei jedem Start "Update verfuegbar" in den Shared State, weil
+    der Vergleich ein Pre-Release immer schlaeger aussehen laesst.
     """
-    global LATEST_RELEASE_LINK
+    releases = _fetch_releases()
+    stable = _first(releases, lambda release: not release.get("prerelease"))
+    if not stable:
+        raise RuntimeError("No stable release found in GitHub")
+    return _tag_to_version(stable.get("tag_name", ""))
 
-    # GitHub Releases API
-    api_url = "https://api.github.com/repos/Ritedt/Kuasarr/releases/latest"
 
+def get_release_info():
+    """Liefert aktuelle, neueste stabile und neueste Beta-Version.
+
+    Der Aufrufer soll Pre-Releases sehen *koennen*, ohne dass ein Beta-Build
+    bei jedem Start ein Update anschlaegt - deshalb sind es zwei getrennte
+    Felder statt eines vermischten "latest".
+
+    Nutzt `/releases?per_page=10` statt `/releases/latest`, weil letzteres
+    per Definition nur stabile Releases liefert und die Beta-Tags damit
+    strukturell unerreichbar waeren.
+    """
+    releases = _fetch_releases()
+    return {
+        "current": get_version(),
+        "latest_stable": _tag_to_version(
+            (_first(releases, lambda r: not r.get("prerelease")) or {}).get("tag_name", "")
+        ),
+        "latest_prerelease": _tag_to_version(
+            (_first(releases, lambda r: bool(r.get("prerelease"))) or {}).get("tag_name", "")
+        ),
+        "releases_url": LATEST_RELEASE_LINK,
+    }
+
+
+def _fetch_releases():
+    """Holt die neuesten Releases von GitHub als Liste von Dicts."""
     if requests is None:
         raise RuntimeError("requests library is not available")
+
+    api_url = "https://api.github.com/repos/Ritedt/Kuasarr/releases?per_page=10"
     try:
         resp = requests.get(api_url, timeout=10, headers={"Accept": "application/vnd.github+json"})
         if resp.status_code != 200:
             raise RuntimeError(f"GitHub API error: {resp.status_code} {resp.text}")
-
-        data = resp.json()
-        tag_name = data.get("tag_name", "")
-
-        if not tag_name:
-            raise RuntimeError("No tag_name found in GitHub release")
-
-        # Strip leading 'v' prefix if present (e.g. "v1.5.0" -> "1.5.0")
-        latest_tag = tag_name.lstrip("v")
-
-        LATEST_RELEASE_LINK = "https://github.com/Ritedt/Kuasarr/releases/latest"
-        return latest_tag
-
+        return resp.json()
     except requests.RequestException as e:
         raise RuntimeError(f"GitHub API request failed: {e}")
+
+
+def _first(releases, predicate):
+    for release in releases or []:
+        if predicate(release):
+            return release
+    return None
+
+
+def _tag_to_version(tag_name):
+    """``v1.5.0`` -> ``1.5.0``, leerer Tag -> ``None``."""
+    if not tag_name:
+        return None
+    return tag_name.lstrip("v")
 
 
 def _split_suffix_tokens(suffix: str):

@@ -10,6 +10,7 @@ import {
   Filter,
   ChevronDown,
   ChevronUp,
+  RefreshCw,
 } from 'lucide-react';
 import { Layout } from '../components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
@@ -181,6 +182,8 @@ export default function SearchPage() {
   const {
     data: searchResults = [],
     isLoading,
+    isError,
+    error: searchError,
     refetch,
   } = useQuery({
     queryKey: ['search', searchQuery, selectedCategory],
@@ -312,6 +315,27 @@ export default function SearchPage() {
           <div className="flex items-center justify-center py-16">
             <Spinner size="xl" />
           </div>
+        ) : isError ? (
+          // Ohne diesen Zweig sah ein fehlgeschlagener Suchaufruf wie eine
+          // leere Trefferliste aus - der Nutzer haette die Ursache nie gesehen.
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-16">
+              <FileText className="h-16 w-16 text-kuasarr-error/50 mb-4" />
+              <h3 className="text-lg font-medium text-text-primary">Search Failed</h3>
+              <p className="text-text-secondary text-sm mt-1 text-center max-w-md">
+                {searchError instanceof Error ? searchError.message : 'The search could not be completed.'}
+              </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="mt-4"
+                onClick={() => refetch()}
+                leftIcon={<RefreshCw className="h-4 w-4" />}
+              >
+                Retry
+              </Button>
+            </CardContent>
+          </Card>
         ) : sortedResults.length === 0 ? (
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-16">

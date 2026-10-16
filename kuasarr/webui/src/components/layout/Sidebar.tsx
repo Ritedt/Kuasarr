@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import {
   LayoutDashboard,
   Package,
@@ -11,6 +12,7 @@ import {
   X,
 } from 'lucide-react'
 import { useUIStore } from '../../stores/uiStore'
+import { getVersion } from '../../lib/api'
 import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 
@@ -38,6 +40,21 @@ const sidebarItems: SidebarItem[] = [
 export function Sidebar() {
   const location = useLocation()
   const { isMobileMenuOpen, closeMobileMenu } = useUIStore()
+
+  // `current` kommt lokal aus `version.json`; ohne den Abruf bleibt der Fuss
+  // schlicht leer statt eine veraltete Version fest zu behaupten.
+  const { data: version, isPending: versionPending, isError: versionError } = useQuery({
+    queryKey: ['version'],
+    queryFn: getVersion,
+  })
+
+  const versionLabel = versionError
+    ? 'version unavailable'
+    : versionPending
+      ? '…'
+      : version?.current
+        ? `v${version.current}`
+        : null
 
   const sidebarContent = (
     <>
@@ -93,8 +110,12 @@ export function Sidebar() {
       <div className="p-4 border-t border-bg-tertiary">
         <div className="text-xs text-text-secondary text-center">
           <span className="font-heading font-medium text-text-primary">Kuasarr</span>
-          <span className="mx-1">·</span>
-          <span>v1.0.0</span>
+          {versionLabel && (
+            <>
+              <span className="mx-1">·</span>
+              <span>{versionLabel}</span>
+            </>
+          )}
         </div>
       </div>
     </>

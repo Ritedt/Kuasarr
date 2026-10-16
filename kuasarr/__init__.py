@@ -276,6 +276,20 @@ def run():
         if not api_key:
             api_key = shared_state.generate_api_key()
 
+        # Dasselbe fuer das Browser-Token. `Config` legt Defaults nur an, wenn
+        # die *Sektion* komplett fehlt - bei einer bestehenden `[WebUI]`-Sektion
+        # aus einer aelteren Installation fehlt `api_token` also dauerhaft. Ohne
+        # diesen Startschritt wuerde `get_browser_token()` es bei jedem Aufruf
+        # neu erzeugen und `GET /api/key` damit bei jedem Aufruf ein anderes
+        # Token ausgeben (siehe `providers.auth.get_browser_token`).
+        if not Config('WebUI').get('api_token'):
+            try:
+                from kuasarr.providers.auth import get_browser_token
+
+                get_browser_token()
+            except Exception as e:
+                print(f'Could not create the web interface token: {e}')
+
         hostnames = get_clean_hostnames(shared_state)
         if not hostnames:
             hostnames_config(shared_state)

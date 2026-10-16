@@ -450,7 +450,13 @@ def setup_arr_routes(app):
                         </rss>'''
 
         info(f"[ERROR] Unknown general request: {dict(request.query)}")
-        return {"error": True}
+        # Bewusst 404 statt `{"error": True}` mit Status 200: `fetchApi` in
+        # der WebUI wirft nur bei `!response.ok`. Ein 200 liest sich dort
+        # als Erfolg, das `error`-Feld wird nie ausgewertet, und der
+        # Nutzer sieht eine leere Seite statt einer Meldung. Der
+        # JSON-Fehlerhandler aus `kuasarr.api.error_handler` verpackt das
+        # `abort` in die erwartete `{"error": {...}}`-Huelle.
+        abort(404, "Unknown API request")
 
 
 

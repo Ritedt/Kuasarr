@@ -8,6 +8,7 @@ import {
   FolderOpen,
   Search,
   Filter,
+  AlertCircle,
 } from 'lucide-react';
 import { Layout } from '../components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
@@ -129,6 +130,7 @@ export function Packages() {
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { data: packages = [], isLoading } = useQuery<Package[]>({
     queryKey: ['packages'],
@@ -147,11 +149,18 @@ export function Packages() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['packages'] }),
   });
 
+  // Das Backend meldet jetzt echte Statuscodes: 404 fuer eine unbekannte ID,
+  // 502 wenn JDownloader das Loeschen verweigert. Ohne `onError` blieb das
+  // Modal einfach offen und der Grund ungesehen.
   const deleteMutation = useMutation<void, Error, string>({
     mutationFn: (packageId: string) => deletePackage(packageId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['packages'] });
+      setDeleteError(null);
       setDeleteId(null);
+    },
+    onError: (error) => {
+      setDeleteError(error.message || 'Failed to delete package');
     },
   });
 
@@ -242,7 +251,10 @@ export function Packages() {
                       pkg={pkg}
                       onPause={(id) => pauseMutation.mutate(id)}
                       onResume={(id) => resumeMutation.mutate(id)}
-                      onDelete={setDeleteId}
+                      onDelete={(id) => {
+                        setDeleteError(null);
+                        setDeleteId(id);
+                      }}
                       isPending={pauseMutation.isPending || resumeMutation.isPending}
                     />
                   ))}
@@ -265,7 +277,10 @@ export function Packages() {
                       pkg={pkg}
                       onPause={(id) => pauseMutation.mutate(id)}
                       onResume={(id) => resumeMutation.mutate(id)}
-                      onDelete={setDeleteId}
+                      onDelete={(id) => {
+                        setDeleteError(null);
+                        setDeleteId(id);
+                      }}
                       isPending={pauseMutation.isPending || resumeMutation.isPending}
                     />
                   ))}
@@ -285,7 +300,10 @@ export function Packages() {
                       pkg={pkg}
                       onPause={(id) => pauseMutation.mutate(id)}
                       onResume={(id) => resumeMutation.mutate(id)}
-                      onDelete={setDeleteId}
+                      onDelete={(id) => {
+                        setDeleteError(null);
+                        setDeleteId(id);
+                      }}
                       isPending={pauseMutation.isPending || resumeMutation.isPending}
                     />
                   ))}
@@ -308,7 +326,10 @@ export function Packages() {
                       pkg={pkg}
                       onPause={(id) => pauseMutation.mutate(id)}
                       onResume={(id) => resumeMutation.mutate(id)}
-                      onDelete={setDeleteId}
+                      onDelete={(id) => {
+                        setDeleteError(null);
+                        setDeleteId(id);
+                      }}
                       isPending={pauseMutation.isPending || resumeMutation.isPending}
                     />
                   ))}
@@ -321,12 +342,27 @@ export function Packages() {
 
       <Modal
         isOpen={!!deleteId}
-        onClose={() => setDeleteId(null)}
+        onClose={() => {
+          setDeleteError(null);
+          setDeleteId(null);
+        }}
         title="Delete Package"
         description="Are you sure you want to delete this package? This action cannot be undone."
       >
+        {deleteError && (
+          <div className="p-4 rounded-lg flex items-start gap-3 bg-kuasarr-error/10 border border-kuasarr-error/30">
+            <AlertCircle className="h-5 w-5 text-kuasarr-error mt-0.5" />
+            <p className="text-sm text-kuasarr-error">{deleteError}</p>
+          </div>
+        )}
         <div className="flex justify-end gap-3 mt-6">
-          <Button variant="ghost" onClick={() => setDeleteId(null)}>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setDeleteError(null);
+              setDeleteId(null);
+            }}
+          >
             Cancel
           </Button>
           <Button

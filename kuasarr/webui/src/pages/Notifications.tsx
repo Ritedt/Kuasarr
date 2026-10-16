@@ -4,9 +4,6 @@ import {
   Bell,
   MessageSquare,
   Send,
-  Mail,
-  Webhook,
-  Smartphone,
   Check,
   AlertCircle,
   Plus,
@@ -43,29 +40,27 @@ const testNotification = async (
   }
 };
 
+// Das Backend kennt nur Discord und Telegram und lehnt alles andere mit 400 ab.
+// Pushover, E-Mail und Webhook standen hier vorher als Auswahl, ohne dass das
+// Backend sie je angenommen haette.
 const providerIcons: Record<NotificationProvider, React.ElementType> = {
   discord: MessageSquare,
   telegram: Send,
-  pushover: Smartphone,
-  email: Mail,
-  webhook: Webhook,
 };
 
 const providerLabels: Record<NotificationProvider, string> = {
   discord: 'Discord',
   telegram: 'Telegram',
-  pushover: 'Pushover',
-  email: 'Email',
-  webhook: 'Webhook',
 };
 
+// Bewusst ohne `jd_connected`/`jd_disconnected`: dafuer gibt es im Backend keine
+// Aufrufstelle. Sie werden nicht mehr stillschweigend verworfen, sondern mit 400
+// abgelehnt - ein angehaktes Kaestchen ohne Wirkung waere genau das.
 const allEvents: NotificationEvent[] = [
   'download_complete',
   'download_failed',
   'package_added',
   'captcha_required',
-  'jd_connected',
-  'jd_disconnected',
 ];
 
 const eventLabels: Record<NotificationEvent, string> = {
@@ -73,8 +68,6 @@ const eventLabels: Record<NotificationEvent, string> = {
   download_failed: 'Download Failed',
   package_added: 'Package Added',
   captcha_required: 'CAPTCHA Required',
-  jd_connected: 'JDownloader Connected',
-  jd_disconnected: 'JDownloader Disconnected',
 };
 
 interface NotificationFormData {
@@ -99,23 +92,6 @@ const providerSettings: Record<NotificationProvider, { key: string; label: strin
   telegram: [
     { key: 'bot_token', label: 'Bot Token', type: 'password', required: true },
     { key: 'chat_id', label: 'Chat ID', type: 'text', required: true },
-  ],
-  pushover: [
-    { key: 'app_token', label: 'App Token', type: 'password', required: true },
-    { key: 'user_key', label: 'User Key', type: 'password', required: true },
-  ],
-  email: [
-    { key: 'smtp_host', label: 'SMTP Host', type: 'text', required: true },
-    { key: 'smtp_port', label: 'SMTP Port', type: 'number', required: true },
-    { key: 'username', label: 'Username', type: 'email', required: true },
-    { key: 'password', label: 'Password', type: 'password', required: true },
-    { key: 'to_address', label: 'To Address', type: 'email', required: true },
-    { key: 'use_tls', label: 'Use TLS', type: 'checkbox', required: false },
-  ],
-  webhook: [
-    { key: 'url', label: 'Webhook URL', type: 'url', required: true },
-    { key: 'method', label: 'HTTP Method', type: 'select', required: true },
-    { key: 'headers', label: 'Custom Headers (JSON)', type: 'textarea', required: false },
   ],
 };
 
@@ -219,17 +195,25 @@ export default function NotificationsPage() {
   const [formData, setFormData] = useState<NotificationFormData>(initialFormData);
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ['notifications', 'settings'],
     queryFn: getNotificationSettings,
   });
 
+  // Das Backend beantwortet ein abgelehntes Speichern jetzt mit 400 statt
+  // mit 200 und `success: false`. Der Grund wird hier angezeigt, damit nicht
+  // das Modal schliesst und der Nutzer denkt, es sei gespeichert.
   const saveMutation = useMutation({
     mutationFn: saveNotificationSettings,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      setSaveError(null);
       closeModal();
+    },
+    onError: (error) => {
+      setSaveError(error instanceof Error ? error.message : 'Failed to save notifications');
     },
   });
 
@@ -245,6 +229,7 @@ export default function NotificationsPage() {
       events: config.events,
     });
     setTestResult(null);
+    setSaveError(null);
     setIsModalOpen(true);
   };
 
@@ -252,6 +237,7 @@ export default function NotificationsPage() {
     setEditingConfig(null);
     setFormData(initialFormData);
     setTestResult(null);
+    setSaveError(null);
     setIsModalOpen(true);
   };
 
@@ -260,6 +246,7 @@ export default function NotificationsPage() {
     setEditingConfig(null);
     setFormData(initialFormData);
     setTestResult(null);
+    setSaveError(null);
   };
 
   const handleToggle = (config: NotificationConfig, enabled: boolean) => {
@@ -488,6 +475,13 @@ export default function NotificationsPage() {
             checked={formData.enabled}
             onChange={(checked) => setFormData({ ...formData, enabled: checked })}
           />
+
+          {saveError && (
+            <div className="p-4 rounded-lg flex items-start gap-3 bg-kuasarr-error/10 border border-kuasarr-error/30">
+              <AlertCircle className="h-5 w-5 text-kuasarr-error mt-0.5" />
+              <p className="text-kuasarr-error">{saveError}</p>
+            </div>
+          )}
 
           {testResult && (
             <div

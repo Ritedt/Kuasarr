@@ -12,8 +12,8 @@ export interface Category {
   pattern: string;
   priority: number;
   enabled: boolean;
-  created_at?: string;
-  updated_at?: string;
+  // Unix-Timestamp als Zahl. Das Backend schickt hier keinen ISO-String.
+  created_at?: number;
 }
 
 export interface CreateCategoryRequest {
@@ -106,19 +106,29 @@ export interface ResumePackageRequest {
 export interface SearchResult {
   id: string;
   title: string;
+  /** Groesse in Bytes. 0 heisst "unbekannt". */
   size: number;
+  size_bytes: number;
+  size_formatted: string;
   category: string;
   hoster: string;
+  hostname: string;
+  mirror: string;
   url: string;
+  /** Der eigentliche Payload-Link, ueber den der Download laeuft. */
+  link: string;
+  source: string;
   password?: string;
   age: string;
+  /** DDL-Portale liefern keine Grab-Zaehlung, der Wert ist immer 0. */
   grabs: number;
+  // seeders/leechers/quality/language schickt das Backend bewusst nicht, damit
+  // die WebUI sie ausblendet. Deshalb bleiben sie hier optional.
   seeders?: number;
   leechers?: number;
   quality?: string;
   language?: string;
   imdb_id?: string;
-  tvdb_id?: string;
 }
 
 export interface SearchRequest {
@@ -128,7 +138,9 @@ export interface SearchRequest {
   offset?: number;
   min_size?: number;
   max_size?: number;
-  sort_by?: 'relevance' | 'size' | 'age' | 'grabs';
+  // Das Backend wertet nur "size" und "age" aus; alles andere landet in
+  // `unsupported` und wird nicht angewendet.
+  sort_by?: 'size' | 'age';
   sort_order?: 'asc' | 'desc';
 }
 
@@ -145,11 +157,12 @@ export interface DownloadSearchResultRequest {
 
 export interface JDownloaderConfig {
   email: string;
+  // Kommt immer leer zurück - das gespeicherte Passwort wird nie ausgeliefert.
   password: string;
+  // Ob überhaupt eines hinterlegt ist. Nur dann darf das Formular beim
+  // Speichern ohne Passwort das gespeicherte weiterverwenden.
+  password_set: boolean;
   device_name?: string;
-  auto_reconnect?: boolean;
-  max_downloads?: number;
-  max_speed?: number;
 }
 
 export interface JDownloaderStatus {
@@ -171,18 +184,18 @@ export interface VerifyJDownloaderRequest {
 
 export interface SaveJDownloaderRequest {
   email: string;
+  // Leer lassen heisst "gespeichertes behalten" - das Backend nutzt dann das
+  // Passwort aus der Config. Ist keines hinterlegt, antwortet es mit 400.
   password: string;
   device_name?: string;
-  auto_reconnect?: boolean;
-  max_downloads?: number;
-  max_speed?: number;
 }
 
 // ============================================================================
 // Notification Types
 // ============================================================================
 
-export type NotificationProvider = 'discord' | 'telegram' | 'pushover' | 'email' | 'webhook';
+// Das Backend kennt genau diese zwei Anbieter; alles andere lehnt es mit 400 ab.
+export type NotificationProvider = 'discord' | 'telegram';
 
 export interface NotificationConfig {
   enabled: boolean;
@@ -191,13 +204,14 @@ export interface NotificationConfig {
   events: NotificationEvent[];
 }
 
+// Events ohne Aufrufstelle im Backend werden mit 400 abgelehnt, statt still
+// verworfen zu werden. Deshalb stehen hier nur die vier, die wirklich etwas
+// ausloesen.
 export type NotificationEvent =
   | 'download_complete'
   | 'download_failed'
   | 'package_added'
-  | 'captcha_required'
-  | 'jd_connected'
-  | 'jd_disconnected';
+  | 'captcha_required';
 
 export interface NotificationSettings {
   global_enabled: boolean;
@@ -248,14 +262,15 @@ export interface DailyStat {
 // ============================================================================
 
 export interface ApiResponse<T = unknown> {
-  success: boolean;
+  /** Nicht jede Route fuehrt ein `success` - die Envelope ist `data` oder `error`. */
+  success?: boolean;
   data?: T;
-  error?: ApiError;
+  error?: ApiError | string;
   meta?: ApiMeta;
 }
 
 export interface ApiError {
-  code: string;
+  code?: string;
   message: string;
   details?: Record<string, unknown>;
 }
@@ -265,6 +280,25 @@ export interface ApiMeta {
   limit?: number;
   total?: number;
   has_more?: boolean;
+}
+
+/**
+ * `POST /api/settings/hostnames-config` gehoert zu den wenigen Routen, die ihre
+ * Statusfelder flach statt in `data` zurueckgeben.
+ */
+export interface HostnamesSaveResponse extends ApiResponse<HostnamesSettings> {
+  message?: string;
+  requires_restart?: string[];
+}
+
+/** Antwort von `GET /api/version`. */
+export interface VersionInfo {
+  /** Lokal aus `version.json`, damit immer vorhanden. */
+  current: string;
+  latest_stable?: string | null;
+  latest_prerelease?: string | null;
+  update_available?: string | null;
+  releases_url?: string;
 }
 
 export interface PaginatedResponse<T> extends ApiResponse<T[]> {

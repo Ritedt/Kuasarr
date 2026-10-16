@@ -15,7 +15,6 @@ import type {
   SaveJDownloaderRequest,
   Statistics,
   NotificationSettings,
-  NotificationConfig,
   TestNotificationRequest,
   PausePackageRequest,
   ResumePackageRequest,
@@ -24,7 +23,9 @@ import type {
   CaptchaSettings,
   IntegrationSettings,
   HostnamesSettings,
+  HostnamesSaveResponse,
   AdvancedSettings,
+  VersionInfo,
 } from '../types';
 
 const API_BASE = '/api';
@@ -50,22 +51,74 @@ async function _fetchApiKey(): Promise<string | undefined> {
   return _keyFetchPromise;
 }
 
+// CSRF token for state-changing requests. `/api/csrf` sets the `kuasarr_csrf`
+// cookie the server compares the header against, so the token is fetched once
+// and reused - and the cookie has to travel with every mutating request.
+let _resolvedCsrfToken: string | undefined;
+let _csrfFetchPromise: Promise<string> | null = null;
+
+async function _fetchCsrfToken(): Promise<string> {
+  if (_resolvedCsrfToken !== undefined) return _resolvedCsrfToken;
+  if (_csrfFetchPromise) return _csrfFetchPromise;
+  _csrfFetchPromise = fetch('/api/csrf', { credentials: 'include' })
+    .then((res) => res.ok ? res.json() : null)
+    .then((data) => data?.data?.csrf_token || '')
+    .catch(() => {
+      // Fehlt das Token, ist das kein Grund abzubrechen: der eigentliche
+      // API-Aufruf laeuft ohnehin und liefert mit 403 die echte Meldung
+      // ("Invalid or missing CSRF token"). Hier zu werfen wuerde sie nur eine
+      // generische Fehlermeldung anzeigen.
+      return '';
+    })
+    .then((token) => {
+      _resolvedCsrfToken = token;
+      return token;
+    });
+  return _csrfFetchPromise;
+}
+
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/**
+ * Zieht die Meldung aus der Fehlerhuelle. Normalfall ist
+ * `{"error": {"message": "..."}}`; einige Handler antworten noch flach mit
+ * `{"error": "text"}`, das wird hier mitgelesen, damit nicht jedes Mal nur
+ * "HTTP 404" ohne Ursache in der Oberflaeche landet.
+ */
+async function readErrorMessage(response: Response): Promise<string> {
+  const payload = await response.json().catch(() => null);
+  const error = payload?.error;
+  if (typeof error === 'string' && error) return error;
+  if (error?.message) return error.message;
+  return `HTTP ${response.status}`;
+}
+
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
-  const apiKey = await _fetchApiKey();
+  const method = (options?.method || 'GET').toUpperCase();
+  const isMutating = MUTATING_METHODS.has(method);
+
+  // Beide Tokens unabhaengig voneinander holen: sie duerfen nicht aufeinander
+  // warten, und ein GET braucht den CSRF-Token gar nicht erst.
+  const [apiKey, csrfToken] = await Promise.all([
+    _fetchApiKey(),
+    isMutating ? _fetchCsrfToken() : Promise.resolve(''),
+  ]);
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+    ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
     ...(options?.headers as Record<string, string> | undefined),
   };
 
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
+    credentials: 'include',
     headers,
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-    throw new Error(error.error?.message || `HTTP ${response.status}`);
+    throw new Error(await readErrorMessage(response));
   }
 
   return response.json();
@@ -140,11 +193,6 @@ export async function getPackages(status?: string): Promise<Package[]> {
   return response.data || [];
 }
 
-export async function getPackageById(packageId: string): Promise<Package | null> {
-  const response = await fetchApi<Package>(`/packages/${packageId}`);
-  return response.data || null;
-}
-
 export async function pausePackage(packageId: string): Promise<void> {
   const request: PausePackageRequest = { package_ids: [packageId] };
   await fetchApi<void>('/packages/pause', {
@@ -211,11 +259,6 @@ export async function downloadSearchResult(
   });
 }
 
-export async function getSearchStatus(searchId: string): Promise<{ status: 'pending' | 'completed' | 'failed'; results?: SearchResult[] }> {
-  const response = await fetchApi<{ status: 'pending' | 'completed' | 'failed'; results?: SearchResult[] }>(`/search/status/${searchId}`);
-  return response.data || { status: 'failed' };
-}
-
 // JDownloader API
 export async function getJDownloaderStatus(): Promise<JDownloaderStatus> {
   const response = await fetchApi<JDownloaderStatus>('/jdownloader/status');
@@ -244,21 +287,22 @@ export async function verifyJDownloaderCredentials(
 }
 
 export async function saveJDownloaderConfig(data: SaveJDownloaderRequest): Promise<void> {
-  await fetchApi<void>('/jdownloader/config', {
+  // `/api/jdownloader/save` setzt echte Statuscodes: 400 bei Validierung,
+  // 502 bei Verbindungsfehler. Deshalb nicht das flache `success`-Feld von
+  // `/api/jdownloader/config` auswerten - ein Fehler wirft in fetchApi.
+  const response = await fetchApi<{ success: boolean }>('/jdownloader/save', {
     method: 'POST',
     body: JSON.stringify(data),
   });
+  if (!response.data?.success) {
+    throw new Error('JDownloader settings could not be saved');
+  }
 }
 
 // Statistics API
 export async function getStatistics(): Promise<Statistics | null> {
   const response = await fetchApi<Statistics>('/statistics');
   return response.data || null;
-}
-
-export async function getStatisticsHistory(days = 30): Promise<Statistics['daily_stats']> {
-  const response = await fetchApi<Statistics['daily_stats']>(`/statistics/history?days=${days}`);
-  return response.data || [];
 }
 
 // Notifications API
@@ -280,30 +324,6 @@ export async function testNotification(request: TestNotificationRequest): Promis
     body: JSON.stringify(request),
   });
   return response.data || { success: false, message: 'Test failed' };
-}
-
-export async function addNotificationConfig(config: NotificationConfig): Promise<NotificationConfig> {
-  const response = await fetchApi<NotificationConfig>('/notifications/configs', {
-    method: 'POST',
-    body: JSON.stringify(config),
-  });
-  if (!response.data) throw new Error('Failed to add notification config');
-  return response.data;
-}
-
-export async function updateNotificationConfig(configId: string, config: Partial<NotificationConfig>): Promise<NotificationConfig> {
-  const response = await fetchApi<NotificationConfig>(`/notifications/configs/${configId}`, {
-    method: 'POST',
-    body: JSON.stringify(config),
-  });
-  if (!response.data) throw new Error('Failed to update notification config');
-  return response.data;
-}
-
-export async function deleteNotificationConfig(configId: string): Promise<void> {
-  await fetchApi<void>(`/notifications/configs/${configId}`, {
-    method: 'DELETE',
-  });
 }
 
 // General Settings API
@@ -353,12 +373,17 @@ export async function getHostnamesSettings(): Promise<HostnamesSettings | null> 
 
 export async function saveHostnamesSettings(
   data: Partial<HostnamesSettings>
-): Promise<{ requires_restart?: string[] }> {
-  const response = await fetchApi<{ requires_restart?: string[] }>('/settings/hostnames-config', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-  return response.data || {};
+): Promise<{ requires_restart: string[] }> {
+  // Diese Route legt `requires_restart` flach neben `success`/`message`,
+  // nicht in `data` - deshalb wird hier nicht `response.data` ausgewertet.
+  const response: HostnamesSaveResponse = await fetchApi<HostnamesSettings>(
+    '/settings/hostnames-config',
+    {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }
+  );
+  return { requires_restart: response.requires_restart || [] };
 }
 
 // Advanced Settings API
@@ -372,4 +397,13 @@ export async function saveAdvancedSettings(data: Partial<AdvancedSettings>): Pro
     method: 'POST',
     body: JSON.stringify(data),
   });
+}
+
+// Version API
+export async function getVersion(): Promise<VersionInfo | null> {
+  // Bewusst ohne `?refresh=1`: der Live-Check gegen GitHub kann bis zu 10
+  // Sekunden blockieren, und das darf die Sidebar nicht ausbremsen. `current`
+  // kommt lokal aus `version.json` und ist damit immer vorhanden.
+  const response = await fetchApi<VersionInfo>('/version');
+  return response.data || null;
 }

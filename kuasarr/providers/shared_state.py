@@ -220,7 +220,24 @@ def generate_api_key():
     """Generate and save a new API key."""
     api_key = os.urandom(32).hex()
     Config('API').save("key", api_key)
-    info(f'API key replaced with: "{api_key}!"')
+    # Das Browser-Token mitrotieren. Wer den Master-Key rotiert, tut das
+    # in der Regel, weil er kompromittiert ist - ein stehengebliebenes
+    # Browser-Token wuerde genau dann weiter gueltig bleiben. Wer gezielt
+    # nur die WebUI entwaffnen will, ohne die *arr-Integration zu trennen,
+    # nimmt statt dieser Funktion `POST /regenerate-browser-token`.
+    try:
+        # Lokaler Import: `auth` haengt ueber `utils` an `shared_state`,
+        # ein Import auf Modulebene wuerde in einen Zyklus laufen.
+        from kuasarr.providers.auth import rotate_browser_token
+
+        rotate_browser_token()
+    except Exception as e:
+        info(f'Could not rotate the browser token while regenerating the API key: {e}')
+    # Der Key nicht im Klartext loggen. Die Zeile landet unredigiert in
+    # Container-Logs, die haeufig an Support-Tickets oder Log-Collector
+    # gehen - damit waere der "rotierte" Key weiterhin im Umlauf.
+    info(f'API key replaced with a new one '
+         f'(fingerprint: ...{api_key[-6:]}, {len(api_key)} characters)')
     return api_key
 
 

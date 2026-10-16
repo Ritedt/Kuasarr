@@ -9,13 +9,22 @@ import logging
 from bottle import request, response, redirect
 
 import kuasarr.providers.ui.html_images as images
-from kuasarr.downloads.packages import delete_package, get_packages
+from kuasarr.api.error_handler import error_response
+from kuasarr.downloads.packages import (
+    delete_package,
+    get_links_matching_package_uuid,
+    get_packages,
+)
 from kuasarr.providers import shared_state
 from kuasarr.providers.auth import require_api_key
 from kuasarr.providers.ui.html_templates import render_button, render_centered_html
 from kuasarr.providers.ui.spa import try_serve_spa
 
 logger = logging.getLogger(__name__)
+
+# JDownloader-Cleanup-Modus, der die Dateien auf der Platte laesst.
+# delete_package() verdrahtet dagegen fest REMOVE_LINKS_AND_DELETE_FILES.
+_KEEP_FILES_MODE = "REMOVE_LINKS_ONLY"
 
 _CATEGORY_EMOJI = {
     "movies": "🎬",
@@ -370,6 +379,146 @@ def _render_not_connected_page() -> str:
     return render_centered_html(content)
 
 
+def _read_json_body() -> dict:
+    """Liest den JSON-Body und stellt sicher, dass es ein Objekt ist.
+
+    Die Meldung bleibt bewusst statisch: der Originalfehler von
+    ``json.loads`` nennt Zeichenposition und Byte-Offset, was fuer den
+    Aufrufer nichts beitraegt, aber durch die Fehlerbehandlung der drei
+    Aktionsrouten (`_api_error(400, str(exc))`) nach aussen wandern wuerde.
+    Die Position steht dafuer im Log.
+    """
+    try:
+        data = json.loads(request.body.read().decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        logger.debug("Ungueltiger JSON-Body: %s", exc)
+        raise ValueError("Request body is not valid JSON") from exc
+    if not isinstance(data, dict):
+        raise ValueError("Request body must be a JSON object")
+    return data
+
+
+def _normalize_package_ids(raw_ids) -> list:
+    """Macht aus einer ID-Angabe eine Liste nicht-leerer IDs.
+
+    Akzeptiert eine Liste (React-Client, Mehrfachauswahl), einen einzelnen
+    String (Legacy-Inline-JS) und eine Zahl. Nicht-stringfaehige Eintraege
+    werden verworfen, damit ein Unsinn im Payload nicht als Paket-ID bei
+    JDownloader landet.
+    """
+    if isinstance(raw_ids, bool):
+        return []
+    if isinstance(raw_ids, (str, int)):
+        raw_ids = [raw_ids]
+    if not isinstance(raw_ids, (list, tuple)):
+        return []
+
+    package_ids = []
+    for raw_id in raw_ids:
+        if isinstance(raw_id, bool) or not isinstance(raw_id, (str, int)):
+            continue
+        cleaned = str(raw_id).strip()
+        if cleaned:
+            package_ids.append(cleaned)
+    return package_ids
+
+
+def _parse_action(data: dict) -> tuple:
+    """Bestimmt, was der Aufrufer tun will.
+
+    :return: (package_ids, global_aktion)
+    :raises ValueError: wenn weder IDs noch ein globales Opt-in erkennbar sind
+
+    Nur ``package_ids`` (bzw. das Legacy-Feld ``package_id``) oder ein
+    ausdruecklich gesetztes ``global`` loesen eine Aktion aus. Ein Tippfehler
+    im Feldnamen darf nie die komplette Queue anhalten - genau das passierte
+    hier, weil ein nicht gefundenes ``package_id`` still in den globalen
+    Zweig fiel und die ganze Downloadliste stoppte.
+    """
+    raw_ids = data.get("package_ids")
+    if raw_ids is None:
+        raw_ids = data.get("package_id")
+
+    package_ids = _normalize_package_ids(raw_ids)
+    if package_ids:
+        return package_ids, False
+
+    if data.get("global") is True:
+        return [], True
+
+    raise ValueError(
+        "No package action given - send 'package_ids' (list of package IDs) "
+        "or 'global': true"
+    )
+
+
+def _api_error(status: int, message: str) -> str:
+    """Fehlerantwort mit passendem Statuscode in der Form von error_handler."""
+    response.content_type = "application/json"
+    response.status = status
+    return json.dumps(error_response(status, message))
+
+
+def _jd_failure(action: str, exc: Exception) -> str:
+    """502 bei einem JDownloader-Fehler - ohne das Exception-Detail nach aussen.
+
+    Die Meldung einer Py4J-/Netzwerk-Exception enthaelt Pfade, Ports und
+    gelegentlich Zugangsdaten. Das gehoert ins Log, nicht in eine Antwort,
+    die ein Browser anzeigt.
+    """
+    logger.warning("packages: %s failed: %s", action, exc, exc_info=True)
+    return _api_error(502, f"JDownloader request failed during {action}")
+
+
+def _known_package_ids(downloads: dict) -> set:
+    """Alle Paket-IDs, die JDownloader bzw. die Kuasarr-DBs aktuell kennen."""
+    known = set()
+    for location in ("queue", "history"):
+        for package in downloads.get(location, []):
+            nzo_id = package.get("nzo_id")
+            if nzo_id:
+                known.add(nzo_id)
+    return known
+
+
+def _delete_keeping_files(device, package_id: str, downloads: dict) -> bool:
+    """Loescht ein Paket, laesst die Dateien aber auf der Platte.
+
+    ``delete_package()`` verdrahtet ``REMOVE_LINKS_AND_DELETE_FILES`` fest und
+    kann den Cleanup-Modus nicht waehlen. Der Client fragt ``delete_files``
+    aber ab, deshalb geht dieser Pfad direkt ueber ``cleanup()`` mit
+    ``REMOVE_LINKS_ONLY``.
+    """
+    for location in ("queue", "history"):
+        for package in downloads.get(location, []):
+            if package.get("nzo_id") != package_id:
+                continue
+
+            if package.get("type") == "linkgrabber":
+                container = device.linkgrabber
+            elif package.get("type") == "downloader":
+                container = device.downloads
+            else:
+                # Geschuetzte/fehlgeschlagene Pakete haben keine JD-Links -
+                # fuer sie bleibt nur die DB-Bereinigung.
+                container = None
+
+            if container is not None:
+                link_ids = get_links_matching_package_uuid(
+                    package, container.query_links()
+                )
+                if link_ids:
+                    container.cleanup(
+                        "DELETE_ALL", _KEEP_FILES_MODE, "SELECTED",
+                        link_ids, [package.get("uuid")],
+                    )
+
+            shared_state.get_db("failed").delete(package_id)
+            shared_state.get_db("protected").delete(package_id)
+            return True
+    return False
+
+
 def setup_packages_routes(app) -> None:
     @app.get("/packages")
     def packages_page():
@@ -653,7 +802,7 @@ def setup_packages_routes(app) -> None:
                             showStatusMessage('Package deleted', 'success');
                             refreshContent();
                         }} else {{
-                            showStatusMessage('Delete failed: ' + (data.error || 'Unknown'), 'error');
+                            showStatusMessage('Delete failed: ' + ((data.error && data.error.message) || 'Unknown'), 'error');
                         }}
                     }}).catch(function(e) {{
                         showStatusMessage('Delete failed: ' + e, 'error');
@@ -821,79 +970,124 @@ def setup_packages_routes(app) -> None:
     @app.post("/api/packages/delete")
     @require_api_key
     def packages_delete():
-        """Delete a package by ID. POST replaces the old GET route to prevent CSRF."""
+        """Delete packages by ID.
+
+        POST replaces the old GET route to prevent CSRF. Accepts
+        ``package_ids`` (list, what the React client sends) as well as the
+        legacy scalar ``package_id``. ``delete_files`` defaults to True;
+        False keeps the files on disk (JDownloader mode REMOVE_LINKS_ONLY).
+        """
         response.content_type = "application/json"
         device = shared_state.values.get("device")
         if not device:
-            return json.dumps({"success": False, "error": "Not connected"})
+            return _api_error(502, "JDownloader is not connected")
 
         try:
-            data = json.loads(request.body.read().decode("utf-8"))
-            package_id = data.get("package_id")
-        except (ValueError, UnicodeDecodeError) as exc:
-            logger.debug("delete: invalid JSON body — %s", exc)
-            return json.dumps({"success": False, "error": "Invalid JSON"})
+            data = _read_json_body()
+            package_ids, delete_all = _parse_action(data)
+        except ValueError as exc:
+            logger.debug("delete: %s", exc)
+            return _api_error(400, str(exc))
 
-        if not package_id:
-            return json.dumps({"success": False, "error": "Missing package_id"})
+        if delete_all:
+            # Bewusst nicht angeboten: "alles loeschen" waere hier ein
+            # Ein-Klick-Datenverlust fuer die komplette Queue.
+            return _api_error(400, "Deleting all packages at once is not supported")
 
+        delete_files = data.get("delete_files", True)
+        if not isinstance(delete_files, bool):
+            return _api_error(400, "'delete_files' must be a boolean")
+
+        # Vor dem Loeschen gegen die aktuelle Paketliste pruefen. Ohne diese
+        # Pruefung meldet die UI auch dann Erfolg, wenn das Paket schon
+        # gar nicht mehr existiert - und der Nutzer glaubt, es sei weg.
         try:
-            success = delete_package(shared_state, package_id)
-            return json.dumps({"success": success})
+            downloads = get_packages(shared_state)
         except Exception as exc:
-            logger.debug("delete failed: %s", exc)
-            return json.dumps({"success": False, "error": str(exc)})
+            logger.debug("delete: package lookup failed: %s", exc)
+            return _jd_failure("delete", exc)
+
+        known = _known_package_ids(downloads)
+        unknown = [pid for pid in package_ids if pid not in known]
+        if unknown:
+            return _api_error(404, "Unknown package id(s): " + ", ".join(unknown))
+
+        for package_id in package_ids:
+            try:
+                if delete_files:
+                    deleted = delete_package(shared_state, package_id)
+                else:
+                    deleted = _delete_keeping_files(device, package_id, downloads)
+            except Exception as exc:
+                logger.debug("delete failed: %s", exc)
+                return _jd_failure("delete", exc)
+
+            if not deleted:
+                logger.warning("packages: delete refused for %s", package_id)
+                return _api_error(502, "JDownloader could not delete the package")
+
+        return json.dumps({"success": True})
 
     @app.post("/api/packages/pause")
     @require_api_key
     def packages_pause():
-        """Pause a specific package or the global download controller."""
+        """Pause the packages in ``package_ids``.
+
+        Only an explicit ``{"global": true}`` pauses the whole queue via the
+        download controller - a missing or misspelled field is a 400, never a
+        global pause.
+        """
         response.content_type = "application/json"
         device = shared_state.values.get("device")
         if not device:
-            return json.dumps({"success": False, "error": "Not connected"})
+            return _api_error(502, "JDownloader is not connected")
 
         try:
-            data = json.loads(request.body.read().decode("utf-8"))
-            package_id = data.get("package_id")
-        except (ValueError, UnicodeDecodeError) as exc:
-            logger.debug("pause: invalid JSON body — %s", exc)
-            return json.dumps({"success": False, "error": "Invalid JSON"})
+            data = _read_json_body()
+            package_ids, pause_all = _parse_action(data)
+        except ValueError as exc:
+            logger.debug("pause: %s", exc)
+            return _api_error(400, str(exc))
 
         try:
-            if package_id:
-                device.downloads.set_enabled(package_ids=[package_id], enabled=False)
-            else:
+            if pause_all:
                 device.downloadcontroller.set_pause(True)
+            else:
+                device.downloads.set_enabled(package_ids=package_ids, enabled=False)
         except Exception as exc:
             logger.debug("pause failed: %s", exc)
-            return json.dumps({"success": False, "error": str(exc)})
+            return _jd_failure("pause", exc)
 
         return json.dumps({"success": True})
 
     @app.post("/api/packages/resume")
     @require_api_key
     def packages_resume():
-        """Resume a specific package or the global download controller."""
+        """Resume the packages in ``package_ids``.
+
+        Only an explicit ``{"global": true}`` resumes the whole queue via the
+        download controller - a missing or misspelled field is a 400, never a
+        global resume.
+        """
         response.content_type = "application/json"
         device = shared_state.values.get("device")
         if not device:
-            return json.dumps({"success": False, "error": "Not connected"})
+            return _api_error(502, "JDownloader is not connected")
 
         try:
-            data = json.loads(request.body.read().decode("utf-8"))
-            package_id = data.get("package_id")
-        except (ValueError, UnicodeDecodeError) as exc:
-            logger.debug("resume: invalid JSON body — %s", exc)
-            return json.dumps({"success": False, "error": "Invalid JSON"})
+            data = _read_json_body()
+            package_ids, resume_all = _parse_action(data)
+        except ValueError as exc:
+            logger.debug("resume: %s", exc)
+            return _api_error(400, str(exc))
 
         try:
-            if package_id:
-                device.downloads.set_enabled(package_ids=[package_id], enabled=True)
-            else:
+            if resume_all:
                 device.downloadcontroller.set_pause(False)
+            else:
+                device.downloads.set_enabled(package_ids=package_ids, enabled=True)
         except Exception as exc:
             logger.debug("resume failed: %s", exc)
-            return json.dumps({"success": False, "error": str(exc)})
+            return _jd_failure("resume", exc)
 
         return json.dumps({"success": True})

@@ -283,8 +283,8 @@ def get_imdb_id_from_title(shared_state, title, language="de"):
         if title_item["timestamp"] > datetime.now() - timedelta(seconds=threshold):
             return title_item["imdb_id"]
 
-    # Tier 1/2: JSON API search (api.imdbapi.dev / IMDb CDN) before imdb.com/find.
-    # This function previously had NO fallback if imdb.com/find failed.
+    # JSON API search (IMDb CDN) before imdb.com/find. This function previously
+    # had NO fallback if imdb.com/find failed.
     try:
         from kuasarr.providers import imdb_metadata_api
         api_id = imdb_metadata_api.search_imdb_id(shared_state, title, ttype)

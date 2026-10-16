@@ -7,6 +7,7 @@ import json
 import random
 import re
 import xml.dom.minidom
+from typing import List, Optional
 from urllib.parse import urlparse
 
 import dukpy
@@ -21,8 +22,11 @@ from kuasarr.constants import (
     FILECRYPT_POW_SOLVE_ATTEMPTS,
     FILECRYPT_POW_REQUEST_WAIT_SECONDS,
     FILECRYPT_POW_TAB_VERIFY_SECONDS,
+    HTTP_DEFAULT_TIMEOUT_SECONDS,
     get_flaresolverr_pow_timeout,
+    get_timeout,
 )
+from kuasarr.providers.network.origin_guard import same_origin_guard_for
 from kuasarr.providers.network.cloudflare import (
     FlareSolverrResponse,
     is_cloudflare_challenge,
@@ -310,6 +314,61 @@ class CNL:
         return urls
 
 
+def narrow_cnl_payload(session, url: str, headers: dict, secret: Optional[str],
+                       season: str, episode: str, crypted_data: List[str],
+                       title: str) -> List[str]:
+    """Narrow a CNL payload down to one episode, if FileCrypt still answers that.
+
+    ``/_CNL/<secret>.html?season=&episode=`` is a convenience filter on top of
+    the payload that is already embedded in the page's cnlform: it returns the
+    same link set minus the episodes that were not asked for. It is therefore
+    optional, and it has to stay optional - on the live site it answers HTTP 200
+    with an empty body for every episode of every container, and ``json.loads``
+    of that raises ``JSONDecodeError``.
+
+    That exception used to escape into the bare ``except:`` that wraps the CNL
+    branch, which reported "Click'n'Load not found! Falling back to DLC..." even
+    though the payload had been read correctly two lines earlier. The container
+    then went through DLC and into the Circle-Captcha fallback for a captcha it
+    did not have. So a failed *filter* must leave the unfiltered payload alone.
+
+    Returns ``crypted_data`` unchanged unless the filter answers with usable
+    JSON, in which case the link set is replaced by the narrowed one.
+    """
+    if not (season and episode and secret):
+        return crypted_data
+
+    domain = urlparse(url).netloc
+    link = f"https://{domain}/_CNL/{secret}.html?{season}&{episode}"
+
+    try:
+        result = session.post(link, headers=headers,
+                              timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
+    except requests.RequestException as e:
+        debug(f"FileCrypt: CNL-Episodenfilter nicht erreichbar ({e}), "
+              f"ungefilterte Links werden verwendet.")
+        return crypted_data
+
+    # An empty body is the normal answer from this endpoint; only real JSON is
+    # worth parsing.
+    if result.status_code != 200 or not result.text.strip():
+        debug(f"FileCrypt: CNL-Episodenfilter lieferte keine Daten "
+              f"(HTTP {result.status_code}, {len(result.text)} Bytes), "
+              f"ungefilterte Links werden verwendet.")
+        return crypted_data
+
+    try:
+        data = json.loads(result.text)
+        if data.get("success") and data["data"][0] and data["data"][1]:
+            return [crypted_data[0], data["data"][0], data["data"][1], title]
+    except (ValueError, KeyError, IndexError, TypeError) as e:
+        debug(f"FileCrypt: CNL-Episodenfilter lieferte keine auswertbaren "
+              f"Daten ({e}), ungefilterte Links werden verwendet.")
+        return crypted_data
+
+    return crypted_data
+
+
 class DLC:
     def __init__(self, shared_state, dlc_file):
         self.shared_state = shared_state
@@ -444,8 +503,56 @@ def _parse_pow_result(execute_js_result):
     return payload if isinstance(payload, dict) else None
 
 
+def _cookie_applies_to(cookie, host):
+    """Whether a cookie's domain covers ``host``, with or without a leading dot."""
+    domain = (cookie.domain or '').lstrip('.').lower()
+    return bool(domain) and (domain == host or host.endswith(f'.{domain}'))
+
+
+def get_filecrypt_phpsessid(session, url=None):
+    """
+    Read the container session out of a jar that may hold more than one PHPSESSID.
+
+    ``requests`` raises ``CookieConflictError`` as soon as two cookies share a name
+    and no domain or path narrows the lookup down, so a bare ``jar.get('PHPSESSID')``
+    turns an ambiguity into an aborted link extraction. Pick the cookie that
+    actually applies to the container origin instead, and never raise.
+    """
+    candidates = [cookie for cookie in session.cookies if cookie.name == 'PHPSESSID']
+    if not candidates:
+        return None
+
+    if url:
+        host = (urlparse(url).hostname or '').lower()
+        matching = [cookie for cookie in candidates if _cookie_applies_to(cookie, host)]
+        # Of several applicable cookies the last one wins: it is the most recently
+        # set, which is the session the browser last handed us.
+        if matching:
+            return matching[-1].value
+
+    return candidates[-1].value
+
+
 def _apply_pow_result(session, response):
-    """Carry the browser session's cookies back into the requests session."""
+    """
+    Carry the browser session's cookies back into the requests session.
+
+    They replace rather than merge: this browser is the one that cleared the PoW,
+    so its PHPSESSID is the session FileCrypt will honour from here on. Merging
+    left the pre-PoW cookie in the jar next to it - requests reports the solved
+    domain as ".filecrypt.cc" where it had stored "filecrypt.cc", so the two never
+    replaced each other. Every later read then raised CookieConflictError and every
+    later request carried an ambiguous session, which FileCrypt answered with an
+    anonymous page: no Click'n'Load form and a DLC endpoint without a payload.
+    Nothing is lost by replacing - the browser was seeded with the whole jar.
+    """
+    if not response.cookies:
+        # Nothing came back, so there is no better session to switch to; clearing
+        # would only leave the container with no session at all.
+        debug("Filecrypt PoW returned no cookies, keeping the current session.")
+        return
+
+    session.cookies.clear()
     for cookie in response.cookies:
         try:
             session.cookies.set(
@@ -567,6 +674,11 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
     session, headers, output = ensure_session_cf_bypassed(info, shared_state, session, url, headers)
     if not session or not output:
         return False
+
+    # The password and the captcha token are posted to this session below, and
+    # requests follows 302 by default while carrying the body along. Pin the
+    # session to the container's own origin so neither can be redirected away.
+    session = same_origin_guard_for(session, output.url)
 
     soup = BeautifulSoup(output.text, 'html.parser')
 
@@ -821,20 +933,15 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
                     title
                 ]
                 if episode and season:
-                    domain = urlparse(url).netloc
-                    filtered_cnl_secret = soup.find("input", {"name": "hidden_cnl_id"}).attrs["value"]
-                    filtered_cnl_link = f"https://{domain}/_CNL/{filtered_cnl_secret}.html?{season}&{episode}"
-                    filtered_cnl_result = session.post(filtered_cnl_link,
-                                                       headers=headers)
-                    if filtered_cnl_result.status_code == 200:
-                        filtered_cnl_data = json.loads(filtered_cnl_result.text)
-                        if filtered_cnl_data["success"]:
-                            crypted_data = [
-                                crypted_data[0],
-                                filtered_cnl_data["data"][0],
-                                filtered_cnl_data["data"][1],
-                                title
-                            ]
+                    # Optional filter only - see narrow_cnl_payload. A failed
+                    # filter must leave the payload that is already in the page
+                    # alone instead of aborting the CNL branch.
+                    cnl_secret_el = soup.find("input", {"name": "hidden_cnl_id"})
+                    crypted_data = narrow_cnl_payload(
+                        session, url, headers,
+                        cnl_secret_el.get("value") if cnl_secret_el else None,
+                        season, episode, crypted_data, title,
+                    )
                 links.extend(CNL(crypted_data).decrypt())
             except:
                 if "The owner of this folder has deactivated all hosts in this container in their settings." in soup.text:
@@ -857,7 +964,11 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
                     info("DLC not found! Falling back to first available download Button...")
 
                     base_url = urlparse(url).netloc
-                    phpsessid = session.cookies.get('PHPSESSID')
+                    # Keep the container's own scheme, see the same line in the
+                    # dispatcher: an "http://" URL built from the bare netloc is
+                    # answered with a redirect to the same host over https.
+                    base_scheme = urlparse(url).scheme or "https"
+                    phpsessid = get_filecrypt_phpsessid(session, url)
                     if not phpsessid:
                         info("PHPSESSID cookie not found! Cannot proceed with download links extraction.")
                         return False
@@ -874,7 +985,7 @@ def get_filecrypt_links(shared_state, token, title, url, password=None, mirror=N
                         row = button.find_parent('tr')
                         mirror_tag = row.find('a', class_='external_link') if row else None
                         mirror_name = mirror_tag.get_text(strip=True) if mirror_tag else 'unknown'
-                        full_url = f"http://{base_url}/Link/{link_id}.html"
+                        full_url = f"{base_scheme}://{base_url}/Link/{link_id}.html"
                         results.append((full_url, mirror_name))
 
                     sorted_results = sorted(results, key=lambda x: 0 if 'rapidgator' in x[1].lower() else 1)

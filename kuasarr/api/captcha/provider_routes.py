@@ -4,6 +4,9 @@
 
 """Provider-specific CAPTCHA routes - Junkies, KeepLinks, ToLink, Cutcaptcha, Circle."""
 
+import html
+from urllib.parse import quote
+
 from bottle import request, response
 
 import kuasarr.providers.ui.html_images as images
@@ -33,6 +36,11 @@ def setup_provider_routes(app):
         package_id = payload.get("package_id")
         check_package_exists(package_id)
         title = payload.get("title")
+        # Der Release-Titel stammt von der gescrapten Seite und ist damit
+        # fremdbestimmt. Er bleibt unveraendert fuer die Entschluesselung
+        # (CNL braucht exakt den Original-Titel) und wird fuer die
+        # Ausgabe separat escaped.
+        safe_title = html.escape(str(title or ""), quote=False)
         password = payload.get("password")
         urls = payload.get("links") or []
 
@@ -46,7 +54,7 @@ def setup_provider_routes(app):
         <html>
         <body>
         <h1><img src="{images.logo}" type="image/png" alt="Kuasarr logo" class="logo"/>Kuasarr</h1>
-        <p><b>Package:</b> {title}</p>
+        <p><b>Package:</b> {safe_title}</p>
         {render_bypass_section(first_url, package_id, title, password)}
         <p>
             {render_button("Delete Package", "secondary", {"onclick": f"location.href='/captcha/delete/{package_id}'"})}
@@ -67,6 +75,11 @@ def setup_provider_routes(app):
         package_id = payload.get("package_id")
         check_package_exists(package_id)
         title = payload.get("title")
+        # Der Release-Titel stammt von der gescrapten Seite und ist damit
+        # fremdbestimmt. Er bleibt unveraendert fuer die Entschluesselung
+        # (CNL braucht exakt den Original-Titel) und wird fuer die
+        # Ausgabe separat escaped.
+        safe_title = html.escape(str(title or ""), quote=False)
         password = payload.get("password")
         urls = payload.get("links") or []
 
@@ -80,7 +93,7 @@ def setup_provider_routes(app):
         <html>
         <body>
         <h1><img src="{images.logo}" type="image/png" alt="Kuasarr logo" class="logo"/>Kuasarr</h1>
-        <p><b>Package:</b> {title}</p>
+        <p><b>Package:</b> {safe_title}</p>
         {render_bypass_section(first_url, package_id, title, password, provider_name="KeepLinks", storage_key="hideSetupInstructionsKeeplinks", userscript_url="/captcha/keeplinks.user.js")}
         <p>
             {render_button("Delete Package", "secondary", {"onclick": f"location.href='/captcha/delete/{package_id}'"})}
@@ -101,6 +114,11 @@ def setup_provider_routes(app):
         package_id = payload.get("package_id")
         check_package_exists(package_id)
         title = payload.get("title")
+        # Der Release-Titel stammt von der gescrapten Seite und ist damit
+        # fremdbestimmt. Er bleibt unveraendert fuer die Entschluesselung
+        # (CNL braucht exakt den Original-Titel) und wird fuer die
+        # Ausgabe separat escaped.
+        safe_title = html.escape(str(title or ""), quote=False)
         password = payload.get("password")
         urls = payload.get("links") or []
 
@@ -114,7 +132,7 @@ def setup_provider_routes(app):
         <html>
         <body>
         <h1><img src="{images.logo}" type="image/png" alt="Kuasarr logo" class="logo"/>Kuasarr</h1>
-        <p><b>Package:</b> {title}</p>
+        <p><b>Package:</b> {safe_title}</p>
         {render_bypass_section(first_url, package_id, title, password, provider_name="ToLink", storage_key="hideSetupInstructionsTolink", userscript_url="/captcha/tolink.user.js")}
         <p>
             {render_button("Delete Package", "secondary", {"onclick": f"location.href='/captcha/delete/{package_id}'"})}
@@ -136,6 +154,11 @@ def setup_provider_routes(app):
         package_id = payload.get("package_id")
         check_package_exists(package_id)
         title = payload.get("title")
+        # Der Release-Titel stammt von der gescrapten Seite und ist damit
+        # fremdbestimmt. Er bleibt unveraendert fuer die Entschluesselung
+        # (CNL braucht exakt den Original-Titel) und wird fuer die
+        # Ausgabe separat escaped.
+        safe_title = html.escape(str(title or ""), quote=False)
         password = payload.get("password")
         urls = payload.get("links") or []
 
@@ -152,7 +175,8 @@ def setup_provider_routes(app):
             added = shared_state.download_package(
                 decrypted_links,
                 title,
-                password
+                password,
+                package_id
             )
             
             if added:
@@ -181,7 +205,7 @@ def setup_provider_routes(app):
             <html>
             <body>
             <h1><img src="{images.logo}" type="image/png" alt="Kuasarr logo" class="logo"/>Kuasarr</h1>
-            <p><b>Package:</b> {title}</p>
+            <p><b>Package:</b> {safe_title}</p>
             <p><b>Error:</b> {error_msg}</p>
             <p>
                 {render_button("Delete Package", "secondary", {"onclick": f"location.href='/captcha/delete/{package_id}'"})}
@@ -220,6 +244,11 @@ def setup_provider_routes(app):
         package_id = payload.get("package_id")
         check_package_exists(package_id)
         title = payload.get("title")
+        # Der Release-Titel stammt von der gescrapten Seite und ist damit
+        # fremdbestimmt. Er bleibt unveraendert fuer die Entschluesselung
+        # (CNL braucht exakt den Original-Titel) und wird fuer die
+        # Ausgabe separat escaped.
+        safe_title = html.escape(str(title or ""), quote=False)
         password = payload.get("password")
         desired_mirror = payload.get("mirror")
         prioritized_links = payload.get("links")
@@ -231,7 +260,13 @@ def setup_provider_routes(app):
         if len(prioritized_links) > 1:
             for link in prioritized_links:
                 if "filecrypt." in link[0]:
-                    link_options += f'<option value="{link[0]}">{link[1]}</option>'
+                    # URL und Mirror-Name kommen von der gescrapten Seite. Ohne
+                    # Escaping beendet ein Anfuehrungszeichen im Namen das
+                    # value-Attribut und der Rest landet als Markup im Dokument.
+                    link_options += (
+                        f'<option value="{html.escape(str(link[0]), quote=True)}">'
+                        f'{html.escape(str(link[1]), quote=False)}</option>'
+                    )
             link_select = f'''<div id="mirrors-select">
                     <label for="link-select">Mirror:</label>
                     <select id="link-select">
@@ -246,7 +281,10 @@ def setup_provider_routes(app):
                 </script>
             '''
         else:
-            link_select = f'<div id="mirrors-select">Mirror: <b>{prioritized_links[0][1]}</b></div>'
+            link_select = (
+            f'<div id="mirrors-select">Mirror: <b>'
+            f'{html.escape(str(prioritized_links[0][1]), quote=False)}</b></div>'
+        )
 
         solve_another_html = render_button("Solve another CAPTCHA", "primary", {"onclick": "location.href='/captcha'"})
         back_button_html = render_button("Back", "secondary", {"onclick": "location.href='/'"})
@@ -256,7 +294,7 @@ def setup_provider_routes(app):
 
         content = render_centered_html(r'''
             <script type="text/javascript">
-                var api_key = "''' + captcha_values()["api_key"] + r'''";
+                var api_key = "''' + js_single_quoted_string_safe(str(captcha_values()["api_key"])) + r'''";
                 var endpoint = '/' + window.location.pathname.split('/')[1] + '/' + api_key + '.html';
                 var solveAnotherHtml = `<p>''' + solve_another_html + r'''</p><p>''' + back_button_html + r'''</p>`;
                 var noMoreHtml = `<p><b>No more CAPTCHAs</b></p><p>''' + back_button_html + r'''</p>`;
@@ -283,10 +321,10 @@ def setup_provider_routes(app):
                         body: JSON.stringify({ 
                             token: token,
                             ''' + f'''package_id: '{package_id}',
-                            title: '{js_single_quoted_string_safe(title)}',
+                            title: '{js_single_quoted_string_safe(str(title or ""))}',
                             link: link,
-                            password: '{password}',
-                            mirror: '{desired_mirror}',
+                            password: '{js_single_quoted_string_safe(str(password or ""))}',
+                            mirror: '{js_single_quoted_string_safe(str(desired_mirror or ""))}',
                         ''' + '''})
                     })
                     .then(response => response.json())
@@ -311,10 +349,10 @@ def setup_provider_routes(app):
                 ''' + captcha_js() + f'''</script>
                 <div>
                     <h1><img src="{images.logo}" type="image/png" alt="Kuasarr logo" class="logo"/>Kuasarr</h1>
-                    <p id="package-title" style="max-width: 370px; word-wrap: break-word; overflow-wrap: break-word;"><b>Package:</b> {title}</p>
+                    <p id="package-title" style="max-width: 370px; word-wrap: break-word; overflow-wrap: break-word;"><b>Package:</b> {safe_title}</p>
                     <div id="captcha-key"></div>
                     {link_select}<br><br>
-                    <input type="hidden" id="link-hidden" value="{prioritized_links[0][0]}" />
+                    <input type="hidden" id="link-hidden" value="{html.escape(str(prioritized_links[0][0]), quote=True)}" />
                     <div class="captcha-container">
                         <div id="puzzle-captcha" aria-style="mobile">
                             <strong>Your adblocker prevents the captcha from loading. Disable it!</strong>
@@ -352,12 +390,20 @@ def setup_provider_routes(app):
         check_package_exists(package_id)
         session_id = payload.get("session")
         title = payload.get("title", "Unknown Package")
+        safe_title = html.escape(str(title or ""), quote=False)
         password = payload.get("password", "")
         original_url = payload.get("original_url", "")
         url = payload.get("links")[0] if payload.get("links") else None
 
         if not url or not session_id or not package_id:
             return render_fail("Missing required parameters")
+
+        # URL, session_id und package_id stehen in Query-Strings. Sie zu
+        # kodieren ist hier nicht nur Kosmetik: unkodiert beendet ein
+        # Anfuehrungszeichen aus der gescrapten Seite das action- bzw.
+        # src-Attribut, und der Rest landet als Markup im Dokument.
+        form_query = f"url={quote(str(url))}&session_id={quote(str(session_id))}"
+        form_query_padded = f"{form_query}&package_id={quote(str(package_id))}"
 
         bypass_url = original_url if original_url else url
         bypass_section = render_bypass_section(bypass_url, package_id, title, password)
@@ -367,10 +413,10 @@ def setup_provider_routes(app):
         <html>
           <body>
             <h1><img src="{images.logo}" type="image/png" alt="Kuasarr logo" class="logo"/>Kuasarr</h1>
-            <p><b>Package:</b> {title}</p>
+            <p><b>Package:</b> {safe_title}</p>
             <h3>Solve CAPTCHA</h3>
-            <form action="/captcha/decrypt-filecrypt-circle?url={url}&session_id={session_id}&package_id={package_id}" method="post">
-              <input type="image" src="/captcha/circle.php?url={url}&session_id={session_id}" name="button" alt="Circle CAPTCHA">
+            <form action="/captcha/decrypt-filecrypt-circle?{form_query_padded}" method="post">
+              <input type="image" src="/captcha/circle.php?{form_query}" name="button" alt="Circle CAPTCHA">
             </form>
             <p>
                 {render_button("Delete Package", "secondary", {"onclick": f"location.href='/captcha/delete/{package_id}'"})}

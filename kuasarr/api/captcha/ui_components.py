@@ -4,10 +4,12 @@
 
 """UI components for CAPTCHA pages."""
 
+import html
 from urllib.parse import quote
 
 from bottle import request
 
+from kuasarr.api.captcha.helpers import js_single_quoted_string_safe
 from kuasarr.providers.ui.html_templates import render_button
 
 
@@ -16,13 +18,37 @@ def render_bypass_section(url, package_id, title, password, provider_name="FileC
     base_url = request.urlparts.scheme + '://' + request.urlparts.netloc
     transfer_url = f"{base_url}/captcha/quick-transfer"
 
+    # None kommt hier regelmaessig vor: ein FileCrypt-Container ohne Passwort
+    # wird mit leerem Passwort gespeichert, und ein fehlender Schluessel
+    # liefert ebenfalls None. quote() akzeptiert nur str - ohne das hier wird
+    # die CAPTCHA-Seite zur 500, und zwar bei genau den Links, die man
+    # entschluesseln wollte.
     url_with_quick_transfer_params = (
         f"{url}?"
         f"transfer_url={quote(transfer_url)}&"
-        f"pkg_id={quote(package_id)}&"
-        f"pkg_title={quote(title)}&"
-        f"pkg_pass={quote(password)}"
+        f"pkg_id={quote(str(package_id or ''))}&"
+        f"pkg_title={quote(str(title or ''))}&"
+        f"pkg_pass={quote(str(password or ''))}"
     )
+
+    # Der Wert landet in einem onclick-Attribut, das JavaScript ausfuehrt.
+    # HTML-Escaping allein reicht da nicht: der Browser dekodiert `&#x27;`
+    # zurueck zu `'` *bevor* JS die Zeile parst, ein einfaches
+    # Anfuehrungszeichen in der Container-URL beendet den String also und
+    # der Rest der URL wird ausgefuehrt. Deshalb wird hier fuer den
+    # JS-Kontext escaped - render_button escaped danach noch einmal fuer das
+    # Attribut, was sich harmlos ueberlagert.
+    onclick_url = js_single_quoted_string_safe(url_with_quick_transfer_params)
+
+    # The release title and the container password come from the scraped page,
+    # so they are attacker-controlled: a hostile release name must not be able
+    # to close the attribute it is written into. Escaping happens before the
+    # value is handed to render_button, which escapes the attribute again - the
+    # double pass is harmless and keeps this call site readable.
+    safe_provider_name = html.escape(str(provider_name), quote=False)
+    safe_package_id = html.escape(str(package_id), quote=True)
+    safe_title = html.escape(str(title), quote=True)
+    safe_password = html.escape(str(password), quote=True)
 
     submit_button = render_button("Submit", "primary", {"type": "submit"})
 
@@ -35,7 +61,7 @@ def render_bypass_section(url, package_id, title, password, provider_name="FileC
             <div class="info-box">
                 <h3>ℹ️ How This Works:</h3>
                 <p style="margin-bottom: 0.5rem; font-size: 0.9rem;">
-                    1. Click the button below to open {provider_name} directly
+                    1. Click the button below to open {safe_provider_name} directly
                 </p>
                 <p style="margin-top: 0; margin-bottom: 0.5rem; font-size: 0.9rem;">
                     2. Solve any CAPTCHAs on their site to reveal the download links
@@ -52,7 +78,7 @@ def render_bypass_section(url, package_id, title, password, provider_name="FileC
                     <a href="https://www.tampermonkey.net/" target="_blank" rel="noopener noreferrer">1. Install Tampermonkey</a>
                 </p>
                 <p style="margin-top: 0; margin-bottom: 0.75rem; font-size: 0.9rem;">
-                    <a href="{userscript_url}" target="_blank">2. Install the {provider_name} userscript</a>
+                    <a href="{userscript_url}" target="_blank">2. Install the {safe_provider_name} userscript</a>
                 </p>
                 <p style="margin-top: 0;">
                     <button id="hide-setup-btn" type="button" class="btn-subtle">
@@ -69,7 +95,7 @@ def render_bypass_section(url, package_id, title, password, provider_name="FileC
             </div>
 
             <p style="text-align: center;">
-                {render_button(f"Open {provider_name} & Get Download Links", "primary", {"onclick": f"window.open('{url_with_quick_transfer_params}', '_self')"})}
+                {render_button(f"Open {safe_provider_name} & Get Download Links", "primary", {"onclick": f"window.open('{onclick_url}', '_self')"})}
             </p>
 
             <!-- Manual submission - collapsible -->
@@ -81,9 +107,9 @@ def render_bypass_section(url, package_id, title, password, provider_name="FileC
                             If the userscript doesn't work, you can manually paste the links below:
                         </p>
                         <form id="bypass-form" action="/captcha/bypass-submit" method="post" enctype="multipart/form-data">
-                            <input type="hidden" name="package_id" value="{package_id}" />
-                            <input type="hidden" name="title" value="{title}" />
-                            <input type="hidden" name="password" value="{password}" />
+                            <input type="hidden" name="package_id" value="{safe_package_id}" />
+                            <input type="hidden" name="title" value="{safe_title}" />
+                            <input type="hidden" name="password" value="{safe_password}" />
 
                             <div style="margin-bottom: 1rem;">
                                 <strong style="font-size: 0.9rem; display: block; margin-bottom: 0.5rem;">Paste download links (one per line):</strong>

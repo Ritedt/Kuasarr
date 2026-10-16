@@ -16,8 +16,17 @@ from kuasarr.providers.ui.html_templates import render_button, render_centered_h
 
 
 def js_single_quoted_string_safe(text):
-    """Escape text for use in single-quoted JavaScript strings."""
-    return text.replace('\\', '\\\\').replace("'", "\\'")
+    """Escape text for use in single-quoted JavaScript strings.
+
+    Quotes and backslashes keep the string intact. ``<`` matters just as much,
+    because these values land inside a ``<script>`` element, whose content the
+    HTML parser reads as raw text until it sees ``</script``. A title like
+    ``</script><img src=x>`` would otherwise close the element early and turn
+    the rest into real markup. ``\\u003c`` is the same character to JavaScript.
+    """
+    return (text.replace('\\', '\\\\')
+                .replace("'", "\\'")
+                .replace('<', '\\u003c'))
 
 
 def check_package_exists(package_id):

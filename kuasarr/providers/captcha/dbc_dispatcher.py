@@ -28,6 +28,10 @@ from kuasarr.downloads.linkcrypters.filecrypt import (
 )
 from kuasarr.providers.captcha import push_jobs
 from kuasarr.providers.captcha.math_captcha import solve_math_captcha
+from kuasarr.providers.network.origin_guard import (
+    origin_of as _origin_of,
+    same_origin_guard_for as _same_origin_guard_for,
+)
 from kuasarr.providers.network.cloudflare import (
     flaresolverr_create_session,
     flaresolverr_destroy_session,
@@ -56,7 +60,12 @@ from kuasarr.providers.notifications import send_discord_message
 from kuasarr.providers.statistics import StatsHelper
 from kuasarr.providers.hosters import filter_blocked_hosters
 from kuasarr.downloads import fail
-from kuasarr.downloads.linkcrypters.filecrypt import CNL, DLC
+from kuasarr.downloads.linkcrypters.filecrypt import (
+    CNL,
+    DLC,
+    get_filecrypt_phpsessid,
+    narrow_cnl_payload,
+)
 from kuasarr.downloads.linkcrypters.hide import unhide_links
 from kuasarr.constants import HTTP_DEFAULT_TIMEOUT_SECONDS, get_timeout
 
@@ -149,6 +158,36 @@ def _he_post_unavailable(target: str, payload: List[Tuple[str, str]]) -> Optiona
     """Stand-in for ``post_fn`` when no browser session could be obtained."""
     debug(f"he: no browser session available, cannot submit to {target}")
     return None
+
+
+def _filecrypt_page_richness(soup: BeautifulSoup) -> int:
+    """Rank a Filecrypt document by how much link-bearing content it carries.
+
+    Used to decide whether a fetched mirror page is worth preferring over the
+    page we already hold. The signals are exactly the ones the link extraction
+    branches below rely on, so a document that scores zero here cannot produce
+    links in any of them.
+
+    The payload-carrying form dominates the score: it is the only element that
+    yields links without a second request, and a document without it cannot be
+    decrypted at all. The proof-of-work gate keeps the page chrome and the
+    hoster-row markup around while dropping that form, so a page can look
+    plausible in the DOM and still be worthless - counting the surrounding
+    markup equally is what let a gate page replace a solved one.
+    """
+    cnl_form = soup.find("form", {"class": "cnlform"})
+    if cnl_form and "CNLPOP(" in (cnl_form.get("onsubmit") or ""):
+        # 1000 outweighs every other signal, so a page that can be decrypted
+        # always wins over one that only looks like it.
+        return 1000
+
+    score = 0
+    if cnl_form:
+        score += 1
+    if soup.find("button", {"class": "dlcdownload"}):
+        score += 1
+    score += len(soup.find_all("a", {"class": "external_link"}))
+    return score
 
 
 class DBCDispatcher:
@@ -540,6 +579,12 @@ class DBCDispatcher:
         
         info(f"Filecrypt page loaded successfully (status={output.status_code}, {len(output.text)} bytes)")
 
+        # Everything below posts the container password and the captcha token.
+        # requests follows 302 by default and carries the body along, so a
+        # container that redirects the POST would hand both to a host of its
+        # choosing. Pin the session to the container's own origin first.
+        session = self._same_origin_guard_for(session, output.url)
+
         soup = BeautifulSoup(output.text, 'html.parser')
 
         # Handle password field
@@ -810,15 +855,36 @@ class DBCDispatcher:
         else:
             mirrors = [url]
 
-        for mirror_url in mirrors:
-            if len(mirrors) > 1:
-                output = session.get(mirror_url, headers=headers)
-                url = output.url
-                soup = BeautifulSoup(output.text, 'html.parser')
+        # The page we already hold carries the payload; the mirrors are fetched
+        # only to see whether one of them carries more. None of them does in
+        # practice - a mirror GET is answered by the proof-of-work gate again,
+        # without the payload form - and taking such a page made every
+        # container with mirror links report "Click'n'Load not found!" and fall
+        # through to DLC and then into the Circle-Captcha fallback.
+        candidates = []
+        if len(mirrors) > 1:
+            current_richness = _filecrypt_page_richness(soup)
+            for mirror_url in mirrors:
+                mirror_output = session.get(mirror_url, headers=headers)
+                mirror_soup = BeautifulSoup(mirror_output.text, 'html.parser')
+                if _filecrypt_page_richness(mirror_soup) > current_richness:
+                    debug(f"DBC: Mirror {mirror_url} liefert eine bessere Seite.")
+                    current_richness = _filecrypt_page_richness(mirror_soup)
+                    candidates.append((mirror_output, mirror_output.url, mirror_soup))
+                else:
+                    debug(f"DBC: Mirror {mirror_url} liefert keine nutzbare Seite "
+                          f"(kein CNL-Payload), gelöste Seite behalten.")
+
+        # The solved page goes last, so it is the one parsed when no mirror is
+        # better. Without it the loop body would run only for useless mirrors
+        # and no link would ever be decrypted.
+        candidates.append((None, url, soup))
+
+        for page_output, page_url, page_soup in candidates:
 
             try:
                 # Try CNL (Click'n'Load)
-                crypted_payload = soup.find("form", {"class": "cnlform"}).get('onsubmit')
+                crypted_payload = page_soup.find("form", {"class": "cnlform"}).get('onsubmit')
                 crypted_data = re.findall(r"'(.*?)'", crypted_payload)
                 if not title:
                     title = crypted_data[3]
@@ -829,33 +895,29 @@ class DBCDispatcher:
                     title
                 ]
                 if episode and season:
-                    domain = urlparse(url).netloc
-                    filtered_cnl_secret = soup.find("input", {"name": "hidden_cnl_id"}).attrs["value"]
-                    filtered_cnl_link = f"https://{domain}/_CNL/{filtered_cnl_secret}.html?{season}&{episode}"
-                    filtered_cnl_result = session.post(filtered_cnl_link, headers=headers)
-                    if filtered_cnl_result.status_code == 200:
-                        filtered_cnl_data = json.loads(filtered_cnl_result.text)
-                        if filtered_cnl_data["success"]:
-                            crypted_data = [
-                                crypted_data[0],
-                                filtered_cnl_data["data"][0],
-                                filtered_cnl_data["data"][1],
-                                title
-                            ]
+                    # Optional filter only - see narrow_cnl_payload. A failed
+                    # filter must leave the payload that is already in the page
+                    # alone instead of aborting the CNL branch.
+                    cnl_secret_el = page_soup.find("input", {"name": "hidden_cnl_id"})
+                    crypted_data = narrow_cnl_payload(
+                        session, page_url, headers,
+                        cnl_secret_el.get("value") if cnl_secret_el else None,
+                        season, episode, crypted_data, title,
+                    )
                 links.extend(CNL(crypted_data).decrypt())
                 break
             except:
-                if "The owner of this folder has deactivated all hosts in this container in their settings." in soup.text:
+                if "The owner of this folder has deactivated all hosts in this container in their settings." in page_soup.text:
                     info(f"Mirror deactivated by the owner: {mirror_url}")
                     continue
 
                 info("Click'n'Load not found! Falling back to DLC...")
                 try:
                     # Try DLC
-                    crypted_payload = soup.find("button", {"class": "dlcdownload"}).get("onclick")
+                    crypted_payload = page_soup.find("button", {"class": "dlcdownload"}).get("onclick")
                     crypted_data = re.findall(r"'(.*?)'", crypted_payload)
                     dlc_secret = crypted_data[0]
-                    domain = urlparse(url).netloc
+                    domain = urlparse(page_url).netloc
                     if episode and season:
                         dlc_link = f"https://{domain}/DLC/{dlc_secret}.dlc?{episode}&{season}"
                     else:
@@ -867,14 +929,22 @@ class DBCDispatcher:
                     info("DLC not found! Falling back to Circle-Captcha buttons...")
                     
                     # Return replacement info for Circle-Captcha handling
-                    base_url = urlparse(url).netloc
-                    phpsessid = session.cookies.get('PHPSESSID')
+                    parsed_url = urlparse(page_url)
+                    base_url = parsed_url.netloc
+                    # Keep the scheme the container itself was served with. Building
+                    # an "http://" URL out of the bare netloc pinned the
+                    # Circle-Captcha step to an origin the container never answers
+                    # on: FileCrypt redirects it to the same host over https, the
+                    # origin guard reads that as leaving the pinned origin, and
+                    # every attempt gets refused.
+                    base_scheme = parsed_url.scheme or "https"
+                    phpsessid = get_filecrypt_phpsessid(session, page_url)
                     if not phpsessid:
                         info("PHPSESSID cookie not found!")
                         return None
 
                     results = []
-                    for button in soup.find_all('button'):
+                    for button in page_soup.find_all('button'):
                         data_attrs = [v for k, v in button.attrs.items() if k.startswith('data-') and k != 'data-i18n']
                         if not data_attrs:
                             continue
@@ -882,7 +952,7 @@ class DBCDispatcher:
                         row = button.find_parent('tr')
                         mirror_tag = row.find('a', class_='external_link') if row else None
                         mirror_name = mirror_tag.get_text(strip=True) if mirror_tag else 'unknown'
-                        full_url = f"http://{base_url}/Link/{link_id}.html"
+                        full_url = f"{base_scheme}://{base_url}/Link/{link_id}.html"
                         results.append((full_url, mirror_name))
 
                     sorted_results = sorted(results, key=lambda x: 0 if 'rapidgator' in x[1].lower() else 1)
@@ -1168,75 +1238,13 @@ class DBCDispatcher:
 
     @staticmethod
     def _origin_of(url: str) -> Optional[tuple]:
-        """Normalize a URL to (scheme, host, port) for origin comparison.
-
-        Host alone is not an origin: ``http://container:9999`` is a different
-        origin than ``https://container`` and may well be an internal service
-        on the same machine. Comparing the triple keeps those apart.
-        """
-        try:
-            parsed = urlparse(url)
-        except ValueError:
-            return None
-        scheme = (parsed.scheme or "").lower()
-        host = (parsed.hostname or "").lower()
-        if not scheme or not host:
-            return None
-        try:
-            port = parsed.port
-        except ValueError:
-            return None
-        if port is None:
-            port = {"http": 80, "https": 443}.get(scheme)
-        return (scheme, host, port)
+        """Deprecated alias for :func:`kuasarr.providers.network.origin_guard.origin_of`."""
+        return _origin_of(url)
 
     @staticmethod
     def _same_origin_guard_for(session: requests.Session, base_url: str) -> requests.Session:
-        """Pin a session to the container origin, redirects included.
-
-        Checking only the initial URL is not enough: with
-        ``allow_redirects=True`` a container can answer 302 pointing at an
-        internal host and ``requests`` follows it, carrying along whatever the
-        session sends - for the captcha POSTs that is the form's hidden fields
-        including ``myhiddenpwd``. ``requests`` has no redirect hook, so
-        ``send`` is wrapped and every hop is checked before it is followed.
-
-        The hop count is bounded here because wrapping ``send`` bypasses
-        ``requests``' own ``max_redirects`` handling - an open redirect chain
-        on a hostile container would otherwise spin forever.
-        """
-        origin = DBCDispatcher._origin_of(base_url)
-        if origin is None:
-            return session
-
-        max_hops = session.max_redirects if session.max_redirects else 30
-        original_send = session.send
-
-        def send(request, **kwargs):
-            allow_redirects = kwargs.pop("allow_redirects", True)
-            response = original_send(request, allow_redirects=False, **kwargs)
-
-            history = []
-            while allow_redirects and response.is_redirect:
-                if len(history) >= max_hops:
-                    raise requests.TooManyRedirects(
-                        f"Exceeded {max_hops} redirects on the container origin")
-                target = urljoin(response.url, response.headers.get("Location", ""))
-                target_origin = DBCDispatcher._origin_of(target)
-                if target_origin != origin:
-                    raise requests.TooManyRedirects(
-                        f"Refusing to follow redirect off the container origin: {target_origin}")
-                history.append(response)
-                next_request = requests.Request(
-                    "GET", target, headers=response.request.headers).prepare()
-                response = original_send(next_request, allow_redirects=False, **kwargs)
-
-            if history:
-                response.history = history
-            return response
-
-        session.send = send
-        return session
+        """Deprecated alias for :func:`...origin_guard.same_origin_guard_for`."""
+        return _same_origin_guard_for(session, base_url)
 
     def _solve_keeplinks_captcha(
         self,
@@ -2251,13 +2259,11 @@ class DBCDispatcher:
         mirror: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Solve hide.cx links via API (no CAPTCHA needed)."""
-        from kuasarr.downloads.linkcrypters.hide import get_hide_api_key
-        
-        api_key = get_hide_api_key(self.shared_state)
-        if not api_key:
-            info("hide.cx API Key not configured - skipping")
-            return None
-        
+        # No key gate here: the public hide.cx API resolves containers and their
+        # per-link URLs without authentication, and unhide_links already sends
+        # the Authorization header only when a key is configured. Skipping every
+        # container because no key was set failed each package three times over
+        # and then marked it as failed.
         info(f"Decrypting hide.cx link via API: {url}")
         
         links, error = unhide_links(self.shared_state, url, password)

@@ -458,6 +458,42 @@ class TestGetLocalizedTitle:
             entry = state.get_recently_searched(state, "recents_imdb_titles", 0)["tt0000099_de"]
             assert entry["retry_after"] == 60 * 60
 
+    def test_blocked_lookup_expires_faster_than_a_plain_miss(self):
+        """The regression: 202 must not be cached as a missing title.
+
+        The instance logged::
+
+            IMDb request blocked for tt1844624 (status 202), retrying via FlareSolverr
+            FlareSolverr fallback for IMDb tt1844624 failed: ...
+
+        and then kept returning the cached miss for the full hour, so the retry
+        never ran again. A refusal is recognised by its status code - the 202
+        carries no WAF marker to inspect.
+        """
+        state = _mock_shared_state()
+        with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get, \
+             patch("kuasarr.providers.imdb_metadata.flaresolverr_get") as mock_fs:
+            mock_get.return_value = MagicMock(status_code=202, text="")
+            mock_fs.side_effect = RuntimeError("FlareSolverr down")
+
+            assert get_localized_title(state, "tt1844624") is None
+
+            entry = state.get_recently_searched(state, "recents_imdb_titles", 0)["tt1844624_de"]
+            assert entry["retry_after"] < 60 * 60
+
+    def test_403_without_flaresolverr_also_expires_fast(self):
+        """Same refusal, other status code - the rule must not be 202-specific."""
+        state = _mock_shared_state()
+        with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get, \
+             patch("kuasarr.providers.imdb_metadata.flaresolverr_get") as mock_fs:
+            mock_get.return_value = MagicMock(status_code=403, text="Forbidden")
+            mock_fs.side_effect = RuntimeError("FlareSolverr down")
+
+            assert get_localized_title(state, "tt1844624") is None
+
+            entry = state.get_recently_searched(state, "recents_imdb_titles", 0)["tt1844624_de"]
+            assert entry["retry_after"] < 60 * 60
+
     def test_legacy_cache_entry_without_retry_after_still_respects_the_hour(self):
         """Entries written by an older version have no retry_after and must not expire early."""
         cached = {"tt0397306_de": {"title": None, "timestamp": datetime.now()}}

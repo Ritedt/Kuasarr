@@ -216,6 +216,21 @@ def _mock_shared_state(cache=None):
 
 class TestGetLocalizedTitle:
 
+    @pytest.fixture(autouse=True)
+    def _no_api_tier(self):
+        """Keep this class focused on the HTML/FlareSolverr tier.
+
+        get_localized_title() consults the JSON API tier before it scrapes
+        imdb.com. That tier issues its own requests through the shared
+        ``requests`` module, which inflates the call counts asserted below.
+        The API tier has its own tests; here it is switched off so these
+        tests keep measuring what they were written to measure.
+        """
+        from kuasarr.providers import imdb_metadata_api
+        with patch.object(imdb_metadata_api, "get_localized", return_value=None), \
+             patch.object(imdb_metadata_api, "search_imdb_id", return_value=None):
+            yield
+
     def test_returns_title_from_successful_request(self):
         state = _mock_shared_state()
         with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get:

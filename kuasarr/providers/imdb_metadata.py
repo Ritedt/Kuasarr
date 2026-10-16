@@ -81,6 +81,29 @@ def _is_waf_challenge(response) -> bool:
     return _IMDB_PAGE_MARKER not in text
 
 
+def _is_blocked(response) -> bool:
+    """True if IMDb refused to answer, rather than having no such title.
+
+    Both end without a localized title, but they must not be cached alike: a
+    block clears on its own within minutes, a genuine miss stays a miss.
+
+    The marker check on its own is not enough, because the usual shape of a
+    blocked direct request carries no marker at all - IMDb answers 202 with an
+    empty body and only the interstitial announces itself. Recognising the
+    refusal therefore has to happen where the request is made, not by
+    re-inspecting the response afterwards; that is what made a blocked lookup
+    get cached as a missing title for the full hour.
+    """
+    if response is None:
+        return True
+    if _is_waf_challenge(response):
+        return True
+    status = getattr(response, "status_code", None)
+    if status in (202, 403):
+        return True
+    return status == 200 and not (getattr(response, "text", "") or "").strip()
+
+
 _TITLE_SANITIZE_RE = re.compile(r"[^a-zA-Z0-9äöüÄÖÜß&-']")
 _MULTI_SPACE_RE = re.compile(r'\s{2,}')
 # Trailing suffixes that IMDb appends to page <title> values
@@ -171,12 +194,7 @@ def get_localized_title(shared_state, imdb_id, language='de'):
     except requests.exceptions.RequestException as e:
         info(f"Error loading IMDb metadata for {imdb_id}: {e}")
 
-    needs_flaresolverr = (
-        response is None
-        or response.status_code in (403, 202)
-        or (response.status_code == 200 and not response.text.strip())
-        or _is_waf_challenge(response)
-    )
+    needs_flaresolverr = _is_blocked(response)
     if needs_flaresolverr:
         try:
             info(f"IMDb request blocked for {imdb_id} (status {getattr(response, 'status_code', 'none')}), retrying via FlareSolverr")
@@ -199,7 +217,7 @@ def get_localized_title(shared_state, imdb_id, language='de'):
         # our side has to change. Caching it for the full hour would keep
         # serving the failure long after IMDb answers again, so it gets the
         # short TTL.
-        retry_after = IMDB_WAF_CHALLENGE_CACHE_SECONDS if _is_waf_challenge(response) \
+        retry_after = IMDB_WAF_CHALLENGE_CACHE_SECONDS if _is_blocked(response) \
             else IMDB_NOT_FOUND_CACHE_SECONDS
         recently_searched[cache_key] = {
             "title": None,

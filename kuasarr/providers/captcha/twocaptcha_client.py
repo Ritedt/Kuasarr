@@ -343,6 +343,10 @@ class TwoCaptchaClient(BaseCaptchaClient):
         image_data: bytes,
         poll_interval: float = 3.0,
         max_wait: float = 120.0,
+        *,
+        numeric: Optional[int] = None,
+        min_len: Optional[int] = None,
+        max_len: Optional[int] = None,
     ) -> CaptchaResult:
         """Upload and wait for image captcha solution."""
         try:
@@ -360,6 +364,19 @@ class TwoCaptchaClient(BaseCaptchaClient):
             "type": "ImageToTextTask",
             "body": b64_image,
         }
+
+        # The hints are only sent when the caller asked for them, so every
+        # other caller keeps the plain ImageToTextTask it had before.
+        if numeric is not None:
+            task["numeric"] = numeric
+        if min_len is not None:
+            task["minLen"] = min_len
+        if max_len is not None:
+            task["maxLen"] = max_len
+
+        if numeric is not None or min_len is not None or max_len is not None:
+            debug(f"2Captcha: ImageToTextTask hints numeric={numeric} "
+                  f"minLen={min_len} maxLen={max_len}")
 
         try:
             task_id = self._create_task(task)

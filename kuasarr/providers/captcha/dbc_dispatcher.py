@@ -87,6 +87,17 @@ KEEPLINKS_ANSWER_FIELDS = {
     "simple": "norobot",
 }
 KEEPLINKS_ANSWER_LENGTH = 4
+# What the answer is allowed to look like, per variant. The values follow the
+# 2Captcha ImageToTextTask semantics (1 = digits only, 2 = letters only) and
+# tell the solver up front what Keeplinks will accept, instead of letting it
+# return something that cannot possibly be right. "cool" is a distorted
+# alphanumeric word, "simple" is a fixed 4 digit number.
+KEEPLINKS_SOLVER_HINTS = {
+    "cool": {"numeric": 2},
+    "simple": {"numeric": 1,
+               "min_len": KEEPLINKS_ANSWER_LENGTH,
+               "max_len": KEEPLINKS_ANSWER_LENGTH},
+}
 
 # ToLink renders its "text" captcha as ASCII art and then runs OCR over it.
 # Digit/letter glyphs get confused for each other constantly, so the raw solver
@@ -1347,7 +1358,12 @@ class DBCDispatcher:
             return None
 
         debug(f"Keeplinks: Solving image CAPTCHA ({len(captcha_response.content)} bytes)")
-        captcha_result = self._client.solve_captcha(captcha_response.content)
+        solver_hints = KEEPLINKS_SOLVER_HINTS.get(variant) or {}
+        if solver_hints:
+            debug(f"Keeplinks: Solver hints for {variant}: {solver_hints}")
+        captcha_result = self._client.solve_captcha(
+            captcha_response.content, **solver_hints
+        )
 
         if not captcha_result or not captcha_result.text:
             info("Keeplinks: DBC failed to solve CAPTCHA")

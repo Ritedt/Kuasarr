@@ -1354,13 +1354,19 @@ class DBCDispatcher:
             return None
 
         solved_text = captcha_result.text
-        answer = self._normalize_keeplinks_answer(variant, solved_text)
-        info(f"Keeplinks: CAPTCHA solved: '{solved_text}' -> '{answer}'")
+        # Die Referenzimplementierung postet die Solver-Antwort unveraendert.
+        # Die Normalisierung bleibt als Plausibilitaetspruefung: ein Ergebnis,
+        # das nach dem Aufraeumen leer ist, war schon immer unbrauchbar und
+        # geht nicht als Antwort an Keeplinks.
+        normalized = self._normalize_keeplinks_answer(variant, solved_text)
+        info(f"Keeplinks: CAPTCHA solved: '{solved_text}' (normalized '{normalized}')")
 
-        if not answer:
+        if not normalized:
             info(f"Keeplinks: Unusable solver response '{solved_text}'")
             self._report_incorrect(captcha_result.captcha_id)
             return None
+
+        answer = solved_text
 
         # Keeplinks wants the full hidden field set next to the answer - posting
         # only the answer field gets the container rejected.

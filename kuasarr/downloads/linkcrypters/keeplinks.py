@@ -57,21 +57,11 @@ def get_keeplinks_links(shared_state, captcha_token, title, url, password=None, 
                         is_proceed_page = True
             
             if is_proceed_page:
-                # Step 2: POST to proceed past the first page
+                # Step 2: POST to proceed past the first page. Keeplinks will
+                # hier ausschliesslich showpageval=1 - das komplette Formular
+                # mitzuschicken verfaelscht den Captcha-Zustand der Session.
                 debug("Keeplinks: Submitting 'Click To Proceed' form")
-                post_data = {}
-                for input_elem in proceed_form.find_all('input'):
-                    name = input_elem.get('name')
-                    if name:
-                        post_data[name] = input_elem.get('value', '')
-                
-                # Also check for buttons with names
-                for btn in proceed_form.find_all(['input', 'button'], {'type': 'submit'}):
-                    name = btn.get('name')
-                    if name:
-                        post_data[name] = btn.get('value', '')
-                
-                response = session.post(url, data=post_data, headers=headers, timeout=30)
+                response = session.post(url, data={'showpageval': '1'}, headers=headers, timeout=30)
                 
                 if response.status_code != 200:
                     info(f"Keeplinks: Proceed POST failed with status {response.status_code}")
@@ -97,7 +87,16 @@ def get_keeplinks_links(shared_state, captcha_token, title, url, password=None, 
             info("Keeplinks: No CAPTCHA input and no links found")
             return False
         
-        # Build POST data for CAPTCHA submission
+        # Build POST data for CAPTCHA submission.
+        # Wichtig: hier bewusst ALLE Inputs aus dem Formular uebernehmen statt
+        # eine feste Feldliste zu bauen. Keeplinks braucht auch den
+        # Submit-Button 'hbtncheck' - ohne ihn wertet der Server das Captcha
+        # nicht aus und meldet "Solve Captcha Before Press Submit Button.",
+        # egal wie richtig die Antwort war. Der Dispatcher-Pfad
+        # (providers/captcha/dbc_dispatcher.py) baut seine Felder fest und
+        # musste deshalb 'hbtncheck' ausdruecklich ergaenzt bekommen. Wer die
+        # Schleife hier auflöst und Feldlisten hartkodiert, baut den Fehler
+        # wieder ein.
         post_data = {}
         for input_elem in captcha_form.find_all('input'):
             name = input_elem.get('name')
@@ -116,17 +115,18 @@ def get_keeplinks_links(shared_state, captcha_token, title, url, password=None, 
             return False
         
         soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Check for error messages
-        error_msg = soup.find(text=re.compile(r'wrong|invalid|incorrect', re.IGNORECASE))
-        if error_msg:
-            info(f"Keeplinks: CAPTCHA was rejected - {error_msg}")
-            return False
-        
-        # Step 4: Extract download links
+
+        # Links zuerst, Fehlermeldung danach. Die Fehlersuche ist ein Text-Match
+        # ueber die ganze Seite und trifft damit auch harmlose Treffer in
+        # Linktexten. Wer die Links hat, ist fertig.
         links = extract_download_links(soup)
-        
         if not links:
+            # Check for error messages
+            error_msg = soup.find(text=re.compile(r'wrong|invalid|incorrect', re.IGNORECASE))
+            if error_msg:
+                info(f"Keeplinks: CAPTCHA was rejected - {error_msg}")
+                return False
+
             info("Keeplinks: No download links found after CAPTCHA submission")
             return False
         
@@ -151,12 +151,13 @@ def get_keeplinks_links(shared_state, captcha_token, title, url, password=None, 
 
 def extract_download_links(soup):
     """Extract download links from Keeplinks page.
-    
-    Links are in <label class="form_box_title"> with <a class="selecttext live">
-    Filters out ads/affiliate links.
+
+    Preferred source is the ``<textarea class="trurl">`` the container renders
+    once it is unlocked. The anchor-based tiers below stay as fallbacks for
+    page layouts that do not render the textarea.
     """
     links = []
-    
+
     # Patterns for valid download links (must have file path)
     hoster_patterns = [
         r'rapidgator\.net/file/',
@@ -173,8 +174,23 @@ def extract_download_links(soup):
         r'depositfiles\.com/files/',
         r'filefactory\.com/file/',
     ]
-    
+
     combined_pattern = '|'.join(hoster_patterns)
+
+    # First try: the container's own textarea listing the download URLs.
+    # Deliberately not filtered by hoster_patterns: Kuasarr bundles no
+    # hosters on purpose, and this textarea says what is really there.
+    # Only junk (blank lines, non-http text) is dropped.
+    for textarea in soup.find_all('textarea', class_='trurl'):
+        for line in textarea.get_text().split('\n'):
+            candidate = line.strip()
+            if not candidate.startswith(('http://', 'https://')):
+                continue
+            if candidate not in links:
+                links.append(candidate)
+                debug(f"Keeplinks: Found download link (trurl): {candidate[:60]}...")
+        if links:
+            return links
     
     # First try: Look for links in form_box_title (Keeplinks specific)
     form_boxes = soup.find_all('label', class_='form_box_title')
@@ -246,20 +262,10 @@ def get_keeplinks_captcha_info(shared_state, url):
                         is_proceed_page = True
                     
             if is_proceed_page:
-                # POST to proceed
-                post_data = {}
-                for input_elem in proceed_form.find_all('input'):
-                    name = input_elem.get('name')
-                    if name:
-                        post_data[name] = input_elem.get('value', '')
-                
-                # Also check for buttons with names
-                for btn in proceed_form.find_all(['input', 'button'], {'type': 'submit'}):
-                    name = btn.get('name')
-                    if name:
-                        post_data[name] = btn.get('value', '')
-                        
-                response = session.post(url, data=post_data, headers=headers, timeout=30)
+                # POST to proceed. Keeplinks will hier ausschliesslich
+                # showpageval=1 - das komplette Formular mitzuschicken
+                # verfaelscht den Captcha-Zustand der Session.
+                response = session.post(url, data={'showpageval': '1'}, headers=headers, timeout=30)
                 if response.status_code != 200:
                     return None
                 soup = BeautifulSoup(response.text, 'html.parser')

@@ -122,8 +122,29 @@ class BaseCaptchaClient(ABC):
         image_data: bytes,
         poll_interval: float = 3.0,
         max_wait: float = 120.0,
+        *,
+        numeric: Optional[int] = None,
+        min_len: Optional[int] = None,
+        max_len: Optional[int] = None,
     ) -> CaptchaResult:
-        """Upload and wait for image captcha solution."""
+        """Upload and wait for image captcha solution.
+
+        ``numeric`` / ``min_len`` / ``max_len`` are hints about the expected
+        answer, following the 2Captcha ``ImageToTextTask`` semantics:
+
+        ======  =========================================================
+        numeric  meaning
+        ======  =========================================================
+        1        only digits
+        2        only letters
+        3        digits or letters
+        4        must contain both digits and letters
+        ======  =========================================================
+
+        ``None`` means "no hint", which is what every caller gets unless it
+        asks for something specific. Providers that do not document these
+        hints ignore them.
+        """
         pass
 
     @abstractmethod

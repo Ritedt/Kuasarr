@@ -57,6 +57,15 @@ MYJD_CONNECT_TIMEOUT_SECONDS = 3
 HTTP_DEFAULT_TIMEOUT_SECONDS = 10
 HTTP_EXTENDED_TIMEOUT_SECONDS = 30
 
+# Keeplinks container requests. Keeplinks braucht mehr als das HTTP-Default:
+# der POST mit der geloesten Captcha-Antwort laesst den Server den Container
+# tatsaechlich entsperren (entschluesseln und Seite rendern), waehrend die
+# Ablehnung einer falschen Antwort in ~0,08 s zurueckkommt (live gemessen).
+# Das 10-s-Default lief deshalb genau in dem Moment in den Timeout, in dem die
+# Antwort richtig war. Die Referenzimplementierung gibt diesem POST ebenfalls
+# 30 s, ebenso der WebUI-Pfad in downloads/linkcrypters/keeplinks.py.
+KEEPLINKS_TIMEOUT_SECONDS = 30
+
 # ==============================================================================
 # SLOW MODE CONFIGURATION
 # ==============================================================================

@@ -226,8 +226,19 @@ class DeathByCaptchaClient:
         self,
         image_data: bytes,
         timeout: Optional[int] = None,
+        numeric: Optional[int] = None,
+        min_len: Optional[int] = None,
+        max_len: Optional[int] = None,
     ) -> CaptchaResult:
-        """Upload a captcha image for solving."""
+        """Upload a captcha image for solving.
+
+        ``numeric`` / ``min_len`` / ``max_len`` are accepted for interface
+        parity with 2Captcha but deliberately not sent: DeathByCaptcha
+        documents only ``username``/``password``/``authtoken`` plus
+        ``captchafile`` for this endpoint, so there is no documented way to
+        pass a character-set or length hint. They are logged so a caller can
+        see the hint was dropped rather than silently lost.
+        """
         # Log balance before cost-incurring operation
         try:
             self.get_balance()
@@ -243,6 +254,9 @@ class DeathByCaptchaClient:
         data["captchafile"] = b64_image
 
         debug(f"DBC: Uploading image captcha ({len(image_data)} bytes)")
+        if numeric is not None or min_len is not None or max_len is not None:
+            debug(f"DBC: ignoring answer hints (not supported by this API): "
+                  f"numeric={numeric} min_len={min_len} max_len={max_len}")
         result = self._request("POST", "captcha", data=data)
         debug(f"DBC: Upload response: captcha_id={result.get('captcha')}, text={result.get('text', '')[:50]}")
 
@@ -285,10 +299,16 @@ class DeathByCaptchaClient:
         image_data: bytes,
         poll_interval: float = 3.0,
         max_wait: float = 120.0,
+        *,
+        numeric: Optional[int] = None,
+        min_len: Optional[int] = None,
+        max_len: Optional[int] = None,
     ) -> CaptchaResult:
         """Upload and wait for captcha solution."""
         # Upload captcha
-        result = self.upload_captcha(image_data)
+        result = self.upload_captcha(
+            image_data, numeric=numeric, min_len=min_len, max_len=max_len
+        )
 
         if result.is_solved:
             info(f"CAPTCHA {result.captcha_id} solved immediately: {result.text}")

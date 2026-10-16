@@ -66,7 +66,11 @@ from kuasarr.downloads.linkcrypters.filecrypt import (
     narrow_cnl_payload,
 )
 from kuasarr.downloads.linkcrypters.hide import unhide_links
-from kuasarr.constants import HTTP_DEFAULT_TIMEOUT_SECONDS, get_timeout
+from kuasarr.constants import (
+    HTTP_DEFAULT_TIMEOUT_SECONDS,
+    KEEPLINKS_TIMEOUT_SECONDS,
+    get_timeout,
+)
 
 DEFAULT_DISPATCH_INTERVAL_SECONDS = 10
 MAX_BACKOFF_MULTIPLIER = 8
@@ -87,6 +91,25 @@ KEEPLINKS_ANSWER_FIELDS = {
     "simple": "norobot",
 }
 KEEPLINKS_ANSWER_LENGTH = 4
+# Kleinste plausible Captcha-Bilddatei. Ein echtes Keeplinks-Captcha ist ein
+# PNG/GIF/JPEG mit mehr als 100 Byte; darunter ist es keine Bilddatei.
+KEEPLINKS_MIN_IMAGE_BYTES = 100
+# Das Captcha-Bild wird nicht mit den HTML-Seiten-Headern geladen. Der
+# Referer verweist auf die Containerseite, aus der das Bild stammt, und der
+# Accept-Header sagt, dass hier tatsaechlich ein Bild erwartet wird - genau
+# das, was ein Browser beim Laden eines <img> mitschickt.
+KEEPLINKS_IMAGE_ACCEPT = 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+# What the answer is allowed to look like, per variant. The values follow the
+# 2Captcha ImageToTextTask semantics (1 = digits only, 2 = letters only) and
+# tell the solver up front what Keeplinks will accept, instead of letting it
+# return something that cannot possibly be right. "cool" is a distorted
+# alphanumeric word, "simple" is a fixed 4 digit number.
+KEEPLINKS_SOLVER_HINTS = {
+    "cool": {"numeric": 2},
+    "simple": {"numeric": 1,
+               "min_len": KEEPLINKS_ANSWER_LENGTH,
+               "max_len": KEEPLINKS_ANSWER_LENGTH},
+}
 
 # ToLink renders its "text" captcha as ASCII art and then runs OCR over it.
 # Digit/letter glyphs get confused for each other constantly, so the raw solver
@@ -1168,8 +1191,8 @@ class DBCDispatcher:
         try:
             # Step 1: Initial GET request
             debug(f"Keeplinks: Initial GET request")
-            response = session.get(url, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
-            
+            response = session.get(url, headers=headers, timeout=get_timeout(KEEPLINKS_TIMEOUT_SECONDS))
+
             if response.status_code != 200:
                 info(f"Keeplinks: Initial request failed with status {response.status_code}")
                 return None
@@ -1195,19 +1218,11 @@ class DBCDispatcher:
                 
                 if is_proceed_page:
                     debug("Keeplinks: Submitting 'Click To Proceed' form")
-                    post_data = {}
-                    for input_elem in proceed_form.find_all('input'):
-                        name = input_elem.get('name')
-                        if name:
-                            post_data[name] = input_elem.get('value', '')
-                    
-                    # Also check for buttons with names
-                    for btn in proceed_form.find_all(['input', 'button'], {'type': 'submit'}):
-                        name = btn.get('name')
-                        if name:
-                            post_data[name] = btn.get('value', '')
-                    
-                    response = session.post(url, data=post_data, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
+                    # Keeplinks will hier ausschliesslich showpageval=1. Das
+                    # Weiterreichen des kompletten Formulars schickt ein leeres
+                    # captcha_cool zusammen mit hiddencaptcha=1 und captchatype
+                    # mit, was den Captcha-Zustand der Session verfaelscht.
+                    response = session.post(url, data={'showpageval': '1'}, headers=headers, timeout=get_timeout(KEEPLINKS_TIMEOUT_SECONDS))
                     
                     if response.status_code != 200:
                         info(f"Keeplinks: Proceed POST failed with status {response.status_code}")
@@ -1348,27 +1363,57 @@ class DBCDispatcher:
             info("Keeplinks: CAPTCHA image URL is not on the container origin - refusing to fetch")
             return None
         captcha_response = session.get(
-            captcha_url, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS)
+            captcha_url,
+            headers={
+                'User-Agent': headers.get('User-Agent', ''),
+                'Referer': url,
+                'Accept': KEEPLINKS_IMAGE_ACCEPT,
+            },
+            timeout=get_timeout(KEEPLINKS_TIMEOUT_SECONDS),
         )
         if captcha_response.status_code != 200:
             info("Keeplinks: Failed to download CAPTCHA image")
             return None
 
+        # Keeplinks antwortet auf ein abgelehntes/veraltetes Captcha mit HTTP
+        # 200 und einer HTML-Seite. Ohne diese Pruefung ging das HTML als
+        # "Bild" an den Solver - der liefert dann irgendein Wort zurueck,
+        # das garantiert nicht zur Bilddatei gehoert und beim POST als
+        # "Rejected solution" endet.
+        content_type = (captcha_response.headers or {}).get('Content-Type', '')
+        if 'image' not in content_type.lower():
+            info(f"Keeplinks: CAPTCHA URL returned '{content_type or 'no Content-Type'}', not an image")
+            return None
+        if len(captcha_response.content) < KEEPLINKS_MIN_IMAGE_BYTES:
+            info(f"Keeplinks: CAPTCHA image is only {len(captcha_response.content)} bytes")
+            return None
+
         debug(f"Keeplinks: Solving image CAPTCHA ({len(captcha_response.content)} bytes)")
-        captcha_result = self._client.solve_captcha(captcha_response.content)
+        solver_hints = KEEPLINKS_SOLVER_HINTS.get(variant) or {}
+        if solver_hints:
+            debug(f"Keeplinks: Solver hints for {variant}: {solver_hints}")
+        captcha_result = self._client.solve_captcha(
+            captcha_response.content, **solver_hints
+        )
 
         if not captcha_result or not captcha_result.text:
             info("Keeplinks: DBC failed to solve CAPTCHA")
             return None
 
         solved_text = captcha_result.text
-        answer = self._normalize_keeplinks_answer(variant, solved_text)
-        info(f"Keeplinks: CAPTCHA solved: '{solved_text}' -> '{answer}'")
+        # Die Referenzimplementierung postet die Solver-Antwort unveraendert.
+        # Die Normalisierung bleibt als Plausibilitaetspruefung: ein Ergebnis,
+        # das nach dem Aufraeumen leer ist, war schon immer unbrauchbar und
+        # geht nicht als Antwort an Keeplinks.
+        normalized = self._normalize_keeplinks_answer(variant, solved_text)
+        info(f"Keeplinks: CAPTCHA solved: '{solved_text}' (normalized '{normalized}')")
 
-        if not answer:
+        if not normalized:
             info(f"Keeplinks: Unusable solver response '{solved_text}'")
             self._report_incorrect(captcha_result.captcha_id)
             return None
+
+        answer = solved_text
 
         # Keeplinks wants the full hidden field set next to the answer - posting
         # only the answer field gets the container rejected.
@@ -1378,6 +1423,15 @@ class DBCDispatcher:
 
         post_data = {
             'myhiddenpwd': hiddenpwd_val,
+            # hbtncheck ist der Submit-Button des Formulars
+            # (<input name="hbtncheck" type="submit">). Ein Browser schickt
+            # ihn nur mit, wenn der Button wirklich geklickt wurde - ein
+            # form.submit() aus JavaScript laesst ihn weg. Keeplinks wertet
+            # ohne dieses Feld das Captcha gar nicht aus und antwortet dann
+            # mit "Solve Captcha Before Press Submit Button.", egal wie
+            # richtig die Antwort war. Live gemessen: ohne hbtncheck 0,14 s
+            # und Ablehnung, mit hbtncheck 0,2 s und 10 entsperrte Links.
+            'hbtncheck': '',
             'hiddenaction': 'Q2hlY2tJbmZv',
             'captchatype': 'Cool' if variant == 'cool' else 'Simple',
             'hiddencaptcha': '1',
@@ -1388,10 +1442,14 @@ class DBCDispatcher:
             post_data['password'] = password
 
         debug(f"Keeplinks: Submitting {variant} CAPTCHA solution")
+        # Dieser POST ist der einzige Request, der den Container wirklich
+        # entsperrt. Er braucht deshalb KEEPLINKS_TIMEOUT_SECONDS und nicht
+        # das HTTP-Default - eine falsche Antwort kommt in ~0,08 s zurueck,
+        # eine richtige laesst den Server entschluesseln und rendern.
         response = session.post(
             url, data=post_data, headers=headers,
             allow_redirects=True,
-            timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+            timeout=get_timeout(KEEPLINKS_TIMEOUT_SECONDS),
         )
 
         if response.status_code != 200:
@@ -1400,20 +1458,28 @@ class DBCDispatcher:
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # A rejection is signalled by the same captcha image coming back, which is
-        # more reliable than scraping the localized error text.
-        if soup.find('img', src=re.compile(re.escape(captcha_url))):
-            info(f"Keeplinks: Rejected solution '{answer}'")
-            self._report_incorrect(captcha_result.captcha_id)
-            return None
-
-        error_msg = soup.find('div', {'class': 'msg-error'})
-        if error_msg:
-            info(f"Keeplinks: Error message: {error_msg.get_text(strip=True)}")
-            return None
-
+        # Links zuerst. Eine Ablehnung ist nicht zwingend als Ablehnung
+        # gekennzeichnet - Keeplinks kann das Captcha-Bild mitschicken, obwohl
+        # der Container offen ist. Wer die Links hat, ist fertig; nur wer
+        # keine hat, darf daraus auf eine Ablehnung schliessen. Sonst wird
+        # eine korrekte Loesung verworfen, weil eine Fehlermeldung mitkam,
+        # und der Solver bekommt eine Erstattung, die ihm nicht zusteht.
         links = self._extract_keeplinks_download_links(soup)
-        if not links:
+        if links:
+            info(f"Keeplinks: Extracted {len(links)} download links")
+        else:
+            # A rejection is signalled by the same captcha image coming back,
+            # which is more reliable than scraping the localized error text.
+            if soup.find('img', src=re.compile(re.escape(captcha_url))):
+                info(f"Keeplinks: Rejected solution '{answer}'")
+                self._report_incorrect(captcha_result.captcha_id)
+                return None
+
+            error_msg = soup.find('div', {'class': 'msg-error'})
+            if error_msg:
+                info(f"Keeplinks: Error message: {error_msg.get_text(strip=True)}")
+                return None
+
             info("Keeplinks: No download links found after CAPTCHA submission")
             return None
 
@@ -1439,12 +1505,15 @@ class DBCDispatcher:
 
     def _extract_keeplinks_download_links(self, soup: BeautifulSoup) -> list:
         """Extract download links from a Keeplinks page.
-        
-        Links are in <label class="form_box_title"> with <a class="selecttext live">
-        Filters out ads/affiliate links.
+
+        Preferred source is the ``<textarea class="trurl">`` the container
+        renders once it is unlocked - it exists for exactly this purpose and
+        is the only place that is authoritative about what is behind the
+        container. The anchor-based tiers below stay as fallbacks for page
+        layouts that do not render the textarea.
         """
         links = []
-        
+
         # Patterns for valid download links (must have file path)
         hoster_patterns = [
             r'rapidgator\.net/file/',
@@ -1461,8 +1530,23 @@ class DBCDispatcher:
             r'depositfiles\.com/files/',
             r'filefactory\.com/file/',
         ]
-        
+
         combined_pattern = '|'.join(hoster_patterns)
+
+        # First try: the container's own textarea listing the download URLs.
+        # Deliberately not filtered by hoster_patterns: Kuasarr bundles no
+        # hosters on purpose, and this textarea says what is really there.
+        # Only junk (blank lines, non-http text) is dropped.
+        for textarea in soup.find_all('textarea', class_='trurl'):
+            for line in textarea.get_text().split('\n'):
+                candidate = line.strip()
+                if not candidate.startswith(('http://', 'https://')):
+                    continue
+                if candidate not in links:
+                    links.append(candidate)
+                    debug(f"Keeplinks: Found download link (trurl): {candidate[:60]}...")
+            if links:
+                return links
         
         # First try: Look for links in form_box_title (Keeplinks specific)
         form_boxes = soup.find_all('label', class_='form_box_title')

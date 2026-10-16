@@ -106,17 +106,18 @@ def get_keeplinks_links(shared_state, captcha_token, title, url, password=None, 
             return False
         
         soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Check for error messages
-        error_msg = soup.find(text=re.compile(r'wrong|invalid|incorrect', re.IGNORECASE))
-        if error_msg:
-            info(f"Keeplinks: CAPTCHA was rejected - {error_msg}")
-            return False
-        
-        # Step 4: Extract download links
+
+        # Links zuerst, Fehlermeldung danach. Die Fehlersuche ist ein Text-Match
+        # ueber die ganze Seite und trifft damit auch harmlose Treffer in
+        # Linktexten. Wer die Links hat, ist fertig.
         links = extract_download_links(soup)
-        
         if not links:
+            # Check for error messages
+            error_msg = soup.find(text=re.compile(r'wrong|invalid|incorrect', re.IGNORECASE))
+            if error_msg:
+                info(f"Keeplinks: CAPTCHA was rejected - {error_msg}")
+                return False
+
             info("Keeplinks: No download links found after CAPTCHA submission")
             return False
         

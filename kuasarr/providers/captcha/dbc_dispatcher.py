@@ -1414,20 +1414,28 @@ class DBCDispatcher:
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # A rejection is signalled by the same captcha image coming back, which is
-        # more reliable than scraping the localized error text.
-        if soup.find('img', src=re.compile(re.escape(captcha_url))):
-            info(f"Keeplinks: Rejected solution '{answer}'")
-            self._report_incorrect(captcha_result.captcha_id)
-            return None
-
-        error_msg = soup.find('div', {'class': 'msg-error'})
-        if error_msg:
-            info(f"Keeplinks: Error message: {error_msg.get_text(strip=True)}")
-            return None
-
+        # Links zuerst. Eine Ablehnung ist nicht zwingend als Ablehnung
+        # gekennzeichnet - Keeplinks kann das Captcha-Bild mitschicken, obwohl
+        # der Container offen ist. Wer die Links hat, ist fertig; nur wer
+        # keine hat, darf daraus auf eine Ablehnung schliessen. Sonst wird
+        # eine korrekte Loesung verworfen, weil eine Fehlermeldung mitkam,
+        # und der Solver bekommt eine Erstattung, die ihm nicht zusteht.
         links = self._extract_keeplinks_download_links(soup)
-        if not links:
+        if links:
+            info(f"Keeplinks: Extracted {len(links)} download links")
+        else:
+            # A rejection is signalled by the same captcha image coming back,
+            # which is more reliable than scraping the localized error text.
+            if soup.find('img', src=re.compile(re.escape(captcha_url))):
+                info(f"Keeplinks: Rejected solution '{answer}'")
+                self._report_incorrect(captcha_result.captcha_id)
+                return None
+
+            error_msg = soup.find('div', {'class': 'msg-error'})
+            if error_msg:
+                info(f"Keeplinks: Error message: {error_msg.get_text(strip=True)}")
+                return None
+
             info("Keeplinks: No download links found after CAPTCHA submission")
             return None
 

@@ -24,9 +24,13 @@ DOWNLOAD_REQUEST_TIMEOUT_SECONDS = 30
 SESSION_REQUEST_TIMEOUT_SECONDS = 30
 SEARCH_TIMEOUT_SECONDS = 15
 FEED_TIMEOUT_SECONDS = 30
-# Global search deadline: return partial results after this many seconds even
-# if some scrapers haven't finished (complements the per-search SearchCache).
-SEARCH_DEADLINE_SECONDS = 8
+# SEARCH_DEADLINE_SECONDS is deliberately gone again. See the comment in
+# kuasarr/search/__init__.py: every scraper resolves the IMDb title before it
+# searches, and a blocked imdb.com spends IMDB_WAF_SETTLE_SECONDS (8s) in
+# FlareSolverr. A global 8s cutoff therefore fired *during* the title lookup
+# and returned "0 partial results" for searches that do work - it was shorter
+# than SEARCH_TIMEOUT_SECONDS (15s), so even a healthy first source could not
+# finish inside it. Slow sources end on their own timeouts instead.
 SEARCH_MAX_WORKERS = 16
 
 # CAPTCHA solving timeouts
@@ -129,11 +133,6 @@ def get_flaresolverr_pow_timeout() -> int:
 def get_search_timeout() -> int:
     """Get search timeout with slow mode applied."""
     return get_timeout(SEARCH_TIMEOUT_SECONDS)
-
-
-def get_search_deadline() -> int:
-    """Get the global search deadline (partial-results cutoff) with slow mode."""
-    return get_timeout(SEARCH_DEADLINE_SECONDS)
 
 
 def get_download_timeout() -> int:

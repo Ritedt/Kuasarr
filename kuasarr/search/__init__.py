@@ -298,25 +298,23 @@ def get_search_results(shared_state, request_from, imdb_id="", search_phrase="",
 
     info(f'Starting {len(functions)} search functions for {stype}... This may take some time.')
 
-    from kuasarr.constants import get_search_deadline, SEARCH_MAX_WORKERS
-    from concurrent.futures import TimeoutError as FuturesTimeoutError
-    deadline = get_search_deadline()
+    from kuasarr.constants import SEARCH_MAX_WORKERS
     max_workers = min(SEARCH_MAX_WORKERS, len(functions)) or 1
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(func) for func in functions]
-        try:
-            for future in as_completed(futures, timeout=deadline):
-                try:
-                    result = future.result()
-                    results.extend(result)
-                except Exception as e:
-                    error(f"An error occurred: {e}")
-        except FuturesTimeoutError:
-            # Deadline reached: cancel not-yet-started, return what we have.
-            # (Running HTTP threads can't be killed — they finish/timeout on their own.)
-            for f in futures:
-                f.cancel()
-            info(f"Search deadline ({deadline}s) reached — returning {len(results)} partial results")
+        # No global deadline here on purpose. Each function carries its own
+        # timeouts (SEARCH_TIMEOUT_SECONDS per HTTP call, the FlareSolverr wait
+        # for a blocked imdb.com), so a hung source ends on its own. A global
+        # cutoff cut the pool short *while* the slow-but-working sources were
+        # still running: every scraper resolves the IMDb title first, so a
+        # blocked imdb.com spent the whole budget in FlareSolverr and the
+        # deadline reported "0 partial results" for a search that worked.
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                results.extend(result)
+            except Exception as e:
+                error(f"An error occurred: {e}")
 
     elapsed_time = time.time() - start_time
     info(f"Providing {len(results)} releases to {request_from} for {stype}. Time taken: {elapsed_time:.2f} seconds")

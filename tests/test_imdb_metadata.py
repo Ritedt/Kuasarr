@@ -220,15 +220,18 @@ class TestGetLocalizedTitle:
     def _no_api_tier(self):
         """Keep this class focused on the HTML/FlareSolverr tier.
 
-        get_localized_title() consults the JSON API tier before it scrapes
-        imdb.com. That tier issues its own requests through the shared
-        ``requests`` module, which inflates the call counts asserted below.
-        The API tier has its own tests; here it is switched off so these
-        tests keep measuring what they were written to measure.
+        There is no longer a JSON API tier in front of the imdb.com scrape:
+        the former api.imdbapi.dev endpoint stopped resolving entirely and was
+        removed (see imdb_metadata_api.py). ``search_imdb_id`` still exists
+        for the title -> id direction and is switched off here so these tests
+        keep measuring only what they were written to measure.
         """
         from kuasarr.providers import imdb_metadata_api
-        with patch.object(imdb_metadata_api, "get_localized", return_value=None), \
-             patch.object(imdb_metadata_api, "search_imdb_id", return_value=None):
+        assert not hasattr(imdb_metadata_api, "get_localized"), (
+            "Der JSON-API-Tier fuer lokalisierte Titel ist entfernt - wenn er "
+            "zurueckkommt, hat dieser Test hier eine Antwort darauf."
+        )
+        with patch.object(imdb_metadata_api, "search_imdb_id", return_value=None):
             yield
 
     def test_returns_title_from_successful_request(self):

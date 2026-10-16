@@ -66,7 +66,11 @@ from kuasarr.downloads.linkcrypters.filecrypt import (
     narrow_cnl_payload,
 )
 from kuasarr.downloads.linkcrypters.hide import unhide_links
-from kuasarr.constants import HTTP_DEFAULT_TIMEOUT_SECONDS, get_timeout
+from kuasarr.constants import (
+    HTTP_DEFAULT_TIMEOUT_SECONDS,
+    HTTP_EXTENDED_TIMEOUT_SECONDS,
+    get_timeout,
+)
 
 DEFAULT_DISPATCH_INTERVAL_SECONDS = 10
 MAX_BACKOFF_MULTIPLIER = 8
@@ -90,6 +94,11 @@ KEEPLINKS_ANSWER_LENGTH = 4
 # Kleinste plausible Captcha-Bilddatei. Ein echtes Keeplinks-Captcha ist ein
 # PNG/GIF/JPEG mit mehr als 100 Byte; darunter ist es keine Bilddatei.
 KEEPLINKS_MIN_IMAGE_BYTES = 100
+# Das Captcha-Bild wird nicht mit den HTML-Seiten-Headern geladen. Der
+# Referer verweist auf die Containerseite, aus der das Bild stammt, und der
+# Accept-Header sagt, dass hier tatsaechlich ein Bild erwartet wird - genau
+# das, was ein Browser beim Laden eines <img> mitschickt.
+KEEPLINKS_IMAGE_ACCEPT = 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
 # What the answer is allowed to look like, per variant. The values follow the
 # 2Captcha ImageToTextTask semantics (1 = digits only, 2 = letters only) and
 # tell the solver up front what Keeplinks will accept, instead of letting it
@@ -1354,7 +1363,13 @@ class DBCDispatcher:
             info("Keeplinks: CAPTCHA image URL is not on the container origin - refusing to fetch")
             return None
         captcha_response = session.get(
-            captcha_url, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS)
+            captcha_url,
+            headers={
+                'User-Agent': headers.get('User-Agent', ''),
+                'Referer': url,
+                'Accept': KEEPLINKS_IMAGE_ACCEPT,
+            },
+            timeout=get_timeout(HTTP_EXTENDED_TIMEOUT_SECONDS),
         )
         if captcha_response.status_code != 200:
             info("Keeplinks: Failed to download CAPTCHA image")

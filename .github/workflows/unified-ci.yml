@@ -149,6 +149,10 @@ jobs:
               - 'uv.lock'
             version-file:
               - 'version.json'
+              # Die eigentliche Bump-Datei. Ohne sie im Filter loeste der
+              # Version-Bump-Check nie aus, weil der Release-Prozess sie
+              # aendert und version.json unangetastet laesst.
+              - 'Hier_Version_Ändern.txt'
             webui:
               - 'kuasarr/webui/**'
 
@@ -177,8 +181,22 @@ jobs:
       - name: Compare versions
         run: |
           set -euo pipefail
-          OLD_VERSION=$(jq -r .version base/version.json)
-          NEW_VERSION=$(jq -r .version pr/version.json)
+
+          # Versionsquelle ist Hier_Version_Ändern.txt, nicht version.json.
+          # version.json wird zur Build-Zeit injiziert und ist im Repo
+          # bewusst veraltet (dort steht 1.17.2, während der Repo-Stand
+          # 2.0.x ist) - ein Vergleich darauf meldete unabhaengig von jeder
+          # Aenderung "Version has not been bumped".
+          read_version() {
+            if [ -f "$1/Hier_Version_Ändern.txt" ]; then
+              tr -d '[:space:]' < "$1/Hier_Version_Ändern.txt"
+            else
+              jq -r .version "$1/version.json"
+            fi
+          }
+
+          OLD_VERSION=$(read_version base)
+          NEW_VERSION=$(read_version pr)
           echo "Old Version: $OLD_VERSION"
           echo "New Version: $NEW_VERSION"
           if [ "$OLD_VERSION" == "$NEW_VERSION" ]; then
@@ -250,6 +268,37 @@ jobs:
               sys.exit(1)
           print(f"\nAll {len(modules)} imports OK")
           EOF
+
+  # ═══════════════════════════════════════════════════════════════
+  # UNIT TESTS (PRs only)
+  # ═══════════════════════════════════════════════════════════════
+  pytest:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: detect-changes
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.detect-changes.outputs.python == 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.12'
+          enable-cache: true
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          uv sync
+
+      - name: Run test suite
+        run: |
+          set -euo pipefail
+          uv run pytest -q
 
   # ═══════════════════════════════════════════════════════════════
   # KIMI CODE REVIEW (PRs only)

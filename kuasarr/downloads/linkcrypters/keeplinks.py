@@ -87,7 +87,16 @@ def get_keeplinks_links(shared_state, captcha_token, title, url, password=None, 
             info("Keeplinks: No CAPTCHA input and no links found")
             return False
         
-        # Build POST data for CAPTCHA submission
+        # Build POST data for CAPTCHA submission.
+        # Wichtig: hier bewusst ALLE Inputs aus dem Formular uebernehmen statt
+        # eine feste Feldliste zu bauen. Keeplinks braucht auch den
+        # Submit-Button 'hbtncheck' - ohne ihn wertet der Server das Captcha
+        # nicht aus und meldet "Solve Captcha Before Press Submit Button.",
+        # egal wie richtig die Antwort war. Der Dispatcher-Pfad
+        # (providers/captcha/dbc_dispatcher.py) baut seine Felder fest und
+        # musste deshalb 'hbtncheck' ausdruecklich ergaenzt bekommen. Wer die
+        # Schleife hier auflöst und Feldlisten hartkodiert, baut den Fehler
+        # wieder ein.
         post_data = {}
         for input_elem in captcha_form.find_all('input'):
             name = input_elem.get('name')

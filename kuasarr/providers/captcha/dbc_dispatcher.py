@@ -1423,6 +1423,15 @@ class DBCDispatcher:
 
         post_data = {
             'myhiddenpwd': hiddenpwd_val,
+            # hbtncheck ist der Submit-Button des Formulars
+            # (<input name="hbtncheck" type="submit">). Ein Browser schickt
+            # ihn nur mit, wenn der Button wirklich geklickt wurde - ein
+            # form.submit() aus JavaScript laesst ihn weg. Keeplinks wertet
+            # ohne dieses Feld das Captcha gar nicht aus und antwortet dann
+            # mit "Solve Captcha Before Press Submit Button.", egal wie
+            # richtig die Antwort war. Live gemessen: ohne hbtncheck 0,14 s
+            # und Ablehnung, mit hbtncheck 0,2 s und 10 entsperrte Links.
+            'hbtncheck': '',
             'hiddenaction': 'Q2hlY2tJbmZv',
             'captchatype': 'Cool' if variant == 'cool' else 'Simple',
             'hiddencaptcha': '1',

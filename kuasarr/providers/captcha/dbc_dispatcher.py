@@ -1195,19 +1195,11 @@ class DBCDispatcher:
                 
                 if is_proceed_page:
                     debug("Keeplinks: Submitting 'Click To Proceed' form")
-                    post_data = {}
-                    for input_elem in proceed_form.find_all('input'):
-                        name = input_elem.get('name')
-                        if name:
-                            post_data[name] = input_elem.get('value', '')
-                    
-                    # Also check for buttons with names
-                    for btn in proceed_form.find_all(['input', 'button'], {'type': 'submit'}):
-                        name = btn.get('name')
-                        if name:
-                            post_data[name] = btn.get('value', '')
-                    
-                    response = session.post(url, data=post_data, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
+                    # Keeplinks will hier ausschliesslich showpageval=1. Das
+                    # Weiterreichen des kompletten Formulars schickt ein leeres
+                    # captcha_cool zusammen mit hiddencaptcha=1 und captchatype
+                    # mit, was den Captcha-Zustand der Session verfaelscht.
+                    response = session.post(url, data={'showpageval': '1'}, headers=headers, timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
                     
                     if response.status_code != 200:
                         info(f"Keeplinks: Proceed POST failed with status {response.status_code}")

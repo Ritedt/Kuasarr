@@ -57,21 +57,11 @@ def get_keeplinks_links(shared_state, captcha_token, title, url, password=None, 
                         is_proceed_page = True
             
             if is_proceed_page:
-                # Step 2: POST to proceed past the first page
+                # Step 2: POST to proceed past the first page. Keeplinks will
+                # hier ausschliesslich showpageval=1 - das komplette Formular
+                # mitzuschicken verfaelscht den Captcha-Zustand der Session.
                 debug("Keeplinks: Submitting 'Click To Proceed' form")
-                post_data = {}
-                for input_elem in proceed_form.find_all('input'):
-                    name = input_elem.get('name')
-                    if name:
-                        post_data[name] = input_elem.get('value', '')
-                
-                # Also check for buttons with names
-                for btn in proceed_form.find_all(['input', 'button'], {'type': 'submit'}):
-                    name = btn.get('name')
-                    if name:
-                        post_data[name] = btn.get('value', '')
-                
-                response = session.post(url, data=post_data, headers=headers, timeout=30)
+                response = session.post(url, data={'showpageval': '1'}, headers=headers, timeout=30)
                 
                 if response.status_code != 200:
                     info(f"Keeplinks: Proceed POST failed with status {response.status_code}")
@@ -246,20 +236,10 @@ def get_keeplinks_captcha_info(shared_state, url):
                         is_proceed_page = True
                     
             if is_proceed_page:
-                # POST to proceed
-                post_data = {}
-                for input_elem in proceed_form.find_all('input'):
-                    name = input_elem.get('name')
-                    if name:
-                        post_data[name] = input_elem.get('value', '')
-                
-                # Also check for buttons with names
-                for btn in proceed_form.find_all(['input', 'button'], {'type': 'submit'}):
-                    name = btn.get('name')
-                    if name:
-                        post_data[name] = btn.get('value', '')
-                        
-                response = session.post(url, data=post_data, headers=headers, timeout=30)
+                # POST to proceed. Keeplinks will hier ausschliesslich
+                # showpageval=1 - das komplette Formular mitzuschicken
+                # verfaelscht den Captcha-Zustand der Session.
+                response = session.post(url, data={'showpageval': '1'}, headers=headers, timeout=30)
                 if response.status_code != 200:
                     return None
                 soup = BeautifulSoup(response.text, 'html.parser')

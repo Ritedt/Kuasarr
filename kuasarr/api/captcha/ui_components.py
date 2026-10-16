@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from bottle import request
 
+from kuasarr.api.captcha.helpers import js_single_quoted_string_safe
 from kuasarr.providers.ui.html_templates import render_button
 
 
@@ -17,13 +18,27 @@ def render_bypass_section(url, package_id, title, password, provider_name="FileC
     base_url = request.urlparts.scheme + '://' + request.urlparts.netloc
     transfer_url = f"{base_url}/captcha/quick-transfer"
 
+    # None kommt hier regelmaessig vor: ein FileCrypt-Container ohne Passwort
+    # wird mit leerem Passwort gespeichert, und ein fehlender Schluessel
+    # liefert ebenfalls None. quote() akzeptiert nur str - ohne das hier wird
+    # die CAPTCHA-Seite zur 500, und zwar bei genau den Links, die man
+    # entschluesseln wollte.
     url_with_quick_transfer_params = (
         f"{url}?"
         f"transfer_url={quote(transfer_url)}&"
-        f"pkg_id={quote(package_id)}&"
-        f"pkg_title={quote(title)}&"
-        f"pkg_pass={quote(password)}"
+        f"pkg_id={quote(str(package_id or ''))}&"
+        f"pkg_title={quote(str(title or ''))}&"
+        f"pkg_pass={quote(str(password or ''))}"
     )
+
+    # Der Wert landet in einem onclick-Attribut, das JavaScript ausfuehrt.
+    # HTML-Escaping allein reicht da nicht: der Browser dekodiert `&#x27;`
+    # zurueck zu `'` *bevor* JS die Zeile parst, ein einfaches
+    # Anfuehrungszeichen in der Container-URL beendet den String also und
+    # der Rest der URL wird ausgefuehrt. Deshalb wird hier fuer den
+    # JS-Kontext escaped - render_button escaped danach noch einmal fuer das
+    # Attribut, was sich harmlos ueberlagert.
+    onclick_url = js_single_quoted_string_safe(url_with_quick_transfer_params)
 
     # The release title and the container password come from the scraped page,
     # so they are attacker-controlled: a hostile release name must not be able
@@ -80,7 +95,7 @@ def render_bypass_section(url, package_id, title, password, provider_name="FileC
             </div>
 
             <p style="text-align: center;">
-                {render_button(f"Open {safe_provider_name} & Get Download Links", "primary", {"onclick": f"window.open('{url_with_quick_transfer_params}', '_self')"})}
+                {render_button(f"Open {safe_provider_name} & Get Download Links", "primary", {"onclick": f"window.open('{onclick_url}', '_self')"})}
             </p>
 
             <!-- Manual submission - collapsible -->

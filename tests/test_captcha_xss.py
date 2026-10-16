@@ -14,6 +14,7 @@ Ein Titel wie ``x" onerror="alert(1)`` genügte, um das value-Attribut zu
 verlassen und ein Attribut zu eröffnen, das sofort ausgeführt wird.
 """
 
+import re
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -83,6 +84,65 @@ class TestBypassSectionEscapes(unittest.TestCase):
         html = self._render()
         self.assertIn('name="title" value="&quot;&gt;&lt;img src=x', html)
 
+    def test_url_cannot_rewrite_the_onclick_handler(self):
+        """Der onclick-Wert lebt nach dem HTML-Decoding im JavaScript-Kontext.
+
+        `render_button` escaped das Attribut - das genuegt nicht. Der Browser
+        dekodiert `&#x27;` zurueck zu `'`, *bevor* JS die Zeile parst. Ein
+        einfaches Anfuehrungszeichen in der Container-URL beendet den String
+        also und alles danach ist ausfuehrbarer Code. Der Test liest deshalb
+        das Attribut zurueck und dekodiert es so, wie es ein Browser tut.
+        """
+        html = self._render(url="https://fc/C.html'); alert(document.domain); //")
+        handler = _decode_attribute(html, "onclick")
+        self.assertEqual(_js_string_tail(handler), "', '_self')")
+
+    def test_url_cannot_escape_through_ampersands(self):
+        """Der Quick-Transfer-Anhang benutzt `&` als Trenner.
+
+        Ohne Escaping koennte ein `&quot;` aus der Attribut-Dekodierung wieder
+        zu einem Anfuehrungszeichen werden und damit den Wert aufspalten.
+        """
+        html = self._render(url="https://fc/C.html?a=1&b='")
+        handler = _decode_attribute(html, "onclick")
+        self.assertEqual(_js_string_tail(handler), "', '_self')")
+
+    def test_missing_password_renders_instead_of_raising(self):
+        """Ein Container ohne Passwort ist der Normalfall, kein Sonderfall.
+
+        `payload.get("password")` liefert da None, und `quote(None` wirft
+        TypeError - die CAPTCHA-Seite wurde damit zur 500, und zwar bei genau
+        den Links, die man entschluesseln wollte.
+        """
+        html = self._render(password=None)
+        self.assertIn("pkg_pass=&", html)
+
+
+def _decode_attribute(document, attribute):
+    """Liest ein Attribut zurueck und dekodiert es, wie ein Browser es tut."""
+    import html as html_module
+
+    raw = re.search(attribute + r'="([^"]*)"', document).group(1)
+    return html_module.unescape(raw)
+
+
+def _js_string_tail(handler):
+    """Endposition des ersten JS-Strings plus dem, was danach kommt.
+
+    Ein ausfuehrbares ``'); alert(1)`` aendert den Rest hinter dem String -
+    genau das ist der Befund, den dieser Helfer sichtbar macht.
+    """
+    start = handler.index("'", handler.index("window.open("))
+    index = start + 1
+    while index < len(handler):
+        if handler[index] == "\\":
+            index += 2
+            continue
+        if handler[index] == "'":
+            return handler[index:]
+        index += 1
+    return "!! String laeuft bis zum Ende der Zeile"
+
 
 class _FakeApp:
     def __init__(self):
@@ -100,7 +160,7 @@ class _FakeApp:
 class TestCutcaptchaRouteEscapes(unittest.TestCase):
     """The real route, not a re-implementation of the escaping."""
 
-    def _render(self, mirror_name, title=PAYLOAD):
+    def _render(self, mirror_name, title=PAYLOAD, links=None, mirror=None):
         from kuasarr.api.captcha import provider_routes
 
         app = _FakeApp()
@@ -108,7 +168,11 @@ class TestCutcaptchaRouteEscapes(unittest.TestCase):
             "package_id": "pkg-1",
             "title": title,
             "password": "",
-            "links": [["https://filecrypt.cc/Container/ABC.html", mirror_name]],
+            # `mirror` ist ein eigener Payload-Schluessel und geht in den
+            # JS-Request-Body - nicht der Anzeigename aus `links`.
+            "mirror": mirror if mirror is not None else mirror_name,
+            "links": links if links is not None
+            else [["https://filecrypt.cc/Container/ABC.html", mirror_name]],
         }), \
              patch.object(provider_routes, "check_package_exists"), \
              patch.object(provider_routes, "captcha_values",
@@ -146,6 +210,76 @@ class TestCutcaptchaRouteEscapes(unittest.TestCase):
         # innerhalb eines <script>-Elements und kann dort nichts eroeffnen -
         # entscheidend ist, dass kein oehnender Winkel das Element verlassen kann.
         self.assertIn("title: '\\u003c/script>", html)
+
+    def test_password_cannot_close_the_js_string_it_is_written_into(self):
+        """Passwort und Mirror-Name gingen unveraendert in JS-Strings.
+
+        Beide kommen aus dem Payload und damit von der gescrapten Seite. Der
+        Mirror-Name ist der Hoster - ein einzelnes Anfuehrungszeichen darin hat
+        den restlichen Request-body als JavaScript ausgefuehrt.
+        """
+        html = self._render("rapidgator'); alert(1); //")
+        self.assertNotIn("mirror: 'rapidgator'); alert(1); //',", html)
+        self.assertIn("mirror: 'rapidgator\\'); alert(1); //',", html)
+
+    def test_link_hidden_input_cannot_be_closed(self):
+        """Das hidden input trug die Container-URL unveraendert.
+
+        Es ist derselbe Wert wie im Mirror-<option>, aber an einer Stelle, die
+        der erste Fix nicht abgedeckt hatte: ein Anfuehrungszeichen in der URL
+        schliesst das value-Attribut und eroeffnet ein ausfuehrbares.
+        """
+        html = self._render("rapidgator", links=[[PAYLOAD, "rapidgator"]])
+        self.assertNotIn('value=""><img', html)
+        self.assertIn('id="link-hidden" value="&quot;&gt;&lt;img', html)
+
+
+class TestCircleRouteRenders(unittest.TestCase):
+    """Der Circle-Pfad war durch meine eigene Aenderung lahmgelegt."""
+
+    def _render(self, **overrides):
+        from kuasarr.api.captcha import provider_routes
+
+        payload = {
+            "package_id": "pkg-1",
+            "session": "s1",
+            "title": "Titel",
+            "password": "",
+            "original_url": "",
+            "links": [["https://filecrypt.cc/C.html", "rapidgator"]],
+        }
+        payload.update(overrides)
+
+        app = _FakeApp()
+        with patch.object(provider_routes, "decode_payload", return_value=payload), \
+             patch.object(provider_routes, "check_package_exists"):
+            provider_routes.setup_provider_routes(app)
+            return app.routes["/captcha/circle"]()
+
+    def test_it_renders(self):
+        """Regression: die Route benutzte `safe_title`, ohne es zu definieren.
+
+        `title` wird hier mit Default gelesen, nicht mit `.get("title")` -
+        deshalb traf der Ersetzungsschritt die Verwendung, aber nicht die
+        Definition. Ergebnis war auf jeder Circle-Captcha ein NameError.
+        """
+        self.assertIn("Titel", self._render())
+
+    def test_the_form_query_is_encoded(self):
+        """url und session_id standen roh in action- und src-Attribut.
+
+        Geprueft wird nur das action-Attribut, nicht das ganze Dokument: die
+        bypass-Sektion enthaelt die URL ebenfalls, dort aber zwingend als
+        Teil eines JS-Strings - `onerror=` steht da harmlos als Text.
+        """
+        html = self._render(links=[["https://fc/C.html\" onerror=alert(1)", "rapidgator"]])
+        action = re.search(r'<form action="([^"]*)"', html).group(1)
+        self.assertNotIn("onerror=", action)
+        # Innerhalb des url-Werts darf kein Anfuehrungszeichen mehr stehen -
+        # das ist die Eigenschaft, auf die es hier ankommt, unabhaengig davon,
+        # welche Zeichen quote() sonst noch kodiert.
+        self.assertNotIn('"', action.split("?url=")[1])
+        self.assertIn("session_id=s1", action)
 
 
 if __name__ == "__main__":

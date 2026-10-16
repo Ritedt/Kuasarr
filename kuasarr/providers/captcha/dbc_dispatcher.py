@@ -1453,12 +1453,15 @@ class DBCDispatcher:
 
     def _extract_keeplinks_download_links(self, soup: BeautifulSoup) -> list:
         """Extract download links from a Keeplinks page.
-        
-        Links are in <label class="form_box_title"> with <a class="selecttext live">
-        Filters out ads/affiliate links.
+
+        Preferred source is the ``<textarea class="trurl">`` the container
+        renders once it is unlocked - it exists for exactly this purpose and
+        is the only place that is authoritative about what is behind the
+        container. The anchor-based tiers below stay as fallbacks for page
+        layouts that do not render the textarea.
         """
         links = []
-        
+
         # Patterns for valid download links (must have file path)
         hoster_patterns = [
             r'rapidgator\.net/file/',
@@ -1475,8 +1478,23 @@ class DBCDispatcher:
             r'depositfiles\.com/files/',
             r'filefactory\.com/file/',
         ]
-        
+
         combined_pattern = '|'.join(hoster_patterns)
+
+        # First try: the container's own textarea listing the download URLs.
+        # Deliberately not filtered by hoster_patterns: Kuasarr bundles no
+        # hosters on purpose, and this textarea says what is really there.
+        # Only junk (blank lines, non-http text) is dropped.
+        for textarea in soup.find_all('textarea', class_='trurl'):
+            for line in textarea.get_text().split('\n'):
+                candidate = line.strip()
+                if not candidate.startswith(('http://', 'https://')):
+                    continue
+                if candidate not in links:
+                    links.append(candidate)
+                    debug(f"Keeplinks: Found download link (trurl): {candidate[:60]}...")
+            if links:
+                return links
         
         # First try: Look for links in form_box_title (Keeplinks specific)
         form_boxes = soup.find_all('label', class_='form_box_title')

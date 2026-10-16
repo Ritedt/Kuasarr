@@ -349,10 +349,13 @@ def send_notification_test(shared_state, payload=None):
             with _temporary_notification_settings(shared_state, settings):
                 sent = discord.send(shared_state, message, silent=False)
         except Exception as e:
+            # Der Grund wandert ins Log, nicht in die Antwort: eine
+            # Exception kann URLs mit Token, Pfade oder Antwortkoepfe des
+            # Providers enthalten. Alles davon steht in ``kuasarr.log``.
             info(f"Discord test notification error: {e}")
             return {
                 "success": False,
-                "message": f"Failed to send Discord test message: {e}",
+                "message": "Failed to send Discord test message",
             }
         if sent:
             return {"success": True, "message": "Discord test message sent"}
@@ -386,10 +389,12 @@ def send_notification_test(shared_state, payload=None):
             if not sent:
                 telegram_destination = telegram.inspect_destination(shared_state)
     except Exception as e:
+        # Siehe Discord weiter oben: die Exception wandert ins Log, der
+        # Testknopf bekommt eine Meldung ohne Interna.
         info(f"Telegram test notification error: {e}")
         return {
             "success": False,
-            "message": f"Failed to send Telegram test message: {e}",
+            "message": "Failed to send Telegram test message",
         }
     if sent:
         return {"success": True, "message": "Telegram test message sent"}

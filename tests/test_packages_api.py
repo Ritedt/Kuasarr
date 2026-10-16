@@ -191,7 +191,7 @@ def test_pause_with_invalid_json_is_400(api):
     status, body = api.post_raw("/api/packages/pause", b"{{not json")
 
     assert status == 400
-    assert "Invalid JSON" in json.loads(body)["error"]["message"]
+    assert "not valid JSON" in json.loads(body)["error"]["message"]
     assert api.device.downloadcontroller.set_pause.call_count == 0
 
 

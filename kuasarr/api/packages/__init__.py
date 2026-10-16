@@ -380,11 +380,19 @@ def _render_not_connected_page() -> str:
 
 
 def _read_json_body() -> dict:
-    """Liest den JSON-Body und stellt sicher, dass es ein Objekt ist."""
+    """Liest den JSON-Body und stellt sicher, dass es ein Objekt ist.
+
+    Die Meldung bleibt bewusst statisch: der Originalfehler von
+    ``json.loads`` nennt Zeichenposition und Byte-Offset, was fuer den
+    Aufrufer nichts beitraegt, aber durch die Fehlerbehandlung der drei
+    Aktionsrouten (`_api_error(400, str(exc))`) nach aussen wandern wuerde.
+    Die Position steht dafuer im Log.
+    """
     try:
         data = json.loads(request.body.read().decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
-        raise ValueError(f"Invalid JSON body: {exc}") from exc
+        logger.debug("Ungueltiger JSON-Body: %s", exc)
+        raise ValueError("Request body is not valid JSON") from exc
     if not isinstance(data, dict):
         raise ValueError("Request body must be a JSON object")
     return data

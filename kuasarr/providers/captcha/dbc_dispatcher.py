@@ -160,6 +160,36 @@ def _he_post_unavailable(target: str, payload: List[Tuple[str, str]]) -> Optiona
     return None
 
 
+def _filecrypt_page_richness(soup: BeautifulSoup) -> int:
+    """Rank a Filecrypt document by how much link-bearing content it carries.
+
+    Used to decide whether a fetched mirror page is worth preferring over the
+    page we already hold. The signals are exactly the ones the link extraction
+    branches below rely on, so a document that scores zero here cannot produce
+    links in any of them.
+
+    The payload-carrying form dominates the score: it is the only element that
+    yields links without a second request, and a document without it cannot be
+    decrypted at all. The proof-of-work gate keeps the page chrome and the
+    hoster-row markup around while dropping that form, so a page can look
+    plausible in the DOM and still be worthless - counting the surrounding
+    markup equally is what let a gate page replace a solved one.
+    """
+    cnl_form = soup.find("form", {"class": "cnlform"})
+    if cnl_form and "CNLPOP(" in (cnl_form.get("onsubmit") or ""):
+        # 1000 outweighs every other signal, so a page that can be decrypted
+        # always wins over one that only looks like it.
+        return 1000
+
+    score = 0
+    if cnl_form:
+        score += 1
+    if soup.find("button", {"class": "dlcdownload"}):
+        score += 1
+    score += len(soup.find_all("a", {"class": "external_link"}))
+    return score
+
+
 class DBCDispatcher:
     """Background thread for DeathByCaptcha captcha solving.
     
@@ -825,15 +855,36 @@ class DBCDispatcher:
         else:
             mirrors = [url]
 
-        for mirror_url in mirrors:
-            if len(mirrors) > 1:
-                output = session.get(mirror_url, headers=headers)
-                url = output.url
-                soup = BeautifulSoup(output.text, 'html.parser')
+        # The page we already hold carries the payload; the mirrors are fetched
+        # only to see whether one of them carries more. None of them does in
+        # practice - a mirror GET is answered by the proof-of-work gate again,
+        # without the payload form - and taking such a page made every
+        # container with mirror links report "Click'n'Load not found!" and fall
+        # through to DLC and then into the Circle-Captcha fallback.
+        candidates = []
+        if len(mirrors) > 1:
+            current_richness = _filecrypt_page_richness(soup)
+            for mirror_url in mirrors:
+                mirror_output = session.get(mirror_url, headers=headers)
+                mirror_soup = BeautifulSoup(mirror_output.text, 'html.parser')
+                if _filecrypt_page_richness(mirror_soup) > current_richness:
+                    debug(f"DBC: Mirror {mirror_url} liefert eine bessere Seite.")
+                    current_richness = _filecrypt_page_richness(mirror_soup)
+                    candidates.append((mirror_output, mirror_output.url, mirror_soup))
+                else:
+                    debug(f"DBC: Mirror {mirror_url} liefert keine nutzbare Seite "
+                          f"(kein CNL-Payload), gelöste Seite behalten.")
+
+        # The solved page goes last, so it is the one parsed when no mirror is
+        # better. Without it the loop body would run only for useless mirrors
+        # and no link would ever be decrypted.
+        candidates.append((None, url, soup))
+
+        for page_output, page_url, page_soup in candidates:
 
             try:
                 # Try CNL (Click'n'Load)
-                crypted_payload = soup.find("form", {"class": "cnlform"}).get('onsubmit')
+                crypted_payload = page_soup.find("form", {"class": "cnlform"}).get('onsubmit')
                 crypted_data = re.findall(r"'(.*?)'", crypted_payload)
                 if not title:
                     title = crypted_data[3]
@@ -847,26 +898,26 @@ class DBCDispatcher:
                     # Optional filter only - see narrow_cnl_payload. A failed
                     # filter must leave the payload that is already in the page
                     # alone instead of aborting the CNL branch.
-                    cnl_secret_el = soup.find("input", {"name": "hidden_cnl_id"})
+                    cnl_secret_el = page_soup.find("input", {"name": "hidden_cnl_id"})
                     crypted_data = narrow_cnl_payload(
-                        session, url, headers,
+                        session, page_url, headers,
                         cnl_secret_el.get("value") if cnl_secret_el else None,
                         season, episode, crypted_data, title,
                     )
                 links.extend(CNL(crypted_data).decrypt())
                 break
             except:
-                if "The owner of this folder has deactivated all hosts in this container in their settings." in soup.text:
+                if "The owner of this folder has deactivated all hosts in this container in their settings." in page_soup.text:
                     info(f"Mirror deactivated by the owner: {mirror_url}")
                     continue
 
                 info("Click'n'Load not found! Falling back to DLC...")
                 try:
                     # Try DLC
-                    crypted_payload = soup.find("button", {"class": "dlcdownload"}).get("onclick")
+                    crypted_payload = page_soup.find("button", {"class": "dlcdownload"}).get("onclick")
                     crypted_data = re.findall(r"'(.*?)'", crypted_payload)
                     dlc_secret = crypted_data[0]
-                    domain = urlparse(url).netloc
+                    domain = urlparse(page_url).netloc
                     if episode and season:
                         dlc_link = f"https://{domain}/DLC/{dlc_secret}.dlc?{episode}&{season}"
                     else:
@@ -878,7 +929,7 @@ class DBCDispatcher:
                     info("DLC not found! Falling back to Circle-Captcha buttons...")
                     
                     # Return replacement info for Circle-Captcha handling
-                    parsed_url = urlparse(url)
+                    parsed_url = urlparse(page_url)
                     base_url = parsed_url.netloc
                     # Keep the scheme the container itself was served with. Building
                     # an "http://" URL out of the bare netloc pinned the
@@ -887,13 +938,13 @@ class DBCDispatcher:
                     # origin guard reads that as leaving the pinned origin, and
                     # every attempt gets refused.
                     base_scheme = parsed_url.scheme or "https"
-                    phpsessid = get_filecrypt_phpsessid(session, url)
+                    phpsessid = get_filecrypt_phpsessid(session, page_url)
                     if not phpsessid:
                         info("PHPSESSID cookie not found!")
                         return None
 
                     results = []
-                    for button in soup.find_all('button'):
+                    for button in page_soup.find_all('button'):
                         data_attrs = [v for k, v in button.attrs.items() if k.startswith('data-') and k != 'data-i18n']
                         if not data_attrs:
                             continue

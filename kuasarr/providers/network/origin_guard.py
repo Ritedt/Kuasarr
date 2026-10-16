@@ -21,6 +21,31 @@ import requests
 # handling, so the bound has to be reapplied by hand.
 _DEFAULT_MAX_REDIRECTS = 30
 
+# Headers that describe a request body. A redirect hop is always rebuilt as a
+# GET and carries no body, so these must not survive into it: a GET that
+# announces ``Content-Length: N`` without sending N bytes makes the peer wait
+# for a body that never arrives.
+_BODY_HEADERS = frozenset({
+    "content-length",
+    "content-type",
+    "content-encoding",
+    "transfer-encoding",
+})
+
+
+def _headers_for_redirect(headers) -> dict:
+    """The original request's headers, minus everything about its body.
+
+    ``requests`` has no redirect hook, so the guard follows a same-origin hop
+    itself. Reusing ``response.request.headers`` verbatim looks faithful but
+    carries the POST's ``Content-Length`` and ``Content-Type`` over to a GET
+    that has no body. Live against keeplinks.org that follow-up GET was
+    answered by a connection reset after ~16 s; without the guard the same
+    request returned in 0,35 s. Identity headers (User-Agent, Referer,
+    Accept, cookies) are kept - only the body framing is dropped.
+    """
+    return {k: v for k, v in headers.items() if k.lower() not in _BODY_HEADERS}
+
 
 def origin_of(url: str) -> Optional[tuple]:
     """Normalize a URL to (scheme, host, port) for origin comparison.
@@ -88,7 +113,8 @@ def same_origin_guard_for(session: requests.Session, base_url: str) -> requests.
                     f"Refusing to follow redirect off the container origin: {target_origin}")
             history.append(response)
             next_request = requests.Request(
-                "GET", target, headers=response.request.headers).prepare()
+                "GET", target,
+                headers=_headers_for_redirect(response.request.headers)).prepare()
             response = original_send(next_request, allow_redirects=False, **kwargs)
 
         if history:

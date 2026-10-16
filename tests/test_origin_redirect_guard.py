@@ -56,6 +56,8 @@ class _Handler(BaseHTTPRequestHandler):
         return False
 
     def do_GET(self):
+        TARGET.setdefault("get_headers", []).append(
+            (self.path.split("?")[0], dict(self.headers)))
         if not self._route():
             self.send_response(404)
             self.end_headers()
@@ -166,6 +168,76 @@ class TestRedirectGuard:
 
         with pytest.raises(requests.TooManyRedirects):
             guarded.get(f"{origin_server}/loop", timeout=10)
+
+
+# --- The hop the guard builds by hand ----------------------------------------
+#
+# The guard follows a same-origin redirect itself and rebuilds the next
+# request as a GET from ``response.request.headers``. On a POST that header
+# set still describes the POST body: it carries ``Content-Length`` and
+# ``Content-Type`` for a request that has no body at all.
+#
+# A GET that announces a body length it does not send is a malformed
+# request. ``BaseHTTPRequestHandler`` here tolerates it, real edges do not -
+# live against keeplinks.org the follow-up GET was answered by a connection
+# reset after ~16 s instead of the 0,35 s a correct request takes:
+#
+#   ohne Guard   0,35 s  302, 10 entsperrte Links
+#   mit Guard   16,58 s  Connection aborted / RemoteDisconnected
+#
+# Both runs used the same fields, the same headers and the same captcha
+# answer. The guard was the only variable.
+
+class TestRedirectHopHasNoBody:
+    """The hand-built follow-up GET must not claim to have a body."""
+
+    def _post_that_redirects(self, origin_server):
+        TARGET["reached"] = []
+        TARGET["get_headers"] = []
+        TARGET["location"] = f"{origin_server}/final"
+
+        session = DBCDispatcher._same_origin_guard_for(
+            requests.Session(), f"{origin_server}/start")
+        response = session.post(
+            f"{origin_server}/start",
+            data={"myhiddenpwd": "deadbeef", "captcha_cool": "bummer"},
+            headers={"User-Agent": "test-agent"},
+            allow_redirects=True,
+            timeout=10)
+        assert response.status_code == 200
+        return TARGET["get_headers"]
+
+    def test_followup_get_declares_no_content_length(self, origin_server):
+        """Content-Length on a bodyless GET makes the peer wait for bytes."""
+        hops = self._post_that_redirects(origin_server)
+        final = [h for path, h in hops if path == "/final"]
+
+        assert final, "der Redirect-Hop wurde nicht als GET ausgefuehrt"
+        assert "Content-Length" not in final[0], (
+            f"GET mit Content-Length: {final[0]['Content-Length']} - "
+            "die Gegenstelle wartet auf einen Body, der nie kommt")
+
+    def test_followup_get_declares_no_content_type(self, origin_server):
+        """Content-Type of a POST does not belong on a GET."""
+        hops = self._post_that_redirects(origin_server)
+        final = [h for path, h in hops if path == "/final"]
+
+        assert "Content-Type" not in final[0]
+
+    def test_followup_get_keeps_the_non_body_headers(self, origin_server):
+        """Stripping the body headers must not strip the identity ones."""
+        hops = self._post_that_redirects(origin_server)
+        final = [h for path, h in hops if path == "/final"]
+
+        assert final[0].get("User-Agent") == "test-agent"
+
+    def test_first_hop_still_sends_its_body(self, origin_server):
+        """Only the follow-up GET is changed - the POST keeps its body."""
+        TARGET["bodies"] = []
+        self._post_that_redirects(origin_server)
+
+        assert TARGET["bodies"], "der POST kam ohne Body an"
+        assert b"captcha_cool" in TARGET["bodies"][0]
 
 # --- The FileCrypt path -------------------------------------------------------
 #

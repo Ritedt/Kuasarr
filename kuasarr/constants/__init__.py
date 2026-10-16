@@ -24,6 +24,14 @@ DOWNLOAD_REQUEST_TIMEOUT_SECONDS = 30
 SESSION_REQUEST_TIMEOUT_SECONDS = 30
 SEARCH_TIMEOUT_SECONDS = 15
 FEED_TIMEOUT_SECONDS = 30
+# SEARCH_DEADLINE_SECONDS is deliberately gone again. See the comment in
+# kuasarr/search/__init__.py: every scraper resolves the IMDb title before it
+# searches, and a blocked imdb.com spends IMDB_WAF_SETTLE_SECONDS (8s) in
+# FlareSolverr. A global 8s cutoff therefore fired *during* the title lookup
+# and returned "0 partial results" for searches that do work - it was shorter
+# than SEARCH_TIMEOUT_SECONDS (15s), so even a healthy first source could not
+# finish inside it. Slow sources end on their own timeouts instead.
+SEARCH_MAX_WORKERS = 16
 
 # CAPTCHA solving timeouts
 CAPTCHA_SOLVE_TIMEOUT_SECONDS = 120

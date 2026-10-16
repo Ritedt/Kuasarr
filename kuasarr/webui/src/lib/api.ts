@@ -26,6 +26,7 @@ import type {
   HostnamesSaveResponse,
   AdvancedSettings,
   VersionInfo,
+  SjdjSettings,
 } from '../types';
 
 const API_BASE = '/api';
@@ -384,6 +385,19 @@ export async function saveHostnamesSettings(
     }
   );
   return { requires_restart: response.requires_restart || [] };
+}
+
+// SJ/DJ Credentials API
+export async function getSjdjSettings(): Promise<SjdjSettings | null> {
+  const response = await fetchApi<SjdjSettings>('/settings/sjdj-config');
+  return response.data || null;
+}
+
+export async function saveSjdjSettings(data: Partial<SjdjSettings>): Promise<void> {
+  await fetchApi<void>('/settings/sjdj-config', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
 }
 
 // Advanced Settings API

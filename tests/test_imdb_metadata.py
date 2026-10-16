@@ -216,6 +216,24 @@ def _mock_shared_state(cache=None):
 
 class TestGetLocalizedTitle:
 
+    @pytest.fixture(autouse=True)
+    def _no_api_tier(self):
+        """Keep this class focused on the HTML/FlareSolverr tier.
+
+        There is no longer a JSON API tier in front of the imdb.com scrape:
+        the former api.imdbapi.dev endpoint stopped resolving entirely and was
+        removed (see imdb_metadata_api.py). ``search_imdb_id`` still exists
+        for the title -> id direction and is switched off here so these tests
+        keep measuring only what they were written to measure.
+        """
+        from kuasarr.providers import imdb_metadata_api
+        assert not hasattr(imdb_metadata_api, "get_localized"), (
+            "Der JSON-API-Tier fuer lokalisierte Titel ist entfernt - wenn er "
+            "zurueckkommt, hat dieser Test hier eine Antwort darauf."
+        )
+        with patch.object(imdb_metadata_api, "search_imdb_id", return_value=None):
+            yield
+
     def test_returns_title_from_successful_request(self):
         state = _mock_shared_state()
         with patch("kuasarr.providers.imdb_metadata.requests.get") as mock_get:

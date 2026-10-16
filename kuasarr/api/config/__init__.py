@@ -2,7 +2,10 @@
 # Quasarr
 # Project by https://github.com/rix1337
 
-from kuasarr.providers.auth import require_api_key, require_csrf_token, rate_limit, get_csrf_token
+import os
+import time
+
+from kuasarr.providers.auth import require_api_key, require_csrf_token, rate_limit, get_csrf_token, invalidate_auth_cache
 from kuasarr.providers.ui.html_templates import render_form, render_button, render_success
 from kuasarr.providers.ui.spa import try_serve_spa
 from kuasarr.storage.setup import hostname_form_html, save_hostnames, dbc_credentials_config
@@ -640,8 +643,15 @@ def setup_config(app, shared_state):
             conn.save('external_address', (payload['external_address'] or '').strip())
             shared_state.update('external_address', (payload['external_address'] or '').strip())
         if 'timezone' in payload:
-            conn.save('timezone', (payload['timezone'] or 'Europe/Berlin').strip())
-            shared_state.update('timezone', (payload['timezone'] or 'Europe/Berlin').strip())
+            tz = (payload['timezone'] or 'Europe/Berlin').strip()
+            conn.save('timezone', tz)
+            shared_state.update('timezone', tz)
+            # Apply timezone to the running process immediately (P2a)
+            os.environ['TZ'] = tz
+            try:
+                time.tzset()
+            except AttributeError:
+                pass  # Windows (tzset unavailable; irrelevant for Docker/Unix)
         if 'slow_mode' in payload:
             conn.save('slow_mode', 'true' if payload['slow_mode'] else 'false')
         if 'flaresolverr_url' in payload:
@@ -650,6 +660,10 @@ def setup_config(app, shared_state):
             webui.save('user', payload['webui_user'].strip())
         if payload.get('webui_password', ''):
             webui.save('password', payload['webui_password'].strip())
+        if payload.get('webui_user') or payload.get('webui_password'):
+            # Credentials changed via WebUI — refresh the auth cache so the new
+            # values take effect immediately (no app restart needed). (P1)
+            invalidate_auth_cache()
 
         return json.dumps({'success': True, 'message': 'General settings saved successfully'})
 
@@ -833,6 +847,66 @@ def setup_config(app, shared_state):
             'message': 'Hostname settings saved successfully',
             'requires_restart': requires_restart,
         })
+
+    @app.get('/api/settings/sjdj-config')
+    @require_api_key
+    def get_sjdj_config():
+        from bottle import response
+        import json
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+        sj = Config('SJ')
+        dj = Config('DJ')
+
+        return json.dumps({
+            'success': True,
+            'data': {
+                'sj_user': sj.get('user') or '',
+                'sj_preferred_hoster': sj.get('preferred_hoster') or '',
+                'dj_user': dj.get('user') or '',
+                'dj_preferred_hoster': dj.get('preferred_hoster') or '',
+                # Passwords are never returned in clear text; only whether set.
+                'sj_password': '',
+                'dj_password': '',
+                '_is_set': {
+                    'sj_password': bool(sj.get('password')),
+                    'dj_password': bool(dj.get('password')),
+                },
+            }
+        })
+
+    @app.post('/api/settings/sjdj-config')
+    @require_api_key
+    def save_sjdj_config():
+        from bottle import response, request
+        import json
+        from kuasarr.storage.config import Config
+
+        response.content_type = 'application/json'
+        try:
+            payload = request.json or {}
+        except Exception:
+            response.status = 400
+            return json.dumps({'success': False, 'error': 'Invalid JSON'})
+
+        sj = Config('SJ')
+        dj = Config('DJ')
+
+        # SJ/DJ hoster login credentials. Session creation reads these live,
+        # so changes apply to the next session build (no restart needed).
+        for section, cfg in (('SJ', sj), ('DJ', dj)):
+            prefix = section.lower()
+            if f'{prefix}_user' in payload:
+                cfg.save('user', (payload[f'{prefix}_user'] or '').strip())
+            if f'{prefix}_preferred_hoster' in payload:
+                cfg.save('preferred_hoster', (payload[f'{prefix}_preferred_hoster'] or '').strip().lower())
+            # Only overwrite the password when a new one is entered, so saving
+            # the form without retyping it does not wipe the stored value.
+            if payload.get(f'{prefix}_password'):
+                cfg.save('password', payload[f'{prefix}_password'].strip())
+
+        return json.dumps({'success': True, 'message': 'SJ/DJ credentials saved successfully'})
 
     @app.get('/api/settings/advanced-config')
     @require_api_key

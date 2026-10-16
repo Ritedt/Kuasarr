@@ -137,98 +137,72 @@ class TestSolveCircleCaptchaLetsServiceErrorsThrough(unittest.TestCase):
         )
 
 
-class TestCircleSkipPostSetsTimeout(unittest.TestCase):
-    """Issue #76 - der Circle-Skip-POST hing ohne timeout auf requests."""
+class TestFilecryptNetworkCallsAreBounded(unittest.TestCase):
+    """Issue #76 - kein Netzwerkaufruf im Filecrypt-Pfad darf unbegrenzt haengen.
 
-    def _run_skip_path(self, post_side_effect):
-        dispatcher = _make_dispatcher()
-        session = MagicMock()
-        session.post.side_effect = post_side_effect
+    Die Aussage dieser Tests hat sich mit dem Code verschoben, nicht ihre
+    Absicht. Frueher prueften sie den "Circle-Skip"-Loop, der drei
+    Zufallskoordinaten an /captcha/circle.php schickte. Der Pfad existiert
+    nicht mehr: er wurde durch echtes Bild-Solving ersetzt (Bild an DBC,
+    zurueckkommende (x, y) klicken). Zufallskoordinaten konnten das Captcha
+    gar nicht loesen.
 
-        with patch(
-            "kuasarr.providers.captcha.dbc_dispatcher.ensure_session_cf_bypassed",
-            return_value=(session, {"User-Agent": "test-agent"},
-                          _FakeResponse(CIRCLE_PAGE_HTML)),
-        ), patch(
-            "kuasarr.providers.captcha.dbc_dispatcher._same_origin_guard_for",
-            return_value=session,
-        ), patch.object(
-            dispatcher, "_get_captcha_token", return_value=None
-        ):
-            dispatcher._solve_filecrypt_with_dbc(
-                title="Some.Release",
-                url=CONTAINER_URL,
-                password="",
-            )
-        return session
+    Der Dispatcher laeuft single-threaded (max_concurrent = 1). Ein einziger
+    haengender Aufruf friert deshalb die komplette Queue ein. Die Haenge-
+    Absicht von #76 gilt fuer jeden Aufruf im Pfad, also wird sie hier gegen
+    den Quelltext des Pfades geprueft statt gegen einen Weg, den es nicht
+    mehr gibt.
+    """
 
-    def test_skip_post_passes_a_timeout(self):
-        """Der Timeout ist die Eigenschaft, nicht die konkrete Sekundenzahl."""
-        session = self._run_skip_path([_FakeResponse(CIRCLE_PAGE_HTML)] * 3)
+    FILECRYPT_METHOD = "_solve_filecrypt_with_dbc"
 
-        self.assertTrue(session.post.call_args_list, "Der Circle-Skip-POST lief nie")
-        for call in session.post.call_args_list:
-            kwargs = call.kwargs
-            self.assertIsNotNone(
-                kwargs.get("timeout"),
-                f"Der Circle-Skip-POST wurde ohne timeout aufgerufen: {kwargs}",
-            )
+    def _filecrypt_source(self):
+        import inspect
+        from kuasarr.providers.captcha import dbc_dispatcher as mod
+        return inspect.getsource(getattr(mod.DBCDispatcher, self.FILECRYPT_METHOD))
 
-    def test_timeout_leaves_the_loop_instead_of_escaping(self):
-        """Ein Timeout darf nicht aus der Methode herausfliegen."""
-        session = self._run_skip_path(requests.ReadTimeout("timed out"))
+    def test_no_unbounded_session_call_in_the_filecrypt_path(self):
+        """Jeder session.get/post im Filecrypt-Pfad braucht einen timeout.
 
-        self.assertEqual(
-            session.post.call_count, 1,
-            "Der Timeout muss den Retry-Loop kontrolliert verlassen, nicht propagieren",
-        )
+        Geprueft wird der Quelltext des Pfades: das ist unabhaengig davon,
+        ob der Test gerade einen bestimmten Antwort-Baum durchlaeuft, und
+        deckt auch Zweige ab, die spaeter dazukommen.
+        """
+        import re
+        source = self._filecrypt_source()
+        calls = re.findall(r"session\.(?:get|post)\(", source)
+        self.assertTrue(calls, "Kein session-Aufruf gefunden - Test prueft nichts")
 
-    def test_repeated_timeouts_never_loop_forever(self):
-        session = self._run_skip_path(requests.ReadTimeout("timed out"))
-
-        self.assertLessEqual(
-            session.post.call_count, 3,
-            "Der Skip-Loop ist bei drei Versuchen gedeckelt",
-        )
-
-    def test_healthy_circle_page_stays_capped_at_three_attempts(self):
-        """Ohne Timeout ist die Drei-Versuche-Grenze die einzige Bremse."""
-        session = self._run_skip_path([_FakeResponse(CIRCLE_PAGE_HTML)] * 5)
-
-        self.assertEqual(
-            session.post.call_count, 3,
-            "Der Skip-Loop darf höchstens dreimal posten",
-        )
-
-    def test_every_post_in_the_filecrypt_path_has_a_timeout(self):
-        """Auch der cap_token-POST darf nicht unbegrenzt hängen."""
-        dispatcher = _make_dispatcher()
-        session = MagicMock()
-        # Erst der Skip-POST, danach der cap_token-POST.
-        session.post.side_effect = [
-            _FakeResponse(NO_CIRCLE_PAGE_HTML),
-            _FakeResponse(NO_CIRCLE_PAGE_HTML),
-        ]
-
-        with patch(
-            "kuasarr.providers.captcha.dbc_dispatcher.ensure_session_cf_bypassed",
-            return_value=(session, {"User-Agent": "test-agent"},
-                          _FakeResponse(CIRCLE_PAGE_HTML)),
-        ), patch(
-            "kuasarr.providers.captcha.dbc_dispatcher._same_origin_guard_for",
-            return_value=session,
-        ), patch.object(
-            dispatcher, "_get_captcha_token", return_value="the-token"
-        ):
-            dispatcher._solve_filecrypt_with_dbc(
-                title="Some.Release",
-                url=CONTAINER_URL,
-                password="",
+        for match in re.finditer(r"session\.(?:get|post)\((?:[^()]|\([^()]*\))*", source):
+            call = match.group(0)
+            self.assertIn(
+                "timeout=", call,
+                f"Dieser Aufruf kann unbegrenzt haengen (Issue #76): {call}",
             )
 
-        self.assertEqual(session.post.call_count, 2)
-        for call in session.post.call_args_list:
-            self.assertIsNotNone(call.kwargs.get("timeout"))
+    def test_circle_image_fetch_is_bounded(self):
+        """Das Circle-Bild wird mit Timeout geladen - es ist ein HTTP-Aufruf."""
+        import re
+        source = self._filecrypt_source()
+        img_fetch = [m.group(0) for m in re.finditer(
+            r"session\.get\((?:[^()]|\([^()]*\))*", source
+        )]
+        for call in img_fetch:
+            if "captcha/circle" in call or "img_url" in call or "img_src" in call:
+                self.assertIn("timeout=", call,
+                              f"Der Circle-Bildabruf braucht einen Timeout: {call}")
+
+    def test_a_hanging_coordinate_post_is_bounded(self):
+        """Der Klick auf die zurueckgegebenen Koordinaten ist ebenfalls begrenzt."""
+        import re
+        source = self._filecrypt_source()
+        click_post = [m.group(0) for m in re.finditer(
+            r"session\.post\((?:[^()]|\([^()]*\))*", source
+        )]
+        for call in click_post:
+            if "button.x=" in call:
+                self.assertIn("timeout=", call,
+                              f"Der Koordinaten-POST braucht einen Timeout: {call}")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ API Documentation: https://2captcha.com/api-docs
 from __future__ import annotations
 
 import base64
+import json
 import re
 import time
 from typing import Optional, Tuple
@@ -197,14 +198,30 @@ class TwoCaptchaClient(BaseCaptchaClient):
                             is_correct=True,
                             status=CaptchaStatus.SOLVED,
                         )
-                    else:
-                        info(f"2Captcha task {task_id} ready but no token")
+
+                    # Non-token solutions (e.g. CoordinatesTask) put the payload in
+                    # a different field. CoordinatesTask returns
+                    # {"solution": {"coordinates": [{"x": N, "y": N}]}} — no token.
+                    # Hand the raw solution back as a JSON string so the caller's
+                    # type-specific parser (solve_coordinates_captcha) can decode it.
+                    # Without this, every CoordinatesTask logged "ready but no token"
+                    # and Circle-Captcha solving silently returned None.
+                    if solution:
+                        info(f"2Captcha task {task_id} solved (non-token solution)")
                         return CaptchaResult(
                             captcha_id=task_id,
-                            text="",
-                            is_correct=False,
-                            status=CaptchaStatus.FAILED,
+                            text=json.dumps(solution),
+                            is_correct=True,
+                            status=CaptchaStatus.SOLVED,
                         )
+
+                    info(f"2Captcha task {task_id} ready but no token")
+                    return CaptchaResult(
+                        captcha_id=task_id,
+                        text="",
+                        is_correct=False,
+                        status=CaptchaStatus.FAILED,
+                    )
 
                 elif status == "processing":
                     debug(f"2Captcha task {task_id} still processing ({int(time.time() - start)}s elapsed)...")
@@ -374,10 +391,16 @@ class TwoCaptchaClient(BaseCaptchaClient):
 
         b64_image = base64.b64encode(image_data).decode("utf-8")
 
+        # 2Captcha API v2: the task type for click/coordinates captchas is
+        # "CoordinatesTask" (NOT "ImageToCoordinatesTask" — that was an old
+        # / undocumented variant that the API now rejects with ERROR_TASK_ABSENT).
+        # The result is returned as a JSON object {"coordinates":[{x,y}, ...]} —
+        # _get_task_result.text may be either a JSON string or a comma-separated
+        # "x,y" string depending on the API version, so we parse defensively.
         task = {
-            "type": "ImageToCoordinatesTask",
+            "type": "CoordinatesTask",
             "body": b64_image,
-            "mode": "points",
+            "comment": "Click on the open circle",
         }
 
         try:
@@ -388,6 +411,16 @@ class TwoCaptchaClient(BaseCaptchaClient):
                 return None
 
             text = result.text.strip()
+
+            # Try JSON first ("coordinates": [{"x":..,"y":..}])
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, dict) and "coordinates" in parsed:
+                    coords = parsed["coordinates"]
+                    if coords and isinstance(coords[0], dict) and "x" in coords[0] and "y" in coords[0]:
+                        return int(coords[0]["x"]), int(coords[0]["y"])
+            except (ValueError, TypeError):
+                pass
 
             for sep in [",", ";", " ", ":"]:
                 if sep in text:

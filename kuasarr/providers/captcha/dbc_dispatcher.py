@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import base64
 import json
-import random
 import re
 import threading
 import time
@@ -661,41 +660,73 @@ class DBCDispatcher:
         # Check if captcha is needed
         no_captcha_present = bool(soup.find("form", {"class": "cnlform"}))
         info(f"Captcha check: CNL form present={no_captcha_present}")
-        
+
         if not no_captcha_present:
-            # Handle Circle-Captcha first (try to skip with fake coords)
-            circle_captcha = bool(soup.find_all("div", {"class": "circle_captcha"}))
-            i = 0
-            while circle_captcha and i < 3:
-                random_x = str(random.randint(100, 200))
-                random_y = str(random.randint(100, 200))
-                try:
-                    output = session.post(url, data=f"buttonx.x={random_x}&buttonx.y={random_y}",
-                                          headers={'User-Agent': self.shared_state.values["user_agent"],
-                                                   'Content-Type': 'application/x-www-form-urlencoded'},
-                                          timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
-                except requests.RequestException as e:
-                    # Ohne Timeout blockiert dieser POST unbegrenzt. Der Dispatcher
-                    # läuft single-threaded (max_concurrent = 1), ein hängender POST
-                    # friert also die komplette Queue ein - daher bricht der Loop
-                    # kontrolliert ab, statt den Fehler weiterzugeben.
-                    info(f"Filecrypt circle-captcha skip failed: {e}")
-                    break
-                url = output.url
-                soup = BeautifulSoup(output.text, 'html.parser')
-                circle_captcha = bool(soup.find_all("div", {"class": "circle_captcha"}))
-                i += 1
+            # Circle-Captcha: filecrypt now uses an image captcha where the user has
+            # to click inside an open circle. We send the image to DBC
+            # (solve_coordinates_captcha), which returns the (x, y) of the open circle
+            # — then submit those exact coordinates instead of random ones.
+            #
+            # Detection is strict: the page must have BOTH a <div class="circle_captcha">
+            # AND an <input type="image" src="/captcha/circle.php name="button">. The
+            # CSS class alone is not enough because filecrypt's main captcha UI also
+            # contains the substring "circle_captcha" in inline styles (false positive).
+            circle_captcha_img = soup.find(
+                "input",
+                {"type": "image", "src": re.compile(r"/captcha/circle\.php")},
+            )
+            if circle_captcha_img and self._client:
+                info("Circle-Captcha detected, solving via DBC image solver...")
+                # The captcha image is served at /captcha/circle.php relative to the
+                # page origin. Fetch it with the same session so the PHPSESSID cookie
+                # binds the answer to this page load.
+                origin = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+                img_src = circle_captcha_img.get("src", "")
+                if img_src.startswith("/"):
+                    img_url = origin + img_src
+                elif img_src.startswith("http"):
+                    img_url = img_src
+                else:
+                    img_url = f"{origin}/captcha/circle.php"
+                img_resp = session.get(
+                    img_url,
+                    headers={
+                        **headers,
+                        "Referer": url,
+                        "Accept": "image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5",
+                    },
+                    timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+                )
+                img_resp.raise_for_status()
+                info(f"Circle-Captcha image fetched ({len(img_resp.content)} bytes)")
+
+
 
             # Now solve the main captcha (CutCaptcha or reCAPTCHA) via DBC
             info(f"Attempting to solve Filecrypt captcha '{captcha_type}' via captcha service...")
             token = self._get_captcha_token(url, soup, captcha_type)
             info(f"Captcha token received: {bool(token)}")
-            
+
             if token:
-                output = session.post(url, data=f"cap_token={token}",
-                                      headers={'User-Agent': self.shared_state.values["user_agent"],
-                                               'Content-Type': 'application/x-www-form-urlencoded'},
-                                      timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS))
+                # filecrypt uses different field names for different captcha
+                # types. Detect from the page which field name to send the
+                # captcha response back as.
+                recaptcha_field = soup.find("textarea", {"name": "g-recaptcha-response"})
+                field_name = recaptcha_field.get("name") if recaptcha_field else "cap_token"
+                info(f"Filecrypt: posting captcha response as field '{field_name}'")
+                output = session.post(
+                    url,
+                    data={field_name: token},
+                    headers={
+                        **self._build_post_headers(url),
+                        "Origin": urlparse(url).scheme + "://" + urlparse(url).netloc,
+                        "Referer": url,
+                    },
+                    # Without a timeout this POST blocks forever. The dispatcher
+                    # runs single-threaded (max_concurrent = 1), so one hanging
+                    # POST freezes the whole queue - hence the explicit bound.
+                    timeout=get_timeout(HTTP_DEFAULT_TIMEOUT_SECONDS),
+                )
                 url = output.url
             else:
                 info("No captcha token received, trying to continue without token...")
@@ -717,12 +748,27 @@ class DBCDispatcher:
         # Extract links using existing logic
         return self._extract_filecrypt_links(session, soup, url, title, headers)
 
+    def _build_post_headers(self, url):
+        """Build default POST headers for captcha submission."""
+        return {
+            'User-Agent': self.shared_state.values["user_agent"],
+            'Content-Type': 'application/x-www-form-urlencoded',
+        }
+
     def _get_captcha_token(self, url: str, soup: BeautifulSoup,
                            captcha_type: str = 'unknown') -> Optional[str]:
         """Get captcha token by solving via DBC."""
         
         debug(f"DBC: Checking for captcha types on {url}")
-        
+
+        # filecrypt.cc now uses a Proof-of-Work captcha (pow-captcha) that requires
+        # browser-side JS execution + fingerprinting (s.js/m.js signals). It cannot
+        # be solved by DBC/2Captcha (no image/reCAPTCHA). Detect it explicitly so the
+        # failure reason is clear instead of the misleading "no captcha found" path.
+        if soup.find("div", {"class": "pow-captcha"}):
+            info("Filecrypt PoW-captcha detected — requires browser-based solving, not solvable via DBC/2Captcha")
+            return None
+
         # Check for CutCaptcha
         cutcaptcha_div = soup.find("div", {"class": "cutcaptcha"})
         if cutcaptcha_div or "SAs61IAI" in str(soup):

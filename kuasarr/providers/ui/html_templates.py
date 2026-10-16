@@ -601,8 +601,12 @@ def render_button(text, button_type="primary", attributes=None):
     cls = "btn-primary" if button_type == "primary" else ("btn-danger" if button_type == "danger" else "btn-secondary")
     attr_str = ''
     if attributes:
-        attr_str = ' '.join(f'{key}="{value}"' for key, value in attributes.items())
-    return f'<button class="{cls}" {attr_str}>{text}</button>'
+        # Escaped centrally: every caller builds attribute values out of a URL or
+        # a piece of page content, and one unescaped quote ends the attribute and
+        # hands the rest of the value to the parser as markup.
+        attr_str = ' '.join(f'{key}="{html.escape(str(value), quote=True)}"'
+                            for key, value in attributes.items())
+    return f'<button class="{cls}" {attr_str}>{html.escape(str(text), quote=False)}</button>'
 
 
 def render_nav(active_page=""):

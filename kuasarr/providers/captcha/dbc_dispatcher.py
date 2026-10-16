@@ -87,6 +87,9 @@ KEEPLINKS_ANSWER_FIELDS = {
     "simple": "norobot",
 }
 KEEPLINKS_ANSWER_LENGTH = 4
+# Kleinste plausible Captcha-Bilddatei. Ein echtes Keeplinks-Captcha ist ein
+# PNG/GIF/JPEG mit mehr als 100 Byte; darunter ist es keine Bilddatei.
+KEEPLINKS_MIN_IMAGE_BYTES = 100
 # What the answer is allowed to look like, per variant. The values follow the
 # 2Captcha ImageToTextTask semantics (1 = digits only, 2 = letters only) and
 # tell the solver up front what Keeplinks will accept, instead of letting it
@@ -1355,6 +1358,19 @@ class DBCDispatcher:
         )
         if captcha_response.status_code != 200:
             info("Keeplinks: Failed to download CAPTCHA image")
+            return None
+
+        # Keeplinks antwortet auf ein abgelehntes/veraltetes Captcha mit HTTP
+        # 200 und einer HTML-Seite. Ohne diese Pruefung ging das HTML als
+        # "Bild" an den Solver - der liefert dann irgendein Wort zurueck,
+        # das garantiert nicht zur Bilddatei gehoert und beim POST als
+        # "Rejected solution" endet.
+        content_type = (captcha_response.headers or {}).get('Content-Type', '')
+        if 'image' not in content_type.lower():
+            info(f"Keeplinks: CAPTCHA URL returned '{content_type or 'no Content-Type'}', not an image")
+            return None
+        if len(captcha_response.content) < KEEPLINKS_MIN_IMAGE_BYTES:
+            info(f"Keeplinks: CAPTCHA image is only {len(captcha_response.content)} bytes")
             return None
 
         debug(f"Keeplinks: Solving image CAPTCHA ({len(captcha_response.content)} bytes)")

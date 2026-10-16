@@ -40,11 +40,11 @@ UNLOCKED_PAGE_HTML = (
 
 
 class _FakeResponse:
-    def __init__(self, text, content=b"", status_code=200, headers=None):
+    def __init__(self, text, content=b"", status_code=200, content_type="text/html"):
         self.text = text
         self.content = content or text.encode()
         self.status_code = status_code
-        self.headers = headers or {}
+        self.headers = {"Content-Type": content_type}
 
 
 class _SolverResult:
@@ -68,7 +68,9 @@ class AnswerPassthroughTest(unittest.TestCase):
         dispatcher._client = client
 
         session = MagicMock()
-        session.get.return_value = _FakeResponse(variant_html, content=b"\x89PNG" + b"0" * 200)
+        session.get.return_value = _FakeResponse(
+            variant_html, content=b"\x89PNG" + b"0" * 200, content_type="image/png"
+        )
         session.post.return_value = _FakeResponse(UNLOCKED_PAGE_HTML)
 
         soup = BeautifulSoup(variant_html, "html.parser")

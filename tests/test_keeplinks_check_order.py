@@ -25,10 +25,11 @@ CAPTCHA_URL = "https://www.keeplinks.org/coolcaptcha/captcha.php"
 
 
 class _FakeResponse:
-    def __init__(self, text, content=b"", status_code=200):
+    def __init__(self, text, content=b"", status_code=200, content_type="text/html"):
         self.text = text
         self.content = content or text.encode()
         self.status_code = status_code
+        self.headers = {"Content-Type": content_type}
 
 
 class _SolverResult:
@@ -86,7 +87,8 @@ class _DispatcherCase:
         dispatcher, client = self._dispatcher()
         session = MagicMock()
         session.get.return_value = _FakeResponse(
-            _container_page(), content=b"\x89PNG" + b"0" * 200
+            _container_page(), content=b"\x89PNG" + b"0" * 200,
+            content_type="image/png",
         )
         session.post.return_value = _FakeResponse(page_html)
         result = dispatcher._solve_keeplinks_captcha(
